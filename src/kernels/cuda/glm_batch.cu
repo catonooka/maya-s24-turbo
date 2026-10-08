@@ -991,18 +991,35 @@ __global__ void __launch_bounds__(256) mla_attn_tc_reg_kernel(const float* __res
 // RTX 3090, one GPU: prompts of 14.8K / 26.6K tokens 674 / 832 tok/s with the 91 KB kernel, 759 / 966 with this.
 constexpr int MT_H = 32, MT_C = 32, MT_KV = 512, MT_LD = MT_KV + 8;   // heads, cells a tile, latent, padded row (fp16)
 
+// ldmatrix needs sm_75 and this mma sm_80: below sm_80 (a build for Volta or Turing) the helpers compile to nothing -
+// mla_attn picks this kernel only on Ampere and newer
 __device__ __forceinline__ void mt_ldsm_x4(uint32_t& r0, uint32_t& r1, uint32_t& r2, uint32_t& r3, const void* p) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     const unsigned a = (unsigned) __cvta_generic_to_shared(p);
     asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
                  : "=r"(r0), "=r"(r1), "=r"(r2), "=r"(r3) : "r"(a));
+#else
+    (void) p;
+    r0 = r1 = r2 = r3 = 0u;
+#endif
 }
 __device__ __forceinline__ void mt_ldsm_x2(uint32_t& r0, uint32_t& r1, const void* p) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     const unsigned a = (unsigned) __cvta_generic_to_shared(p);
     asm volatile("ldmatrix.sync.aligned.m8n8.x2.shared.b16 {%0,%1}, [%2];\n" : "=r"(r0), "=r"(r1) : "r"(a));
+#else
+    (void) p;
+    r0 = r1 = 0u;
+#endif
 }
 __device__ __forceinline__ void mt_ldsm_x2_t(uint32_t& r0, uint32_t& r1, const void* p) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     const unsigned a = (unsigned) __cvta_generic_to_shared(p);
     asm volatile("ldmatrix.sync.aligned.m8n8.x2.trans.shared.b16 {%0,%1}, [%2];\n" : "=r"(r0), "=r"(r1) : "r"(a));
+#else
+    (void) p;
+    r0 = r1 = 0u;
+#endif
 }
 __device__ __forceinline__ void mt_mma(float* d, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t b0,
                                        uint32_t b1) {

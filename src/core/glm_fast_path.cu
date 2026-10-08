@@ -778,6 +778,7 @@ bool Glm5Model::fast_setup(std::string& err) {
         // engine, and on a 2-socket host it fills one node - MPOL_INTERLEAVE then falls back instead of reclaiming
         // (49 GB of the GGUF cached on node 1 left a 100 GB tier 78% on node 0: the CPU lane read one node's
         // controllers, ~60 instead of ~92 GB/s).  Pages some process still maps stay.  STRATA_GLM_DROP_CACHE=0 keeps it.
+#ifdef __linux__   // (numa_nodes() is empty elsewhere; posix_fadvise is POSIX)
         {
             static bool dropped = false;
             const char* dc = getenv("STRATA_GLM_DROP_CACHE");
@@ -787,6 +788,7 @@ bool Glm5Model::fast_setup(std::string& err) {
                     if (sh.fd >= 0) posix_fadvise(sh.fd, 0, 0, POSIX_FADV_DONTNEED);
             }
         }
+#endif
         // ---- the RAM tier: one pinned arena per blob size class, slots in proportion to the class's
         //      share of this half's expert bytes NOT already held by the VRAM pool
         F->layer_rc.assign((size_t) NL, -1);

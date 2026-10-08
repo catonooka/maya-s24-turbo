@@ -25,7 +25,7 @@ bool kq_type_ok(int t) noexcept { return t == 10 || t == 11; }
 
 namespace {
 
-inline float h2f(uint16_t h) { return _cvtsh_ss(h); }
+inline float h2f(uint16_t h) { return _mm_cvtss_f32(_mm_cvtph_ps(_mm_cvtsi32_si128((int) h))); }   // (_cvtsh_ss: not in MSVC)
 
 // One weight row, unpacked: the codes as bytes in value order (Q3_K: q + 4h, 0..7; Q2_K: q, 0..3), each 64-value
 // slice's scales spread over the 32 int16 lanes vpmaddubsw leaves (8 lanes a 16-value group), the correction
