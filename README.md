@@ -88,7 +88,8 @@ system-wide by itself.
 an NVMe SSD, a current NVIDIA driver
 and the CUDA toolkit (12.x for a V100; the engine is compiled for your GPU). Everything else - Python, the engine, the
 model - is set up for you, the way Strata does it. On an AMD RX 7900 XT / XTX or R9700 / RX 9070 (experimental, Linux,
-ROCm 7): `./maya.sh --backend hip --gpu 0 --check` first, then [docs/AMD_MAYA.md](docs/AMD_MAYA.md).
+ROCm 7): `./maya.sh --backend hip --gpu 0 --check` first (two cards: `--gpus 0,1`), then
+[docs/AMD_MAYA.md](docs/AMD_MAYA.md).
 
 1. Get Project Maya:
    ```sh

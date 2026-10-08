@@ -3,6 +3,20 @@
 Every release is on GitHub (Releases) with these notes; every published change moves the last number. Update: `git pull`, then `./setup.sh` (Windows:
 `START-MAYA.bat`) - it recompiles only what changed and starts.
 
+## v1.0.14 - 2026-10-08
+
+Maya runs on two AMD GPUs (experimental), with MTP drafting on the second card, contributed by @boxwrench.
+
+- **Two AMD GPUs (#14 by @boxwrench):** `./maya.sh --backend hip --gpus 0,1` splits the layers across two supported
+  cards (RX 7900 XT / XTX, Radeon AI PRO R9700 / RX 9070; they may be different models), and the second card runs
+  the MTP block that drafts the next token. Setup puts the card with more VRAM first and writes one hipBLASLt tuning
+  table per card's architecture (`STRATA_HIPBLASLT_TUNING` takes a `:`-separated list). Measured by @boxwrench with
+  Maya-S on an R9700 + RX 7900 XT: decode (writing the answer) about 33 tokens/s against about 15 on the RX 7900 XT
+  alone, prefill (reading the prompt) about 490 tokens/s on a 4K-token prompt against about 414. docs/AMD_MAYA.md has
+  the details.
+- NVIDIA: unchanged - the change is in the AMD setup and the AMD-only prompt GEMM code; every NVIDIA target builds.
+- We have no AMD hardware; these results are the contributor's.
+
 ## v1.0.13 - 2026-10-08
 
 Tool calls work: GLM-5.3-Flash's function calls reach your apps and coding agents instead of ending the request.
