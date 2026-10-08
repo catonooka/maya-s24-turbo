@@ -207,6 +207,7 @@ These settings change what the engine chooses (put them in the config with `--en
 | --- | --- | --- |
 | `STRATA_GLM_RAM_HEADROOM_GB` | 6 | RAM left free for the system when the RAM tier is sized |
 | `STRATA_GLM_RAM_GB` | from free RAM | a fixed RAM-tier size in GB |
+| `STRATA_GLM_RAM_RESIDENT` | off | `1` (or `--glm-ram-resident`): the RAM tier holds every expert not in VRAM and nothing is evicted to disk. The start fails if it cannot. `STRATA_GLM_RAM_SLACK` is extra slots per MoE layer (default 16) |
 | `STRATA_GLM_SPLIT` | middle (+2) with 2 GPUs, by free VRAM with more | the first layer of each later GPU (`24`, or `7,12,17,22,27,32,37,41` for nine); `0` = one GPU. The config's `"layer_split"` sets the same |
 | `STRATA_GLM_CPU_LANE` | one thread per physical core (one GPU: at most one NUMA node's) | CPU threads for RAM-tier experts; `0` = off (the tuning sets it) |
 | `STRATA_GLM_CPU_LANE<n>` | the setting above | the same for CUDA`<n>` alone (`STRATA_GLM_CPU_LANE0=6`, `STRATA_GLM_CPU_LANE1=2`): two cards on links of different speed want different counts - the slower the link, the more CPU threads help. RTX 4070 Ti SUPER on PCIe 3.0 x4 + RTX 5070 Ti on 4.0 x16, split 17: 6 / 2 threads beat the default 4 / 4 |

@@ -280,6 +280,12 @@ bool Glm5Model::fast_setup(std::string& err) {
     F->prof_on = getenv("STRATA_GLM_PROF") != nullptr;
     if (F->prof_on) F->pskip = (uint64_t) std::max(0, std::atoi(getenv("STRATA_GLM_PROF")));
     if (const char* pn = getenv("STRATA_GLM_PREFETCH_N")) F->max_pf = std::max(0, std::min(gf::kSpares - 1, std::atoi(pn)));
+    // RAM-resident mode (--glm-ram-resident / STRATA_GLM_RAM_RESIDENT=1): the RAM tier's per-class cap grows by
+    // ram_slack slots per MoE layer so it holds EVERY expert VRAM does not; nothing is ever dropped to disk and the
+    // start fails when the tier cannot hold them all - the disk is the pack's home, never a read source at runtime
+    F->ram_resident = getenv("STRATA_GLM_RAM_RESIDENT") != nullptr && std::atoi(getenv("STRATA_GLM_RAM_RESIDENT")) != 0;
+    if (const char* rs = getenv("STRATA_GLM_RAM_SLACK")) F->ram_slack = std::max(0, std::atoi(rs));
+    else if (F->ram_resident) F->ram_slack = 16;
     if (cudaStreamCreateWithFlags(&F->cs, cudaStreamNonBlocking) != cudaSuccess ||
         cudaStreamCreateWithFlags(&F->copy, cudaStreamNonBlocking) != cudaSuccess ||
         cudaStreamCreateWithFlags(&F->ps, cudaStreamNonBlocking) != cudaSuccess ||
@@ -825,7 +831,7 @@ bool Glm5Model::fast_setup(std::string& err) {
             // (the experts its main slots cannot hold: the pool's lendable tail counts as not held - a prompt
             // borrows it, and the experts there go to RAM meanwhile, prefill_lend)
             cls_weight[(size_t) c] +=
-                (double) std::max(2, g.n_expert - F->lp[(size_t) il].n_main + gf::kSpares + 2) * (double) st;
+                (double) std::max(2, g.n_expert - F->lp[(size_t) il].n_main + gf::kSpares + 2 + F->ram_slack) * (double) st;
         }
         double wsum = 0;
         for (double w : cls_weight) wsum += w;
@@ -909,6 +915,12 @@ bool Glm5Model::fast_setup(std::string& err) {
                 err = "glm fast: the pinned RAM tier did not allocate";
                 return false;
             }
+            if (F->ram_resident && n < cap) {
+                err = "glm fast: --glm-ram-resident: the RAM tier cannot hold every non-VRAM expert (class " +
+                      std::to_string(c) + ": " + std::to_string(n) + " of " + std::to_string(cap) +
+                      " slots pinned; raise STRATA_GLM_RAM_GB, its headroom, or lower --max-context)";
+                return false;
+            }
             R.base = (uint8_t*) p;
             R.n = (int) n;
             R.key.assign((size_t) n, -1);
@@ -924,6 +936,9 @@ bool Glm5Model::fast_setup(std::string& err) {
         for (auto& R : F->rc) ram_slots += R.n;
         std::fprintf(stderr, "glm fast: CUDA%d RAM tier %.2f GB pinned, %lld slots\n", dev_,
                      (double) F->ram_bytes / 1073741824.0, (long long) ram_slots);
+        if (F->ram_resident)
+            std::fprintf(stderr, "glm fast: CUDA%d RAM-resident mode: every non-VRAM expert gets a slot (+%d slack/layer); disk evictions are OFF\n",
+                         dev_, F->ram_slack);
         if (cudaHostAlloc((void**) &F->upd_key_h, FastState::kMaxUpd * sizeof(int), cudaHostAllocDefault) != cudaSuccess ||
             cudaHostAlloc((void**) &F->upd_val_h, FastState::kMaxUpd * sizeof(unsigned long long),
                           cudaHostAllocDefault) != cudaSuccess ||
@@ -958,6 +973,26 @@ bool Glm5Model::fast_setup(std::string& err) {
             for (int i = 0; i < 2; ++i) F->ah_th.emplace_back([this] { fast_ahead_reader(); });
         const char* wv = getenv("STRATA_GLM_WARM");
         if ((wv == nullptr || std::atoi(wv) != 0) && !fast_warm(err)) return false;
+        // RAM-resident mode is all-or-nothing: after the warm, every expert must be in VRAM or the RAM tier -
+        // one that fits neither would be read from disk at runtime (STRATA_GLM_WARM=0 fills on demand: no check)
+        if (F->ram_resident && (wv == nullptr || std::atoi(wv) != 0)) {
+            int uncovered = 0, total = 0;
+            for (int il = l0_; il < lt_; ++il) {
+                if (!F->L[(size_t) il].moe) continue;
+                total += g.n_expert;
+                for (int e = 0; e < g.n_expert; ++e) {
+                    const size_t key = (size_t) il * g.n_expert + e;
+                    uncovered += F->slot_of[key] < 0 && F->ram_of[key] < 0;
+                }
+            }
+            if (uncovered > 0) {
+                err = "glm fast: --glm-ram-resident: " + std::to_string(uncovered) +
+                      " experts fit neither tier after the warm - raise STRATA_GLM_RAM_GB or lower --max-context";
+                return false;
+            }
+            std::fprintf(stderr, "glm fast: CUDA%d RAM-resident verified: all %d experts are in VRAM or pinned RAM\n",
+                         dev_, total);
+        }
         if (!fast_cpu_lane_setup(err)) return false;
         F->svc = std::thread([this] { fast_service(); });
     }
@@ -1548,7 +1583,7 @@ bool Glm5Model::fast_warm(std::string& err) {
             if (!F->L[(size_t) il].moe || next[(size_t) il] >= g.n_expert) continue;
             const int c = F->layer_rc[(size_t) il];
             auto& R = F->rc[(size_t) c];
-            if (rfree[(size_t) c] <= 4) continue;
+            if (rfree[(size_t) c] <= (F->ram_resident ? 0 : 4)) continue;   // resident: no disk-read slots to keep
             while (rcur[(size_t) c] < R.n && R.st[(size_t) rcur[(size_t) c]] != FastState::kRFree) ++rcur[(size_t) c];
             if (rcur[(size_t) c] >= R.n) continue;
             const int s = rcur[(size_t) c]++;
@@ -2377,6 +2412,10 @@ void Glm5Model::fast_boundary() {
         if (R.st[(size_t) d.rslot] == FastState::kRDemote && R.key[(size_t) d.rslot] == d.key) {
             R.st[(size_t) d.rslot] = FastState::kRHold;
             upd(F->rtab_key(d.key), (unsigned long long) (R.base + (size_t) d.rslot * R.stride));
+            if (F->ram_resident) {   // the deferred half of the move: forget the VRAM copy only now
+                upd(F->tab_key((size_t) d.key), 0ull);
+                F->slot_of[(size_t) d.key] = -1;
+            }
         }
         char& vst = F->lp[(size_t) d.il].st[(size_t) d.vslot];
         if (vst == FastState::kDraining) vst = FastState::kFree;   // (a lent slot stays lent)
@@ -2418,9 +2457,6 @@ void Glm5Model::fast_boundary() {
             }
             if (v < 0) break;
             const int vkey = il * g.n_expert + P.key[(size_t) v];
-            upd(F->tab_key(vkey), 0ull);
-            F->slot_of[(size_t) vkey] = -1;
-            ++P.evictions;
             // demote it into the RAM tier: a free slot, else the RAM tier's victim (if colder than it)
             int rs = -1;
             uint32_t rc_min = UINT32_MAX;
@@ -2430,6 +2466,18 @@ void Glm5Model::fast_boundary() {
                     rc_min = 0;
                     break;
                 }
+            if (rs < 0 && F->ram_resident) {
+                // no free RAM slot: keep the VRAM expert (nothing drops to disk); the spare is refilled later
+                ++F->diag_resident_skip;
+                break;
+            }
+            // resident mode keeps the VRAM table entry live until the demotion's copy lands (the slot is
+            // kDraining, so nothing overwrites it): a route mid-flight still hits VRAM
+            if (!F->ram_resident) {
+                upd(F->tab_key(vkey), 0ull);
+                F->slot_of[(size_t) vkey] = -1;
+            }
+            ++P.evictions;
             if (rs < 0) {
                 rs = ram_victim(R);
                 if (rs >= 0) rc_min = F->cnt[(size_t) R.key[(size_t) rs]];
@@ -2467,9 +2515,10 @@ void Glm5Model::fast_boundary() {
             }
         }
     }
-    // (4) a few free RAM slots per class for the next token's disk reads (and its reads ahead)
+    // (4) a few free RAM slots per class for the next token's disk reads (and its reads ahead); RAM-resident
+    // mode plans no disk reads, so no residents are evicted to keep landing room either
     static const char* kf = getenv("STRATA_GLM_RAM_FREE");
-    const int keep_free = kf ? std::max(1, std::atoi(kf)) : F->ahead_read ? 12 : 4;
+    const int keep_free = F->ram_resident ? 0 : kf ? std::max(1, std::atoi(kf)) : F->ahead_read ? 12 : 4;
     for (auto& R : F->rc) {
         int nfree = 0;
         for (char c : R.st) nfree += c == FastState::kRFree;
@@ -2638,12 +2687,13 @@ void Glm5Model::fast_boundary() {
     flush();
     static const bool diag = getenv("STRATA_GLM_TIER_DIAG") != nullptr;
     if (diag && ++F->diag_b % 64 == 0)
-        std::fprintf(stderr, "glm tier diag CUDA%d (%llu boundaries): VRAM drops %llu, RAM evictions %llu, lend drops %llu (to RAM %llu), background promotions %llu / demotions %llu | "
+        std::fprintf(stderr, "glm tier diag CUDA%d (%llu boundaries): VRAM drops %llu, RAM evictions %llu, lend drops %llu (to RAM %llu), background promotions %llu / demotions %llu, resident skips %llu | "
                              "disk reads of: never held %llu, dropped from VRAM %llu, evicted from RAM %llu, lend-dropped %llu\n",
                      dev_, (unsigned long long) F->diag_b, (unsigned long long) F->diag_drop,
                      (unsigned long long) F->diag_ram_evict, (unsigned long long) F->diag_lend,
                      (unsigned long long) F->diag_lend_park, (unsigned long long) F->bg_up,
-                     (unsigned long long) F->bg_down, (unsigned long long) F->diag_disk[0], (unsigned long long) F->diag_disk[1],
+                     (unsigned long long) F->bg_down, (unsigned long long) F->diag_resident_skip,
+                     (unsigned long long) F->diag_disk[0], (unsigned long long) F->diag_disk[1],
                      (unsigned long long) F->diag_disk[2], (unsigned long long) F->diag_disk[3]);
     if (diag && F->diag_b % 64 == 0) {
         // per RAM class: slots, held, free, and how many of its layers' experts are in no tier at all

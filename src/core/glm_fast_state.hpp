@@ -303,6 +303,7 @@ struct Glm5Model::FastState {
     // from RAM, 3 dropped by the prompt path's lending), and the disk reads by that cause
     std::vector<uint8_t> left;
     uint64_t diag_disk[4] = {0, 0, 0, 0}, diag_drop = 0, diag_ram_evict = 0, diag_lend = 0, diag_lend_park = 0, diag_b = 0;
+    uint64_t diag_resident_skip = 0;   // RAM-resident mode: spare refills skipped (no free RAM slot, no drop)
     uint64_t diag_dup = 0, diag_adopt = 0;   // the boundary's clean-up: duplicate RAM copies freed, lost ones adopted
     size_t ram_bytes = 0;
     // ---- demotions VRAM -> RAM (copy stream, D2H) of the victims that make room for spares
@@ -364,6 +365,9 @@ struct Glm5Model::FastState {
     uint64_t tokens = 0;
     double ms = 0;
     bool timing = false;
+    bool ram_resident = false;   // STRATA_GLM_RAM_RESIDENT=1 / --glm-ram-resident: the RAM tier holds EVERY expert
+                                 // VRAM does not, nothing ever drops to disk; the start fails if the tier is small
+    int ram_slack = 0;           // extra RAM-tier slots per MoE layer (STRATA_GLM_RAM_SLACK; default 16 resident)
     // ---- STRATA_GLM_PROF=1: a cudaEvent after every launch, the gaps summed per kernel name (debug only)
     bool prof_on = false;
     std::vector<cudaEvent_t> pev;

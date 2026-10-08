@@ -320,6 +320,11 @@ void usage() {
                  "  --pack DIR           the pack directory (default pack/full)\n"
                  "  --glm-pack DIR       a GLM-5.3-Flash pack (M3.1): the verified Glm5Model runner behind the\n"
                  "                       same wire contract (T <id> / DONE; --serve reads GEN lines)\n"
+                 "  --glm-ram-resident   the pinned RAM tier holds every expert VRAM does not, and nothing is evicted\n"
+                 "                       to disk. The start fails if the tier cannot hold them (raise STRATA_GLM_RAM_GB\n"
+                 "                       or lower --max-context). Env: STRATA_GLM_RAM_RESIDENT=1\n"
+                 "  --glm-ram-slack N    extra RAM-tier slots per MoE layer (STRATA_GLM_RAM_SLACK; default 16 when\n"
+                 "                       resident, 0 otherwise)\n"
                  "  --tokens LIST        the prompt as comma-separated token IDS (required)\n"
                  "  --tokens-file PATH   pretokenized prompt, commas or whitespace (alternative to --tokens)\n"
                  "  --ple-gguf PATH      required PLE table (original second GGUF shard)\n"
@@ -1668,6 +1673,21 @@ int main(int argc, char** argv) {
         if (a == "--help" || a == "-h") { usage(); return 0; }
         else if (a == "--pack") o.pack = next("--pack");
         else if (a == "--glm-pack") o.glm_pack = next("--glm-pack");
+        else if (a == "--glm-ram-resident") {
+#if defined(_WIN32)
+            _putenv_s("STRATA_GLM_RAM_RESIDENT", "1");
+#else
+            setenv("STRATA_GLM_RAM_RESIDENT", "1", 1);
+#endif
+        }
+        else if (a == "--glm-ram-slack") {
+            const char* v = next("--glm-ram-slack");
+#if defined(_WIN32)
+            _putenv_s("STRATA_GLM_RAM_SLACK", v);
+#else
+            setenv("STRATA_GLM_RAM_SLACK", v, 1);
+#endif
+        }
         else if (a == "--tokens") {
             if (have_tokens) { std::fprintf(stderr, "supply one token input only\n"); return 2; }
             std::string e;

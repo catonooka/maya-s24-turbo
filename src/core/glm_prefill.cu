@@ -810,6 +810,8 @@ void Glm5Model::lend_tail(size_t limit, uint64_t& moved, uint64_t& dropped) {
     fast_boundary();                   // finished promotions and demotions go live (the plan reads the tables)
     F->bg_hold = false;
     cudaStreamSynchronize(F->copy);    // every demotion issued so far has read its slot
+    if (F->ram_resident) fast_boundary();   // resident mode keeps VRAM entries live until the copy lands: the
+                                            // synced demotions must publish their RAM copies before the tail is borrowed
     const int NE = g_.n_expert;
     {
         std::lock_guard<std::mutex> lk(F->mu);
