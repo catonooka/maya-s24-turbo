@@ -469,11 +469,14 @@ def check_pc(a) -> dict:
     msg = f"RAM: {total:.0f} GB, {avail:.0f} GB available now"
     ok(msg + ("" if total >= 60 else " - it runs with 32 GB; more RAM keeps more experts close and is faster"))
     pf = S.page_file_gb()
-    if pf is not None and pf < vram:
-        warn(f"Windows' page file is {pf:.0f} GB: under Windows every allocation on the graphics card is also charged "
-             f"to RAM + page file, so the engine's RAM tier shrinks by up to the {vram:.0f} GB of VRAM it fills. Set "
-             "it to \"System managed\" (or larger than your VRAM): System > About > Advanced system settings > "
-             "Performance > Advanced > Virtual memory")
+    need_pf = int(vram + 8.999)   # the card's memory and the pinned RAM tier are both charged to RAM + page file
+    if pf is not None and pf < need_pf:
+        warn(f"Windows' page file is {pf:.0f} GB; set it to at least {need_pf} GB. Under Windows every allocation on "
+             f"the graphics card ({vram:.0f} GB here) and the engine's pinned RAM tier are both charged to RAM + page "
+             f"file, so with {pf:.0f} GB the RAM tier stays about {need_pf - pf:.0f} GB short of your free RAM and "
+             "those experts are read from the SSD (issue #20: 2.4-4.1 -> 8.4-11 tokens/s on an RTX 5090). \"System "
+             f"managed\" can stay small (8 GB on a 128 GB PC): set a custom size of {need_pf} GB or more - System > "
+             "About > Advanced system settings > Performance > Advanced > Virtual memory - and restart")
     cpu, avx2, avx512 = S.cpu_info()
     if not avx2:
         problems.append((f"the CPU ({cpu}) has no AVX2", "the engine's CPU expert lane and ggml need AVX2"))

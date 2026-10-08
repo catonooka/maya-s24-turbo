@@ -847,8 +847,19 @@ bool Glm5Model::fast_setup(std::string& err) {
                     ms.dwLength = sizeof ms;
                     // pinned RAM is charged to the commit (RAM + page file), and under WDDM so is every allocation
                     // on the card - the pool above already took its share: the smaller of the two is what can pin
-                    if (GlobalMemoryStatusEx(&ms))
+                    if (GlobalMemoryStatusEx(&ms)) {
                         avail_kb = (int64_t) (std::min(ms.ullAvailPhys, ms.ullAvailPageFile) >> 10);
+                        // the commit, not the RAM, caps the tier: say so (issue #20 - a page file of 8 GB on a
+                        // 128 GB PC left 27 GB of RAM free while the SSD served experts)
+                        const double G = 1073741824.0, short_gb = ((double) ms.ullAvailPhys - (double) ms.ullAvailPageFile) / G;
+                        if (short_gb > 2.0)
+                            std::fprintf(stderr, "glm fast: WARNING - Windows' commit limit (RAM + page file) caps the RAM "
+                                                 "tier %.0f GB below the free RAM (%.1f GB free, %.1f GB of commit left): "
+                                                 "those experts are read from the SSD. Enlarge the page file by at "
+                                                 "least %.0f GB (System > Advanced system settings > Performance > "
+                                                 "Virtual memory) and restart Maya\n", short_gb,
+                                         (double) ms.ullAvailPhys / G, (double) ms.ullAvailPageFile / G, short_gb + 4.0);
+                    }
 #else
                     if (FILE* mf = std::fopen("/proc/meminfo", "r")) {
                         char line[256];
