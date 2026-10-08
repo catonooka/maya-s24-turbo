@@ -1253,12 +1253,54 @@ static int glm_pack_generate(const Options& o) {
         const auto st1 = model.fast_stats();
         int64_t produced = 0;
         // one emitted token: the T line, the live tier counters every 8 tokens, the stop conditions (false: stop)
+        // LOOP GUARD: a heavily quantized model can fall into repeating a short pattern ("0 0 0 ...") until the
+        // thinking budget or max_tokens ends it - minutes of nothing.  When the last W tokens are one pattern of at most
+        // 32 tokens repeated exactly, thinking is closed at once (as the budget does) and an answer is ended.
+        // W: STRATA_GLM_LOOP_THINK (256) while thinking, STRATA_GLM_LOOP_ANSWER (1024) in the answer - long enough
+        // for legitimately repetitive output (a zero-filled array); 0 turns that check off.
+        static const int loop_w_think = (int) env_num("STRATA_GLM_LOOP_THINK", 256);
+        static const int loop_w_answer = (int) env_num("STRATA_GLM_LOOP_ANSWER", 1024);
+        std::vector<int> gen_hist;
+        const auto looping = [&](int w) -> int {   // the pattern's period, 0 when the tail is not one
+            const int n = (int) gen_hist.size();
+            if (w <= 0 || n < w) return 0;
+            for (int per = 1; per <= 32 && per < w / 4; ++per) {
+                bool rep = true;
+                for (int i = n - w + per; i < n && rep; ++i) rep = gen_hist[(size_t) i] == gen_hist[(size_t) (i - per)];
+                if (rep) return per;
+            }
+            return 0;
+        };
         const auto on_token = [&](int tok) -> bool {
             std::printf("T %d\n", tok);
             ++produced;
+            gen_hist.push_back(tok);
+            if (in_think && tok != req_think_end) {
+                if (const int per = looping(loop_w_think)) {
+                    model.force_next(req_think_end);   // as the budget does: the next token closes the reasoning
+                    in_think = false;
+                    char m[200];
+                    std::snprintf(m, sizeof m, "thinking was repeating a %d-token pattern (%d tokens in): closed, "
+                                  "answering", per, (int) produced);
+                    std::fprintf(stderr, "glm loop guard: %s\n", m);
+                    if (o.serve) std::printf("NOTE %s\n", m);
+                    gen_hist.clear();
+                }
+            } else if (!in_think) {
+                if (const int per = looping(loop_w_answer)) {
+                    char m[200];
+                    std::snprintf(m, sizeof m, "the answer was repeating a %d-token pattern (%d tokens in): ended",
+                                  per, (int) produced);
+                    std::fprintf(stderr, "glm loop guard: %s\n", m);
+                    if (o.serve) std::printf("NOTE %s\n", m);
+                    finish = "length";
+                    return false;
+                }
+            }
             if (in_think && (tok == req_think_end || produced >= req_think_budget)) {
                 if (tok != req_think_end) model.force_next(req_think_end);   // the budget: the next token closes it
                 in_think = false;
+                gen_hist.clear();
             }
             // live expert-tier counters for the server's Monitor (serve/server.py parses STAT lines), every 8 tokens
             if (o.serve && model.fast() && produced % 8 == 0) {
