@@ -16,7 +16,7 @@ Maya grew out of [Strata](https://github.com/Niko1221/Strata) (MIT): its engine 
 for GLM-5.3-Flash (the expert tiers across VRAM, RAM and SSD, the two-GPU split, MTP decoding), and its server and
 dashboard started from Strata's and were reworked for Maya (a new dashboard, images on demand, the thinking budget).
 
-**AMD (experimental):** Linux on RX 7900 XT / XTX, R9700 / RX 9070 and Strix Halo (Radeon 8060S), one GPU or two (not Strix Halo), text only - see
+**AMD (experimental):** Linux on RX 7900 XT / XTX, R9700 / RX 9070 and Strix Halo (Radeon 8060S), one GPU or two (Strix Halo: one), text only - see
 [docs/AMD_MAYA.md](docs/AMD_MAYA.md).
 
 ## The models: Maya-S, Maya-M and GSQ-RCO 3.5-bit

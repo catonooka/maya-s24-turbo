@@ -271,7 +271,13 @@ def check_hip_pc(a) -> dict:
         if one is None:
             fail(f"GPU {a.gpu} is not a supported AMD card")
         chosen = [one]
-    root = Path(os.environ.get("ROCM_PATH") or "/opt/rocm").resolve()
+    root = Path(os.environ.get("ROCM_PATH") or "/opt/rocm")
+    if not os.environ.get("ROCM_PATH") and not root.exists():
+        # versioned installs without the /opt/rocm link (e.g. /opt/rocm-7.2.2): the newest one
+        versions = sorted(Path("/opt").glob("rocm-[0-9]*"), key=lambda p: [int(x) for x in re.findall(r"\d+", p.name)])
+        if versions:
+            root = versions[-1]
+    root = root.resolve()
     if not (root / "llvm/bin/clang++").exists() or not list((root / "lib").glob("libhipblas.so*")):
         fail("ROCm's HIP compiler and hipBLAS are required", "install ROCm 7, or set ROCM_PATH to its root")
     if tool_version(str(root / "bin/hipcc")) < (7, 0):
