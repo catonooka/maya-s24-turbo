@@ -3,6 +3,14 @@
 Every release is on GitHub (Releases) with these notes; every published change moves the last number. Update: `git pull`, then `./setup.sh` (Windows:
 `START-MAYA.bat`) - it recompiles only what changed and starts.
 
+## v1.0.16 - 2026-10-08
+
+README: the users' speed table keeps the measurements on current versions.
+
+- The 2x TITAN RTX row (v1.0.6, before the prefill and CPU-lane fixes since) is out of the users' table; the GPU
+  requirements list 2x CMP 170HX among the users' machines instead.
+- The RAM requirement names the machine it refers to (the 2x V100 in the speed table, 30 GB of RAM).
+
 ## v1.0.15 - 2026-10-08
 
 Numbers in long prompts are read correctly, and Maya is faster on consumer GPUs: it measures the PCIe link the way
