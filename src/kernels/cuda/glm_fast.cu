@@ -75,10 +75,12 @@ __device__ __forceinline__ float block_max(float v, float* sh) {
 __device__ __forceinline__ void q8_1_store_warp(float v, block_q8_1* dst, int lane) {
     const float amax = warp_max(fabsf(v));
     const float sum = warp_sum(v);
-    const float d = amax / 127.0f;
-    const int8_t q = amax == 0.0f ? 0 : (int8_t) roundf(v / d);
+    // the scale and the sum stay finite in FP16 (Strata #1448: an activation past ~8.3M overflowed the scale to inf,
+    // and the dot products to NaN); below that nothing changes
+    const float d = fminf(amax / 127.0f, 65504.0f);
+    const int8_t q = amax == 0.0f ? 0 : (int8_t) fmaxf(-127.0f, fminf(127.0f, roundf(v / d)));
     dst->qs[lane] = q;
-    if (lane == 0) dst->ds = make_half2(d, sum);
+    if (lane == 0) dst->ds = make_half2(d, fmaxf(-65504.0f, fminf(65504.0f, sum)));
 }
 __device__ __forceinline__ float dsigmoid(float x) { return 1.0f / (1.0f + __expf(-x)); }
 __device__ __forceinline__ float bf(uint16_t v) { return __uint_as_float((uint32_t) v << 16); }

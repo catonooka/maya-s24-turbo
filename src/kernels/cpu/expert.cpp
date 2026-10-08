@@ -91,9 +91,11 @@ void quantize_oracle_q8_0(const float* x, int n, ActQ& a) {
         max4 = _mm_max_ps(max4, _mm_movehl_ps(max4, max4));
         max4 = _mm_max_ss(max4, _mm_movehdup_ps(max4));
         const float amax = _mm_cvtss_f32(max4);
-        const float d = amax / 127.0f;
+        // the FP16 scale stays finite (Strata #1448: past ~8.3M it overflowed to inf); below that nothing changes
+        const bool big = amax / 127.0f > 65504.0f;
+        const float d = big ? 65504.0f : amax / 127.0f;
         const uint16_t half_d = (uint16_t) _mm_cvtsi128_si32(_mm_cvtps_ph(_mm_set_ss(d), 0));
-        const __m256 inverse = _mm256_set1_ps(amax != 0.0f ? 127.0f / amax : 0.0f);
+        const __m256 inverse = _mm256_set1_ps(amax == 0.0f ? 0.0f : big ? 1.0f / 65504.0f : 127.0f / amax);
         v0 = _mm256_round_ps(_mm256_mul_ps(v0, inverse), _MM_FROUND_TO_NEAREST_INT);
         v1 = _mm256_round_ps(_mm256_mul_ps(v1, inverse), _MM_FROUND_TO_NEAREST_INT);
         v2 = _mm256_round_ps(_mm256_mul_ps(v2, inverse), _MM_FROUND_TO_NEAREST_INT);

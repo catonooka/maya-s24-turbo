@@ -449,11 +449,11 @@ __global__ void quantize_q8_1_kernel(const float* __restrict__ x, block_q8_1* __
         amax = fmaxf(amax, __shfl_xor_sync(0xffffffffu, amax, o));
         sum += __shfl_xor_sync(0xffffffffu, sum, o);
     }
-    const float d = amax / 127.0f;
-    const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
+    const float d = fminf(amax / 127.0f, 65504.0f);   // finite in FP16 (Strata #1448); below that nothing changes
+    const int8_t q = amax == 0.0f ? 0 : fmaxf(-127.0f, fminf(127.0f, roundf(xi / d)));
     const long long ib = i / 32, iqs = i % 32;
     y[ib].qs[iqs] = q;
-    if (iqs == 0) y[ib].ds = make_half2(d, sum);
+    if (iqs == 0) y[ib].ds = make_half2(d, fmaxf(-65504.0f, fminf(65504.0f, sum)));
 }
 
 // ---------------------------------------------------------------- dequant (dequantize.cuh)
