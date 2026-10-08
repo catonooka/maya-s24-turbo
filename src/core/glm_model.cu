@@ -1892,12 +1892,13 @@ bool strata::core::Glm5Model::load_pack(const std::string& pack_dir, int64_t max
     lt_ = l1_;
     // (only the tail of a split uses it - the pipelined speculative decode; one device would carry its weights and
     // expert slots for nothing until a batched verify exists; STRATA_GLM_MTP=1 loads it anyway)
-    // STRATA_GLM_MTP_GGUF=<a GGUF of the same model holding blk.<n_layers>.*>: the draft block for a quant published
-    // without it - it reads the trunk's hidden state and the embedding, so any quant's block fits.
+    // STRATA_GLM_MTP_GGUF=<a GGUF holding blk.<n_layers>.* of the same model>: the draft block from that file - for a
+    // quant published without one (the block reads the trunk's hidden state and the embedding, so any quant's block
+    // fits), or a more precise block than the model's own: load_mtp looks there first.
     bool mtp_extra = false;
     const char* mtp_gguf = getenv("STRATA_GLM_MTP_GGUF");
-    if (fast_mode_ && l1_ == g_.n_layers && mtp_gguf != nullptr && mtp_gguf[0] != '\0' &&
-        find_tensor("blk." + std::to_string(g_.n_layers) + ".nextn.eh_proj.weight") == nullptr) {
+    if (fast_mode_ && l1_ == g_.n_layers && mtp_gguf != nullptr && mtp_gguf[0] != '\0') {
+        const bool own = find_tensor("blk." + std::to_string(g_.n_layers) + ".nextn.eh_proj.weight") != nullptr;
         auto extra = std::make_unique<strata::GgufFile>(mtp_gguf);
         if (extra->find("blk." + std::to_string(g_.n_layers) + ".nextn.eh_proj.weight") == nullptr) {
             err = std::string("STRATA_GLM_MTP_GGUF: ") + mtp_gguf + " has no blk." + std::to_string(g_.n_layers) +
@@ -1906,9 +1907,12 @@ bool strata::core::Glm5Model::load_pack(const std::string& pack_dir, int64_t max
         }
         Shard s;
         if (!pack_shard_mmap(mtp_gguf, s, extra->data_start(), err)) return false;
-        gfs.push_back(std::move(extra));   // after the model's own shards: its lookups still find them first
+        mtp_src_ = (int) gfs.size();
+        gfs.push_back(std::move(extra));   // after the model's own shards: only the draft block is looked up in it
         pack_shards_.push_back(s);
         mtp_extra = true;
+        std::fprintf(stderr, "glm mtp: CUDA%d the draft block from %s%s\n", dev_, mtp_gguf,
+                     own ? " (instead of the model's own)" : "");
     }
     // (the pipelined speculative decode is a two-part one: a longer split leaves the block unloaded)
     if (fast_mode_ && l1_ == g_.n_layers && (g_.nextn > 0 || mtp_extra) && getenv("STRATA_GLM_NO_MTP") == nullptr &&
@@ -2170,6 +2174,11 @@ bool strata::core::Glm5Model::load_mtp(const std::vector<std::unique_ptr<strata:
     const int il = g_.n_layers;
     const std::string P = "blk." + std::to_string(il) + ".";
     const auto find = [&](const std::string& n, int& si) -> const strata::TensorInfo* {
+        if (mtp_src_ >= 0 && n.compare(0, P.size(), P) == 0)   // the block from STRATA_GLM_MTP_GGUF wins
+            if (const strata::TensorInfo* t = gfs[(size_t) mtp_src_]->find(n)) {
+                si = mtp_src_;
+                return t;
+            }
         for (size_t i = 0; i < gfs.size(); ++i)
             if (const strata::TensorInfo* t = gfs[i]->find(n)) {
                 si = (int) i;
