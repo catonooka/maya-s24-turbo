@@ -1787,6 +1787,19 @@ void Glm5Model::fast_service() {
     const Glm5Geometry& g = g_;
     const int K = g.n_exp_used;
     unsigned int next = 1;
+    // Idle (through a prompt, between requests) the thread polls the ring with sleeps instead of spinning: it held one
+    // core per GPU at 100% while the server waited (2x V100: 200% CPU idle), a core a 6-core PC's prompt lane and the
+    // system then lacked, and the server's stall watchdog could never see a stuck engine as idle.  A decode's routes
+    // come ~1 ms apart (two GPUs: half a token between a card's routes), so it spins all through one.  After
+    // STRATA_GLM_SERVICE_IDLE_MS (200; 0 = spin always) without a route it polls every 0.1 ms (Windows' timer: 1 ms),
+    // after 10x that every 2 ms - the first route after a quiet spell is answered up to one sleep later
+    static const int kIdleMs = [] {
+        const char* v = getenv("STRATA_GLM_SERVICE_IDLE_MS");
+        return v ? std::max(0, std::atoi(v)) : 200;
+    }();
+    auto last_route = std::chrono::steady_clock::now();
+    int idle = 0;                        // 0 spinning, 1 short sleeps, 2 long sleeps
+    unsigned int polls = 0;
     while (!F->quit.load(std::memory_order_relaxed)) {
         gf::MoeRequest* rq = F->ring_h + (next % gf::kRingSize);
         const unsigned int sq = rq->seq;
@@ -1797,9 +1810,29 @@ void Glm5Model::fast_service() {
                 F->processed.fetch_add((uint64_t) (sq - next), std::memory_order_release);
                 next = sq;
             } else {
-                cpu_relax();
+                if (idle == 2) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                } else if (idle == 1) {
+#ifdef _WIN32
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+#else
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+#endif
+                    if ((++polls & 255u) == 0 &&
+                        std::chrono::steady_clock::now() - last_route > std::chrono::milliseconds(10 * kIdleMs))
+                        idle = 2;
+                } else {
+                    cpu_relax();
+                    if (kIdleMs > 0 && (++polls & 4095u) == 0 &&
+                        std::chrono::steady_clock::now() - last_route > std::chrono::milliseconds(kIdleMs))
+                        idle = 1;
+                }
                 continue;
             }
+        }
+        if (kIdleMs > 0) {
+            idle = 0;
+            last_route = std::chrono::steady_clock::now();
         }
         std::atomic_thread_fence(std::memory_order_acquire);
         {
