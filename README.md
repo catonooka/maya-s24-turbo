@@ -1,7 +1,7 @@
 <h1 align="center">Project Maya</h1>
 
 <p align="center"><b>Run GLM-5.3-Flash - a 321-billion-parameter AI model - on your own GPU(s)</b><br>
-One or two NVIDIA GPUs, AMD (experimental) · Linux, Windows (experimental) · chat in the browser, pictures, OpenAI- and
+One NVIDIA GPU or several (up to 16), AMD (experimental) · Linux, Windows (experimental) · chat in the browser, pictures, OpenAI- and
 Anthropic-compatible API</p>
 
 <p align="center"><a href="https://buymeacoffee.com/peasantsmith">☕ Support Project Maya - buy me a coffee</a></p>
@@ -53,8 +53,8 @@ Measured with Maya-S. A token is about ¾ of a word. `./maya.sh --bench` measure
 
 | Machine | Decode (writing the answer) | Prefill (reading your prompt) |
 | --- | ---: | ---: |
-| **2x Tesla V100 32 GB** (PCIe 3), Xeon E5-2690 v4, 30 GB RAM, one NVMe | **up to 40 tokens/s** | **up to 560 tokens/s** |
-| **1x Tesla V100 32 GB** (PCIe 3), Core i5-12600T, 64 GB RAM, one NVMe | **up to 19 tokens/s** | **up to 370 tokens/s** |
+| **2x Tesla V100 32 GB** (PCIe 3), Xeon E5-2690 v4, 30 GB RAM, one NVMe | **up to 40 tokens/s** | **up to 670 tokens/s** |
+| **1x Tesla V100 32 GB** (PCIe 3), Core i5-12600T, 64 GB RAM, one NVMe | **up to 19 tokens/s** | **up to 620 tokens/s** |
 
 - The speed holds with context: the attention's selection step is linear in the context length, so a 60K-token
   conversation keeps answering fast.
@@ -74,9 +74,9 @@ Measured with Maya-S. A token is about ¾ of a word. `./maya.sh --bench` measure
 
 | | |
 | --- | --- |
-| **GPU** | NVIDIA, compute capability 7.0 or newer (V100 and newer); one GPU, or two that share the model (each holds half of the layers). The engine fills whatever VRAM you have with the most-used experts: more VRAM is faster. Measured: 1 and 2x V100 32 GB; by users: 2x TITAN RTX (above). **AMD (experimental):** RX 7900 XT / XTX and Radeon AI PRO R9700 / RX 9070, one GPU, text only ([docs/AMD_MAYA.md](docs/AMD_MAYA.md)). |
+| **GPU** | NVIDIA, compute capability 7.0 or newer (V100 and newer); one GPU, or up to 16 that share the model (two split the layers in the middle; with more, each takes a share sized to its free VRAM). The engine fills whatever VRAM you have with the most-used experts: more VRAM is faster. Measured: 1 and 2x V100 32 GB; by users: 2x TITAN RTX (above), 1x RTX 3090 and nine GPUs (8x RTX 5060 Ti 16 GB + the 3090; about 28 tokens/s decode with GSQ-RCO 3.5-bit). **AMD (experimental):** RX 7900 XT / XTX and Radeon AI PRO R9700 / RX 9070, one GPU, text only ([docs/AMD_MAYA.md](docs/AMD_MAYA.md)). |
 | **RAM** | It runs with **32 GB** (the machine in the table above has 30 GB). More RAM keeps more experts close and is faster; what does not fit is read from the SSD while it answers. |
-| **Disk** | **~100 GB free on a fast NVMe SSD** (the model is 96.5 GB, its pictures encoder 1.1 GB, and the engine reads from the model while it answers). Not a hard disk. |
+| **Disk** | **~100 GB free on a fast NVMe SSD** (Maya-S is 96.5 GB, its pictures encoder 1.1 GB, and the engine reads from the model while it answers; Maya-M needs ~120 GB, GSQ-RCO 3.5-bit ~140 GB). Not a hard disk. |
 | **System** | Linux (x86-64, CPU with AVX2), NVIDIA driver, CUDA toolkit 12.x (CUDA 13 can be used for Turing and newer, but it no longer compiles for Volta/V100), g++, Python 3.10+. Windows 10/11: experimental, with Visual Studio 2022 Build Tools instead of g++ ([Windows](#windows)). Not WSL2. AMD: Linux with ROCm 7 instead of the NVIDIA driver and CUDA. |
 
 The installer checks all of this and prints the exact command for anything missing. It installs nothing
@@ -198,6 +198,7 @@ These settings change what the engine chooses (put them in the config with `--en
 | `STRATA_GLM_RAM_GB` | from free RAM | a fixed RAM-tier size in GB |
 | `STRATA_GLM_SPLIT` | middle (+2) with 2 GPUs, by free VRAM with more | the first layer of each later GPU (`24`, or `7,12,17,22,27,32,37,41` for nine); `0` = one GPU. The config's `"layer_split"` sets the same |
 | `STRATA_GLM_CPU_LANE` | one thread per physical core (one GPU: at most one NUMA node's) | CPU threads for RAM-tier experts; `0` = off (the tuning sets it) |
+| `STRATA_GLM_CPU_SPLIT` | about 48 pieces in all | decode: each CPU-lane thread's share of a token's RAM-tier experts is cut into this many pieces (1-64), claimed in turn, so one thread held up by the disk readers doesn't hold up the token. Few threads take several pieces each (6 threads: 8 - one V100, Maya-S: 17.1 tok/s against 14.3 with one); 40 or more take one each, which streams the memory best |
 | `STRATA_GLM_PCIE_SHARE` | measured at start | the share of a token's RAM-tier experts copied over PCIe and run on the GPU instead of on the CPU: `0` = the CPU takes every one, `1` = none (the tuning sets it; `STRATA_GLM_CPU_PLAN` = the split per expert count, digits for 0..8) |
 | `STRATA_GLM_NUMA` | on with 2+ NUMA nodes | `0` = allocate the RAM tier without spreading it page by page over the sockets' memory |
 | `STRATA_GLM_PREFILL_CHUNK` | 32768 on one GPU, 8192 on two, 512 on more | the most tokens per prompt chunk, bounded by `STRATA_GLM_PREFILL_MB` (one GPU: default 40% of the free VRAM less 1 GB, 1-8 GB - about 30K tokens on a 24 GB card; two: ~6% of the card, 1-2 GB) |
