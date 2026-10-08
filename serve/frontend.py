@@ -6,8 +6,9 @@ Everything here is text: no model, no GPU. The engine consumes token ids and pro
   * renders the model's own Jinja chat template (pack `tokenizer/chat_template.jinja`) exactly as Hugging Face
     does (checked against the pack's `chat_golden.json`, 10 cases incl. thinking and tools),
   * parses the streamed output incrementally into reasoning (`<think>...</think>`), content and tool calls in
-    the template's XML form (`<tool_call><function=NAME><parameter=P>VALUE</parameter>...</function></tool_call>`),
-    never emitting a partial tag to the client.
+    either template's XML form - GLM's (`<tool_call>NAME<arg_key>K</arg_key><arg_value>V</arg_value>...</tool_call>`)
+    or Qwen's (`<tool_call><function=NAME><parameter=P>VALUE</parameter>...</function></tool_call>`) - never
+    emitting a partial tag to the client.
 
 Design note: plan v0.3 describes a single C++ process. The frontend is Python first because the template is Jinja
 and the formats change often; the engine boundary is token ids in, text deltas out, which keeps a later C++ port
@@ -253,18 +254,62 @@ class Event:
 THINK_END = "</think>"
 CALL_START = "<tool_call>"
 CALL_END = "</tool_call>"
+FUNC_START = "<function="                       # Qwen's form: <function=NAME><parameter=P>V</parameter>...</function>
+ARG_KEY, ARG_KEY_END = "<arg_key>", "</arg_key>"   # GLM's form: NAME<arg_key>K</arg_key><arg_value>V</arg_value>...
+ARG_VAL, ARG_VAL_END = "<arg_value>", "</arg_value>"
+
+
+def _arg_value(value: str, declared) -> object:
+    """A parameter's text as the client gets it: as written when the schema says string, else JSON-decoded when it
+    parses (numbers, booleans, objects, arrays), else as written."""
+    if declared == "string":
+        return value
+    try:
+        return json.loads(value)
+    except ValueError:
+        return value
+
+
+def call_name(body: str) -> str:
+    """The tool name of a call body (the text between <tool_call> and </tool_call>), in either form."""
+    body = body.strip()
+    if body.startswith(FUNC_START):
+        return body[len(FUNC_START):].split(">", 1)[0]
+    return body.split("<", 1)[0].strip()
 
 
 def parse_tool_call(body: str, schema: dict | None = None) -> ToolCall:
-    """`<function=NAME>\\n<parameter=P>\\nVALUE\\n</parameter>...</function>` -> ToolCall. Values are JSON-decoded
-    when the tool's schema says the parameter is not a string (or, without a schema, when they parse as JSON
-    objects/arrays/numbers/booleans)."""
+    """A call body -> ToolCall, in GLM's form (`NAME<arg_key>K</arg_key><arg_value>V</arg_value>...`, what GLM-5.x
+    writes: issue #5) or Qwen's (`<function=NAME>\\n<parameter=P>\\nVALUE\\n</parameter>...</function>`).  Values are
+    JSON-decoded when the tool's schema says the parameter is not a string (or, without a schema, when they parse as
+    JSON objects/arrays/numbers/booleans)."""
     body = body.strip()
-    if not body.startswith("<function=") or ">" not in body:
-        raise ValueError("malformed tool call: " + body[:80])
-    name = body[len("<function="):body.index(">")]
-    rest = body[body.index(">") + 1:]
     props = ((schema or {}).get("parameters") or {}).get("properties") or {}
+    if not body.startswith(FUNC_START):
+        name = call_name(body)
+        rest = body[len(body.split("<", 1)[0]):]
+        if not name or not (rest == "" or rest.lstrip().startswith(ARG_KEY)):
+            raise ValueError("malformed tool call: " + body[:80])
+        args = {}
+        while ARG_KEY in rest:
+            rest = rest[rest.index(ARG_KEY) + len(ARG_KEY):]
+            end = rest.find(ARG_KEY_END)
+            if end < 0:
+                raise ValueError("malformed tool call: " + body[:80])
+            key, rest = rest[:end].strip(), rest[end + len(ARG_KEY_END):]
+            v0 = rest.find(ARG_VAL)
+            if v0 < 0 or rest[:v0].strip():
+                raise ValueError("malformed tool call: " + body[:80])
+            rest = rest[v0 + len(ARG_VAL):]
+            end = rest.find(ARG_VAL_END)
+            value = rest[:end] if end >= 0 else rest
+            rest = rest[end + len(ARG_VAL_END):] if end >= 0 else ""
+            args[key] = _arg_value(value, (props.get(key) or {}).get("type"))
+        return ToolCall(name=name, arguments=args)
+    if ">" not in body:
+        raise ValueError("malformed tool call: " + body[:80])
+    name = body[len(FUNC_START):body.index(">")]
+    rest = body[body.index(">") + 1:]
     args = {}
     while "<parameter=" in rest:
         rest = rest[rest.index("<parameter=") + len("<parameter="):]
@@ -302,7 +347,34 @@ class OutputParser:
         # character; other types whole, once complete) - before the final "tool_call".  Without it, a client sees
         # nothing until the call is complete, which for a large file write can be many minutes.
         self.stream_tools = stream_tools
+        # the answer text that has gone out, followed to tell a call from a quoted one (Strata #1058): the open code
+        # fence, the current line, and the backticks of the current paragraph
+        self.fence, self.line, self.ticks = "", "", 0
         self._reset_scan()
+
+    def _track(self, text: str) -> str:
+        """Follow answer text that goes out (see fence above).  Returns the text."""
+        parts = text.split("\n")
+        for k, part in enumerate(parts):
+            if k < len(parts) - 1:
+                line, self.line = self.line + part, ""
+                s = line.lstrip()
+                if self.fence:
+                    if s.startswith(self.fence * 3):
+                        self.fence = ""
+                elif s[:3] in ("```", "~~~") and (s[0] * 3) not in s[3:]:
+                    self.fence = s[0]
+                elif not s:
+                    self.ticks = 0
+                else:
+                    self.ticks += line.count("`")
+            else:
+                self.line += part
+        return text
+
+    def _in_code(self) -> bool:
+        """The answer so far leaves the next character inside a code fence or inline code."""
+        return bool(self.fence) or (self.ticks + self.line.count("`")) % 2 == 1
 
     def _reset_scan(self):
         self.sp = 0                  # how much of self.buf (the call body) the scanner has consumed
@@ -311,6 +383,15 @@ class OutputParser:
         self.sfirst = True
         self.sval_started = False
         self.sdeclared = {}
+        self.glm = False             # the call is in GLM's form (NAME<arg_key>..), not Qwen's (<function=NAME>..)
+        self.vend = "</parameter>"   # what ends the value being streamed
+
+    def _start_call(self, name: str, out: list, args) -> None:
+        self.scall = ToolCall(name=name, arguments={})
+        props = ((self.schemas.get(name) or {}).get("parameters") or {}).get("properties") or {}
+        self.sdeclared = {k: (v or {}).get("type") for k, v in props.items()}
+        out.append(Event("tool_start", call=self.scall))
+        args("{")
 
     def _scan(self) -> list[Event]:
         """Advance the streaming view of the call body in self.buf (see stream_tools)."""
@@ -322,18 +403,46 @@ class OutputParser:
         while True:
             rest = self.buf[self.sp:]
             if self.ss == "name":
-                a = rest.find("<function=")
-                b = rest.find(">", a + 10) if a >= 0 else -1
-                if b < 0:
+                lead = rest.lstrip()
+                if not lead or FUNC_START.startswith(lead):
+                    return out          # which form it is: not known yet
+                if lead.startswith(FUNC_START):
+                    a = rest.find(FUNC_START)
+                    b = rest.find(">", a + len(FUNC_START))
+                    if b < 0:
+                        return out
+                    self._start_call(rest[a + len(FUNC_START):b], out, args)
+                    self.sp += b + 1
+                    self.ss = "between"
+                else:
+                    # GLM: the name runs to the first tag (or the line's end); until one has arrived it may go on
+                    b = min((i for i in (rest.find("<"), rest.find("\n", len(rest) - len(lead))) if i >= 0),
+                            default=-1)
+                    if b < 0 or not rest[:b].strip():
+                        return out      # (no name before a tag: malformed - the whole call's parse says so)
+                    self._start_call(rest[:b].strip(), out, args)
+                    self.sp += b
+                    self.glm, self.vend, self.ss = True, ARG_VAL_END, "between"
+            elif self.ss == "between" and self.glm:
+                stripped = rest.lstrip()
+                if not stripped.startswith(ARG_KEY):
+                    return out          # the next pair still arriving (or the call's end: the caller closes it)
+                k1 = stripped.find(ARG_KEY_END)
+                if k1 < 0:
                     return out
-                name = rest[a + 10:b]
-                self.scall = ToolCall(name=name, arguments={})
-                props = ((self.schemas.get(name) or {}).get("parameters") or {}).get("properties") or {}
-                self.sdeclared = {k: (v or {}).get("type") for k, v in props.items()}
-                out.append(Event("tool_start", call=self.scall))
-                args("{")
-                self.sp += b + 1
-                self.ss = "between"
+                after = stripped[k1 + len(ARG_KEY_END):]
+                v0 = len(after) - len(after.lstrip())
+                if not after[v0:].startswith(ARG_VAL):
+                    return out
+                pname = stripped[len(ARG_KEY):k1].strip()
+                args(("" if self.sfirst else ",") + json.dumps(pname) + ":")
+                self.sfirst = False
+                self.sp += (len(rest) - len(stripped)) + k1 + len(ARG_KEY_END) + v0 + len(ARG_VAL)
+                if self.sdeclared.get(pname) == "string":
+                    args('"')
+                    self.ss, self.sval_started = "str", True     # GLM's values are written as they are
+                else:
+                    self.ss = "raw"
             elif self.ss == "between":
                 stripped = rest.lstrip()
                 self.sp += len(rest) - len(stripped)
@@ -364,37 +473,38 @@ class OutputParser:
                         self.sp += 1
                         rest = rest[1:]
                     self.sval_started = True
-                end = rest.find("</parameter>")
+                end = rest.find(self.vend)
                 if end >= 0:
                     value = rest[:end]
-                    if value.endswith("\n"):
+                    if value.endswith("\n") and not self.glm:
                         value = value[:-1]
                     args(json.dumps(value)[1:-1] + '"')
-                    self.sp += end + len("</parameter>")
+                    self.sp += end + len(self.vend)
                     self.ss = "between"
                     continue
-                safe = len(rest) - self._hold(rest, ("</parameter>",))
-                if safe > 0 and rest[safe - 1] == "\n":   # may be the trailing newline before </parameter>
+                safe = len(rest) - self._hold(rest, (self.vend,))
+                if safe > 0 and rest[safe - 1] == "\n" and not self.glm:   # may be the newline before </parameter>
                     safe -= 1
                 if safe > 0:
                     args(json.dumps(rest[:safe])[1:-1])
                     self.sp += safe
                 return out
             elif self.ss == "raw":
-                end = rest.find("</parameter>")
+                end = rest.find(self.vend)
                 if end < 0:
                     return out
                 value = rest[:end]
-                if value.startswith("\n"):
-                    value = value[1:]
-                if value.endswith("\n"):
-                    value = value[:-1]
+                if not self.glm:
+                    if value.startswith("\n"):
+                        value = value[1:]
+                    if value.endswith("\n"):
+                        value = value[:-1]
                 try:
                     v = json.loads(value)
                 except ValueError:
                     v = value
                 args(json.dumps(v, ensure_ascii=False))
-                self.sp += end + len("</parameter>")
+                self.sp += end + len(self.vend)
                 self.ss = "between"
             else:
                 return out
@@ -439,6 +549,7 @@ class OutputParser:
                     out.append(Event("reasoning", self.buf[:i]))
                 self.buf = self.buf[i + len(THINK_END):]
                 self.state, self.lead = "content", True
+                self.fence, self.line, self.ticks = "", "", 0
             elif self.state == "content":
                 if self.lead:                                   # newlines right after </think> or a call
                     stripped = self.buf.lstrip("\n")
@@ -454,11 +565,22 @@ class OutputParser:
                     while j > 0 and self.buf[j - 1] == "\n":
                         j -= 1
                     if j > 0:
-                        out.append(Event("content", self.buf[:j]))
+                        out.append(Event("content", self._track(self.buf[:j])))
                         self.buf = self.buf[j:]
                     return out
+                # Strata #1058: a <tool_call> inside a code fence or inline code of the answer is a quoted example -
+                # text, never a call (an example `rm -rf` must not run).  The text before it decides, so streamed and
+                # whole outputs agree; one at the top level, mid-sentence too, is a call as before.
+                snap = (self.fence, self.line, self.ticks)
+                self._track(self.buf[:i])
+                in_code = self._in_code()
+                self.fence, self.line, self.ticks = snap
+                if in_code:
+                    out.append(Event("content", self._track(self.buf[:i + len(CALL_START)])))
+                    self.buf = self.buf[i + len(CALL_START):]
+                    continue
                 if i and self.buf[:i].strip():
-                    out.append(Event("content", self.buf[:i].rstrip("\n")))
+                    out.append(Event("content", self._track(self.buf[:i].rstrip("\n"))))
                 self.buf = self.buf[i + len(CALL_START):]
                 self.state = "call"
             else:
@@ -475,8 +597,7 @@ class OutputParser:
                     return out
                 body = self.buf[:i]
                 self.buf = self.buf[i + len(CALL_END):]
-                name = body.strip()[len("<function="):].split(">", 1)[0]
-                call = parse_tool_call(body, self.schemas.get(name))
+                call = parse_tool_call(body, self.schemas.get(call_name(body)))
                 if self.scall is not None:
                     call.id = self.scall.id
                 out.append(Event("tool_call", call=call))
