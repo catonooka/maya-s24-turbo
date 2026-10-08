@@ -3129,7 +3129,7 @@ void moe_fetch(const MoeDev& d, int k, size_t blob_bytes, cudaStream_t s) {
 namespace {
 // Limit automatic dispatch to the measured decode geometry and RDNA3/3.5
 // targets. RDNA4 and all other shapes retain the original expert kernels.
-bool rdna3_expert_device() {
+bool rdna3_expert_device(bool allow_gfx1151 = true) {
     static const bool legacy = [] {
         const char* v = std::getenv("STRATA_HIP_EXPERTS_LEGACY");
         return v && v[0] == '1';
@@ -3138,15 +3138,16 @@ bool rdna3_expert_device() {
     int device = 0;
     if (hipGetDevice(&device) != hipSuccess) return false;
     static thread_local int cached_device = -1;
-    static thread_local bool rdna3 = false;
+    static thread_local bool gfx1100 = false;
+    static thread_local bool gfx1151 = false;
     if (cached_device != device) {
         hipDeviceProp_t prop{};
         if (hipGetDeviceProperties(&prop, device) != hipSuccess) return false;
-        rdna3 = std::strncmp(prop.gcnArchName, "gfx1100", 7) == 0 ||
-                std::strncmp(prop.gcnArchName, "gfx1151", 7) == 0;
+        gfx1100 = std::strncmp(prop.gcnArchName, "gfx1100", 7) == 0;
+        gfx1151 = std::strncmp(prop.gcnArchName, "gfx1151", 7) == 0;
         cached_device = device;
     }
-    return rdna3;
+    return gfx1100 || (allow_gfx1151 && gfx1151);
 }
 // Splitting shared down removes its dynamic type switch from routed gate/up's
 // register budget. The routed grid keeps exactly the original dot/reduction order.
@@ -3293,7 +3294,8 @@ bool rows_experts(int gu_type, int d_type, const uint8_t* base, size_t stride, s
 void moe_down(int d_type, const MoeDev& d, int k, int n_embd, int n_ff, size_t down_off, const void* hq,
               const float* sh_out, float* out, cudaStream_t s) {
 #if defined(STRATA_USE_HIP)
-    if ((d_type == 22 || d_type == 18) && n_embd == 4096 && n_ff == 2048 && rdna3_expert_device()) {
+    // IQ3_XXS down regresses on gfx1151; let it use the original dispatch below.
+    if ((d_type == 22 || d_type == 18) && n_embd == 4096 && n_ff == 2048 && rdna3_expert_device(d_type == 22)) {
         // Two rows lower the register budget; IQ2_S prefers global grid reads,
         // while the smaller IQ3_XXS grid is faster in LDS on gfx1100.
         if (d_type == 22) launch_expert_down<22, 2, true, true, true>(d, k, n_embd, n_ff, down_off, hq, sh_out, out, s);

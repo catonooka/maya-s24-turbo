@@ -1,8 +1,16 @@
 # RDNA decode expert kernels
 
-The HIP decode dispatcher uses optimized IQ2_XXS gate/up, IQ2_S down and IQ3_XXS
-down kernels for `n_embd=4096`, `n_ff=2048` on gfx1100 and gfx1151. Other shapes,
-other quant types, gfx1201 and CUDA keep the original dispatch. Set
+For `n_embd=4096`, `n_ff=2048`, the HIP decode dispatcher selects kernels by
+architecture:
+
+| Architecture | IQ2_XXS gate/up (`gate_up<16>`) | IQ2_S down (`down<22>`) | IQ3_XXS down (`down<18>`) |
+| --- | --- | --- | --- |
+| gfx1100 | Optimized | Optimized | Optimized |
+| gfx1151 | Optimized | Optimized | Original (legacy) |
+| gfx1201 | Original (legacy) | Original (legacy) | Original (legacy) |
+
+gfx1201 is unchanged and untuned by this expert-kernel work. Other shapes,
+other quant types, other architectures and CUDA keep the original dispatch. Set
 `STRATA_HIP_EXPERTS_LEGACY=1` before starting a process to force original HIP
 expert kernels for an end-to-end comparison.
 
@@ -16,9 +24,10 @@ expert combine order.
 
 Gate/up retains sixteen wave32 waves per workgroup, two gate and two up rows
 per wave, its 2 KiB codebook in LDS, and the fused shared-down branch. Down
-uses two output rows per workgroup instead of four, reducing its register
-budget. IQ2_S reads its 8 KiB codebook through global memory; IQ3_XXS keeps its
-1 KiB codebook in LDS. The grid selection and sign operations are HIP-only.
+uses two output rows per workgroup instead of four on optimized paths, reducing
+its register budget. IQ2_S reads its 8 KiB codebook through global memory;
+IQ3_XXS keeps its 1 KiB codebook in LDS. The grid selection and sign operations
+are HIP-only.
 
 The signed-codebook technique was adapted from
 [Strata's moe_fused_iq.cu](https://github.com/Niko1221/Strata/blob/fb58e0dbc8399662c0e47c76578c6e878b14f6cf/src/prefill/moe_fused_iq.cu)
@@ -42,7 +51,7 @@ cmake -S . -B build-multi -DCMAKE_BUILD_TYPE=Release \
   -DSTRATA_GGML_DIR=/ai/github/project-maya/third_party/llama.cpp \
   '-DCMAKE_HIP_ARCHITECTURES=gfx1100;gfx1201;gfx1151'
 CCACHE_DIR=/tmp/maya-experts-ccache cmake --build build-multi -j 8 \
-  --target hip_expert_kernel_bench glm_ffn_parity glm_layer_parity \
+  --target strata hip_expert_kernel_bench glm_ffn_parity glm_layer_parity \
   glm_model_test iq1_s_parity hip_intrinsics
 export HIP_VISIBLE_DEVICES=0
 export LD_LIBRARY_PATH=/opt/rocm/lib
@@ -98,7 +107,32 @@ gfx1201 continues to select the original kernels. No CUDA toolkit was available
 for a CUDA build; CUDA retains its original kernel template signatures and
 arithmetic.
 
-## Measure on Strix Halo
+Full-model measurements reported after the initial synthetic tests showed
+decode increasing from 15.1 to 16.4 tok/s (+8.6%) on RX 7900 XT (gfx1100),
+with bit-identical parity. The two-GPU full-model configuration improved decode
+by 3.9%.
+
+## Strix Halo 8060S results (gfx1151), 2026-10-08
+
+The following hardware measurements were reported for the original kernels
+versus the optimized dispatch in commit `6f0bdf6`, before restoring legacy
+IQ3_XXS down on gfx1151:
+
+| Kernel / fixture | Original us/call | Optimized us/call | Speedup |
+| --- | ---: | ---: | ---: |
+| `gate_up<16>`, gu16/down22 fixture | 203.9 | 181.4 | 1.124x |
+| `down<22>` (IQ2_S) | 131.4 | 126.6 | 1.038x |
+| `gate_up<16>`, gu16/down18 fixture | 207.7 | 183.3 | 1.133x |
+| `down<18>` (IQ3_XXS) | 126.5 | 130.2 | 0.972x (regression) |
+
+Full-model decode on gfx1151 increased from 17.8 to 18.0 tok/s with that
+dispatch. Because optimized `down<18>` was slower, production now retains the
+original IQ3_XXS down kernel on gfx1151 while keeping optimized `gate_up<16>`
+and `down<22>`. gfx1100 keeps optimized `down<18>`. The full-model result above
+predates this selective fallback; decode after the fallback has not yet been
+measured. gfx1201 continues to use the original kernels and remains untuned.
+
+## Further measurements on Strix Halo
 
 Run the benchmark, `--shared`, and `--parity-only --sweep` on gfx1151 using the
 same ROCm build settings. Then compare the resident-pool Maya-S decode trace
