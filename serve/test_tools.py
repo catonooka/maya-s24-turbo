@@ -235,6 +235,30 @@ class ClientStops(unittest.TestCase):
         self.assertEqual([m["role"] for m in msgs], ["user", "user"])
 
 
+class JsonMode(unittest.TestCase):
+    """response_format json_object: the JSON alone, out of a code fence or the prose around it (Strata #762)."""
+
+    def test_extraction(self):
+        from serve.server import json_from_text
+        cases = [('{"a": 1}', '{"a": 1}'), ('Sure:\n```json\n{"a": [1, 2]}\n```\nDone.', '{"a": [1, 2]}'),
+                 ('Here it is: {"ok": true, "n": {"x": "}"}} - enjoy', '{"ok": true, "n": {"x": "}"}}'),
+                 ('[1, 2, 3]', '[1, 2, 3]'), ('no json here', 'no json here')]
+        for given, want in cases:
+            self.assertEqual(json_from_text(given), want, given)
+
+    def test_over_http(self):
+        tok = ByteTokenizer()
+        svc = Service(MockEngine(tok, '</think>\n\nSure! ```json\n{"city": "Paris"}\n```', max_context=8192), tok,
+                      ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        httpd = serve(svc, port=0)
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        self.base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        code, b = HttpToolCalls.post(self, "/v1/chat/completions", {
+            "model": "m", "response_format": {"type": "json_object"}, "messages": [{"role": "user", "content": "json"}]})
+        self.assertEqual(json.loads(b["choices"][0]["message"]["content"]), {"city": "Paris"})
+
+
 class ForcedToolCalls(unittest.TestCase):
     """tool_choice "required" / a named function (Anthropic "any" / "tool"): the answer starts with the call - the
     prompt ends with its opening, thinking off - and the model's continuation is the call (from Strata #790)."""

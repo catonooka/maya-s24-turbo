@@ -31,6 +31,7 @@ import itertools
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import tempfile
@@ -1400,6 +1401,30 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
 
 
 # ------------------------------------------------------------------------------------------------ OpenAI
+def json_from_text(text: str) -> str:
+    """The JSON in an answer that was asked for JSON: the answer itself when it parses, else the inside of its first
+    code fence, else the first object or array in it; the text as it was when none parses."""
+    s = text.strip()
+    candidates = [s]
+    fence = re.search(r"```(?:json)?\s*\n(.*?)```", s, re.S)
+    if fence:
+        candidates.append(fence.group(1).strip())
+    for c in candidates:
+        try:
+            json.loads(c)
+            return c
+        except ValueError:
+            pass
+    dec = json.JSONDecoder()
+    for m in re.finditer(r"[\[{]", s):
+        try:
+            _, end = dec.raw_decode(s, m.start())
+            return s[m.start():end]
+        except ValueError:
+            continue
+    return text
+
+
 def openai_chunks(svc: Service, req: dict, ids, thinking, tools, max_new, cancel, run=None):
     """`run`: the events to send instead of Service.run's (run_with_mcp); its ("mcp", {...}) items become chunks with
     an empty delta and a `strata_mcp` field, which only the web app reads."""
@@ -1412,6 +1437,10 @@ def openai_chunks(svc: Service, req: dict, ids, thinking, tools, max_new, cancel
     yield chunk({"role": "assistant", "content": ""})
     calls = 0
     streamed = {}                                  # tool call id -> index, for calls sent piece by piece
+    # response_format json_object / json_schema: the answer is held and its JSON sent alone at the end (Strata #762)
+    rf = req.get("response_format")
+    json_mode = isinstance(rf, dict) and rf.get("type") in ("json_object", "json_schema")
+    held = []
     for kind, x in run if run is not None else svc.run(ids, thinking, tools, max_new, req, cancel):
         if kind == "ping":
             yield None
@@ -1424,6 +1453,9 @@ def openai_chunks(svc: Service, req: dict, ids, thinking, tools, max_new, cancel
             if ev.kind == "reasoning" and ev.text:
                 yield chunk({"reasoning_content": ev.text})
             elif ev.kind == "content" and ev.text:
+                if json_mode:
+                    held.append(ev.text)
+                    continue
                 yield chunk({"content": ev.text})
             elif ev.kind == "tool_start":
                 streamed[ev.call.id] = calls
@@ -1440,6 +1472,8 @@ def openai_chunks(svc: Service, req: dict, ids, thinking, tools, max_new, cancel
                                                           "arguments": json.dumps(ev.call.arguments, ensure_ascii=False)}}]})
                 calls += 1
         else:
+            if held:
+                yield chunk({"content": json_from_text("".join(held))})
             finish = "tool_calls" if calls and x["finish"] == "stop" else {"cancel": "stop"}.get(x["finish"], x["finish"])
             last = chunk({}, finish)
             pt = x.get("prompt_tokens", len(ids))     # after MCP rounds: the last round's prompt
