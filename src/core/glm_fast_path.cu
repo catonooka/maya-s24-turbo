@@ -964,7 +964,8 @@ bool Glm5Model::fast_setup(std::string& err) {
                 err = "glm fast: the pinned RAM tier did not allocate";
                 return false;
             }
-            if (F->ram_resident && n < cap) {
+            // (an APU whose pool holds every expert keeps a staging-only tier: no expert is outside VRAM to hold)
+            if (F->ram_resident && !staging_only && n < cap) {
                 err = "glm fast: --glm-ram-resident: the RAM tier cannot hold every non-VRAM expert (class " +
                       std::to_string(c) + ": " + std::to_string(n) + " of " + std::to_string(cap) +
                       " slots pinned; raise STRATA_GLM_RAM_GB, its headroom, or lower --max-context)";
