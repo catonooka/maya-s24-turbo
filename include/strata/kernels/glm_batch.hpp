@@ -79,6 +79,12 @@ void dsa_score(const float* iq, const float* pooled, const float* iw, int key_di
 /// tail cells - cells[t][0 .. n_sel[t]), -1 = masked; rows of n_sel_max.
 void dsa_select(const float* score, int score_ld, int p0, int kpool, int top_pools_max, int tail, int T,
                 int n_sel_max, int* cells, int* n_sel, cudaStream_t s);
+#if defined(STRATA_USE_HIP)
+/// The same attention with Q in FP16 ([T][n_head][512]) on the WMMA units (rocWMMA, RDNA3/RDNA4): FP16 operands, F32
+/// accumulation and softmax.  n_head % 16 == 0, kv_lora 512.
+void mla_attn_f16q(const uint16_t* q16, const uint16_t* lat, const int* cells, const int* n_sel, int n_sel_max,
+                   int n_head, int kv_lora, float scale, int T, float* ctx, cudaStream_t s);
+#endif
 /// Absorbed MLA attention per token and head over the token's cells: ctx[t][h] = softmax(q_abs[t][h] . lat_c *
 /// scale) . lat_c.  kv_lora 512, n_head % 16 == 0.
 void mla_attn(const float* q_abs, const uint16_t* lat, const int* cells, const int* n_sel, int n_sel_max, int n_head,

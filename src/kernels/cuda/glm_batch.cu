@@ -4,6 +4,23 @@
 // (same operation order where the order is observable), so a prompt read in chunks leaves the state the token path
 // would have left up to float rounding - the projections around them (FP16 tensor-core GEMMs instead of q8_1 dot
 // products) are where the two paths really differ, as llama.cpp's batched and one-token paths do.
+#if defined(STRATA_USE_HIP)
+// The HIP bf16/fp8 headers rocWMMA pulls in define the __shfl_*_sync names that the force-included hip_compat macros
+// remap; hide the macros while they are read.
+#pragma push_macro("__shfl_xor_sync")
+#undef __shfl_xor_sync
+#pragma push_macro("__shfl_down_sync")
+#undef __shfl_down_sync
+#pragma push_macro("__shfl_up_sync")
+#undef __shfl_up_sync
+#pragma push_macro("__shfl_sync")
+#undef __shfl_sync
+#include <rocwmma/rocwmma.hpp>
+#pragma pop_macro("__shfl_xor_sync")
+#pragma pop_macro("__shfl_down_sync")
+#pragma pop_macro("__shfl_up_sync")
+#pragma pop_macro("__shfl_sync")
+#endif
 #include "strata/kernels/glm_batch.hpp"
 #include "dsa_topk.cuh"
 
@@ -780,6 +797,122 @@ __global__ void __launch_bounds__(256) mla_attn_tc_reg_kernel(const float* __res
 }
 #endif
 
+#if defined(STRATA_USE_HIP)
+// mla_attn_tc_kernel on RDNA3 WMMA (rocWMMA).  RDNA allows 64 KiB of LDS a workgroup, the CUDA kernel takes 91,
+// so Q (FP16, from the q_abs product) stays in registers - each warp holds its 64-wide K slice of the 16 heads as four
+// A fragments - and the cells go in chunks of 16: O 32 KiB (F32) + L 16 KiB + score partials 8 KiB + P 0.5 KiB.
+// Same arithmetic as the CUDA kernel: FP16 operands, F32 accumulation, the online softmax in F32.
+constexpr int HW_HG = 16, HW_CH = 16;
+constexpr size_t kHwSmem = (size_t) HW_HG * 512 * 4 + (size_t) HW_CH * 512 * 2 + (size_t) 8 * HW_HG * HW_CH * 4 +
+                           (size_t) HW_HG * HW_CH * 2;
+__global__ void __launch_bounds__(256) mla_attn_wmma_kernel(const _Float16* __restrict__ q16,
+                                                            const uint16_t* __restrict__ lat,
+                                                            const int* __restrict__ cells_all,
+                                                            const int* __restrict__ n_sel_arr, int n_sel_max,
+                                                            int n_head, float scale, float* __restrict__ ctx) {
+    namespace wm = rocwmma;
+    constexpr int KV = 512;
+    extern __shared__ __align__(128) unsigned char hw_sm[];
+    float* sO = (float*) hw_sm;                              // HW_HG x KV, F32
+    _Float16* sL = (_Float16*) (sO + HW_HG * KV);            // HW_CH x KV
+    float* sPart = (float*) (sL + HW_CH * KV);               // 8 x HW_HG x HW_CH: the scores' K eighths
+    _Float16* sP = (_Float16*) (sPart + 8 * HW_HG * HW_CH);  // HW_HG x HW_CH: exp(s - m)
+    __shared__ float s_m[HW_HG], s_l[HW_HG], s_sc[HW_HG];
+    __shared__ int s_cell[HW_CH];
+    const int t = blockIdx.x, h0 = blockIdx.y * HW_HG, tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
+    const int ns = n_sel_arr[t];
+    const int* cl = cells_all + (size_t) t * n_sel_max;
+    const _Float16* qa = q16 + ((size_t) t * n_head + h0) * KV;
+    for (int i = tid; i < HW_HG * KV; i += blockDim.x) sO[i] = 0.0f;
+    if (tid < HW_HG) {
+        s_m[tid] = -INFINITY;
+        s_l[tid] = 0.0f;
+    }
+    wm::fragment<wm::matrix_a, 16, 16, 16, _Float16, wm::row_major> qf[4];
+#pragma unroll
+    for (int k = 0; k < 4; ++k) wm::load_matrix_sync(qf[k], qa + warp * 64 + k * 16, KV);
+    constexpr int PRE = HW_CH * (KV / 8) / 256;
+    uint4 pre[PRE];
+    const auto issue = [&](int c0) {
+#pragma unroll
+        for (int k = 0; k < PRE; ++k) {
+            const int i = tid + k * 256, s = i / (KV / 8), c8 = i - s * (KV / 8);
+            const int cell = c0 + s < ns ? cl[c0 + s] : -1;
+            pre[k] = cell >= 0 ? ((const uint4*) (lat + (size_t) KV * cell))[c8] : make_uint4(0u, 0u, 0u, 0u);
+        }
+    };
+    issue(0);
+    for (int s0 = 0; s0 < ns; s0 += HW_CH) {
+        __syncthreads();   // the previous chunk's product has read sL and sP
+        if (tid < HW_CH) s_cell[tid] = s0 + tid < ns ? cl[s0 + tid] : -1;
+#pragma unroll
+        for (int k = 0; k < PRE; ++k) {
+            const int i = tid + k * 256, s = i / (KV / 8), c8 = i - s * (KV / 8);
+            ((uint4*) (sL + s * KV))[c8] = pre[k];
+        }
+        if (s0 + HW_CH < ns) issue(s0 + HW_CH);
+        __syncthreads();
+        {
+            wm::fragment<wm::accumulator, 16, 16, 16, float> acc;
+            wm::fill_fragment(acc, 0.0f);
+#pragma unroll
+            for (int k = 0; k < 4; ++k) {
+                wm::fragment<wm::matrix_b, 16, 16, 16, _Float16, wm::col_major> b;
+                wm::load_matrix_sync(b, sL + warp * 64 + k * 16, KV);
+                wm::mma_sync(acc, qf[k], b, acc);
+            }
+            wm::store_matrix_sync(sPart + warp * HW_HG * HW_CH, acc, HW_CH, wm::mem_row_major);
+        }
+        __syncthreads();
+#pragma unroll
+        for (int hh = 0; hh < 2; ++hh) {
+            const int h = 2 * warp + hh;
+            float v = -INFINITY;
+            if (lane < HW_CH) {
+                float a = 0.0f;
+#pragma unroll
+                for (int q = 0; q < 8; ++q) a += sPart[q * HW_HG * HW_CH + h * HW_CH + lane];
+                v = s_cell[lane] >= 0 ? a * scale : -INFINITY;
+            }
+            const float m_old = s_m[h];
+            const float m_new = fmaxf(m_old, warp_max(v));
+            const float e = (v == -INFINITY) ? 0.0f : expf(v - m_new);
+            const float l = warp_sum(e);
+            if (lane < HW_CH) sP[h * HW_CH + lane] = (_Float16) e;
+            if (lane == 0) {
+                const float sc = (m_old == -INFINITY) ? 0.0f : expf(m_old - m_new);
+                s_sc[h] = sc;
+                s_l[h] = s_l[h] * sc + l;
+                s_m[h] = m_new;
+            }
+        }
+        __syncthreads();
+        for (int i = tid; i < HW_HG * KV; i += blockDim.x) sO[i] *= s_sc[i / KV];
+        __syncthreads();
+        {
+            wm::fragment<wm::matrix_a, 16, 16, 16, _Float16, wm::row_major> a;
+            wm::load_matrix_sync(a, sP, HW_CH);
+#pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                const int c0 = (warp * 4 + j) * 16;
+                wm::fragment<wm::accumulator, 16, 16, 16, float> acc;
+                wm::fragment<wm::matrix_b, 16, 16, 16, _Float16, wm::row_major> b;
+                wm::load_matrix_sync(acc, sO + c0, KV, wm::mem_row_major);
+                wm::load_matrix_sync(b, sL + c0, KV);
+                wm::mma_sync(acc, a, b, acc);
+                wm::store_matrix_sync(sO + c0, acc, KV, wm::mem_row_major);
+            }
+        }
+    }
+    __syncthreads();
+    float* o = ctx + ((size_t) t * n_head + h0) * KV;
+    for (int i = tid; i < HW_HG * KV; i += blockDim.x) {
+        const float L = s_l[i / KV];
+        o[i] = L > 0.0f ? sO[i] / L : 0.0f;
+    }
+}
+#endif
+
 // ---------------------------------------------------------------- the NextN block's caches over a prompt
 // h[t] = rms(mean_s R[t][s]) * w (the final hidden state the draft block reads; head_prep's arithmetic)
 __global__ void __launch_bounds__(256) head_rows_kernel(const float* __restrict__ R, const float* __restrict__ w,
@@ -1178,6 +1311,21 @@ void mla_attn(const float* q_abs, const uint16_t* lat, const int* cells, const i
     mla_attn_kernel<<<grid, 256, kF32Smem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx);
     check("mla_attn");
 }
+
+#if defined(STRATA_USE_HIP)
+void mla_attn_f16q(const uint16_t* q16, const uint16_t* lat, const int* cells, const int* n_sel, int n_sel_max,
+                   int n_head, int kv_lora, float scale, int T, float* ctx, cudaStream_t s) {
+    if (T <= 0) return;
+    if (kv_lora != 512 || n_head % HW_HG != 0) {
+        std::fprintf(stderr, "glm_batch mla_attn_f16q: kv_lora %d / n_head %d unsupported\n", kv_lora, n_head);
+        return;
+    }
+    // kHwSmem is below the 64 KiB a workgroup may take without opting in
+    const dim3 grid((unsigned) T, (unsigned) (n_head / HW_HG));
+    mla_attn_wmma_kernel<<<grid, 256, kHwSmem, s>>>((const _Float16*) q16, lat, cells, n_sel, n_sel_max, n_head, scale, ctx);
+    check("mla_attn_wmma");
+}
+#endif
 
 void head_rows(const float* R, const float* w, float eps, int T, int n_embd, float* h, cudaStream_t s) {
     if (T <= 0) return;
