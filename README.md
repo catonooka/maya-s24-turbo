@@ -69,6 +69,7 @@ Measured with Maya-S. A token is about ¾ of a word. `./maya.sh --bench` measure
 | Machine | Decode (writing the answer) | Prefill (reading your prompt) | By |
 | --- | ---: | ---: | --- |
 | **2x NVIDIA TITAN RTX 24 GB** (Turing; the second card in a PCIe 3 x4 slot), Core i5-12490F, 48 GB RAM | 13.5 tokens/s (mean of 3 answers) | 238 tokens/s (8K-token prompt) | @dummerjindabin (v1.0.6 with the v1.0.7 fix) |
+| **2x NVIDIA CMP 170HX 64 GB** (Ampere GA100; PCIe Gen2 x4 each), 2x Xeon E5-2690 v4, 91 GB RAM - **Maya-M**, every expert in VRAM | 61.3 tokens/s (mean of 3 answers) | 514 tokens/s (8K-token prompt) | @ZackO2o (v1.0.6, #22) |
 
 ## What you need
 
@@ -212,6 +213,7 @@ These settings change what the engine chooses (put them in the config with `--en
 | `STRATA_GLM_PROMOTE` | 8 | when the CPU computes every RAM-tier expert (it beats the PCIe link), experts moved between VRAM and RAM in the background per token, so VRAM follows what you use; `0` = off |
 | `STRATA_GLM_PROMOTE_FILL` | 24 | while VRAM has free expert slots (after a prompt gives back what it borrowed), up to this many of the hottest RAM-tier experts are copied into them per token (several per layer) instead of `STRATA_GLM_PROMOTE`; `0` = the same pace as the moves |
 | `STRATA_GLM_RAM_SHADOW` | off | `1`: an expert moved up to VRAM keeps its RAM copy while the RAM tier has room, so leaving VRAM needs no copy back or SSD read (helps when the RAM tier holds most of the model; [docs/AMD_MAYA.md](docs/AMD_MAYA.md) has measurements) |
+| `STRATA_GLM_MTP_GGUF` | the model's own | two GPUs: a GGUF holding the MTP draft block to draft with - for a model published without one, or a more precise block than its own (`tools/maya_quant/mtp_gguf.py` writes a model's block alone); `STRATA_GLM_NO_MTP=1` = no drafting |
 | `STRATA_GLM_SERVICE_IDLE_MS` | 200 | the engine's tier threads (one per GPU) spin while a decode routes experts and sleep after this long without one, so an idle engine uses ~1% of a core instead of one core per GPU; `0` = spin always |
 | `STRATA_GLM_PREFILL_CPU` | on | prompts: the least routed RAM-tier experts are computed on the CPU while the GPU loads the rest over PCIe, the split balanced each layer so both finish together; `0` = off. `STRATA_GLM_PREFILL_CPU_ROW_MS` fixes the CPU cost of a row it plans with (default: learned) |
 | `STRATA_GLM_PRESTAGE` | 160 on one GPU, 0 on more | prompts: experts copied to the GPU while a layer's attention runs (the PCIe link is idle then), into a buffer of this many experts borrowed from the pool's tail - the next layer's most routed RAM-tier ones; `0` = off. `STRATA_GLM_PRESTAGE_ADAPT=1` (experimental, not yet measured) learns each layer's count from how long its attention takes |
@@ -276,6 +278,8 @@ been run on a Windows PC with an NVIDIA GPU yet, so tell us how it runs on yours
 
 Project Maya is free and open source. If it is useful to you, you can support its development:
 **[buymeacoffee.com/peasantsmith](https://buymeacoffee.com/peasantsmith)**. Thank you!
+
+Speed reports, bug reports and pull requests are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) says what helps most.
 
 ## Credits and license
 
