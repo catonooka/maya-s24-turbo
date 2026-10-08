@@ -2028,6 +2028,11 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
     if (tid == 0) {
         __threadfence_system();
         rq->seq = s_seq;
+#if defined(__HIPCC__)
+        // The CPU polls this signal without a stream query. As in Strata #697,
+        // publish the signal itself after publishing the request payload.
+        __threadfence_system();
+#endif
     }
 }
 

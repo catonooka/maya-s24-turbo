@@ -203,7 +203,10 @@ void silu_inplace(float* x, int64_t n, void* stream) {
 /// very expensive substitute for one fence instruction.
 __global__ void doorbell_ring_kernel(uint32_t* seq) {
     __threadfence_system();
-    *seq = *seq + 1u;
+    *(volatile uint32_t*) seq = *(volatile uint32_t*) seq + 1u;
+#if defined(__HIPCC__)  // Strata #697: publish the signal itself out of AMD's GPU cache.
+    __threadfence_system();
+#endif
 }
 
 __global__ void doorbell_wait_kernel(const volatile uint32_t* flag, const volatile uint32_t* seq) {
@@ -278,6 +281,9 @@ __global__ void doorbell_publish_kernel(const float* __restrict__ x, const int32
     if (threadIdx.x == 0) {
         __threadfence_system();
         *(volatile uint32_t*) seq = *(volatile uint32_t*) seq + 1u;
+#if defined(__HIPCC__)  // The preceding fence publishes the payload; this one publishes the signal.
+        __threadfence_system();
+#endif
     }
 }
 
