@@ -106,7 +106,59 @@ class HipSetupTests(unittest.TestCase):
         self.assertNotIn("STRATA_GLM_PREFILL_CHUNK", env)
         self.assertEqual(env["STRATA_GLM_PREFILL_SUB"], "512")   # the user's setting wins
         self.assertEqual(env["STRATA_GLM_PREFILL_MB"], "4096")
+        self.assertEqual(env["STRATA_GLM_RESERVE_MB"], "3072")
+        self.assertEqual(env["STRATA_GLM_RAM_HEADROOM_GB"], "16")
         self.assertEqual(env["STRATA_HIPBLASLT_TUNING"], str(tables / "gfx1100-glm-hipblaslt-100202.txt"))
+
+    def test_strix_halo_defaults_use_system_ram_not_vram(self):
+        self.gpus.append({"index": 3, "arch": "gfx1151", "vendor": "amd",
+                          "name": "AMD Radeon (gfx1151)", "vram_gb": 0.5})
+        self.a.gpu = 3
+        tables = self.root / "tools/hip"
+        tables.mkdir(parents=True)
+        table = tables / "gfx1151-glm-hipblaslt-100202.txt"
+        table.write_text("STRATA_HIPBLASLT_TUNING_V1 gfx1151 100202\n")
+        pc = maya.check_pc(self.a)
+        self.assertEqual(pc["gpus"], [self.gpus[3]])
+        self.assertTrue(maya.hip_unified_memory(pc["gpus"][0]))
+        for ram, budget in ((64, "4096"), (96, "6144"), (128, "6144")):
+            with self.subTest(ram=ram), patch.object(maya, "mem_gb", return_value=(ram, ram - 8)):
+                p = maya.write_config(self.a, pc, {}, self.root / "pack", "test", 8192,
+                                      self.root / "data", None)
+                env = json.loads(p.read_text())["env"]
+                self.assertEqual(env["STRATA_GLM_SPLIT"], "0")
+                self.assertEqual(env["STRATA_GLM_RESERVE_MB"], "1024")
+                self.assertEqual(env["STRATA_GLM_RAM_HEADROOM_GB"], "16")
+                self.assertEqual(env["STRATA_GLM_PREFILL_SUB"], "1024")
+                self.assertEqual(env["STRATA_GLM_PREFILL_MB"], budget)
+                self.assertEqual(env["STRATA_HIPBLASLT_TUNING"], str(table))
+                self.assertNotIn("STRATA_GLM_POOL_GB", env)
+                self.assertNotIn("STRATA_GLM_RAM_GB", env)
+                self.assertNotIn("STRATA_GLM_PREFILL_CHUNK", env)
+
+    def test_strix_halo_explicit_settings_win(self):
+        self.gpus.append({"index": 3, "arch": "gfx1151", "vendor": "amd",
+                          "name": "Radeon 8060S", "vram_gb": 112})
+        self.a.gpu = 3
+        explicit = {"STRATA_GLM_RESERVE_MB": "2048", "STRATA_GLM_RAM_HEADROOM_GB": "8",
+                    "STRATA_GLM_POOL_GB": "84", "STRATA_GLM_RAM_GB": "4",
+                    "STRATA_GLM_PREFILL_SUB": "512", "STRATA_GLM_PREFILL_MB": "3072",
+                    "STRATA_HIPBLASLT_TUNING": "/custom/table.txt"}
+        self.a.env = [f"{k}={v}" for k, v in explicit.items()]
+        p = maya.write_config(self.a, maya.check_pc(self.a), {}, self.root / "pack", "test", 8192,
+                              self.root / "data", None)
+        env = json.loads(p.read_text())["env"]
+        for k, v in explicit.items():
+            self.assertEqual(env[k], v)
+
+    def test_discrete_r9700_defaults_unchanged(self):
+        self.a.gpu = 1
+        p = maya.write_config(self.a, maya.check_pc(self.a), {}, self.root / "pack", "test", 8192,
+                              self.root / "data", None)
+        self.assertEqual(json.loads(p.read_text())["env"], {
+            "STRATA_GLM_SPLIT": "0", "STRATA_GLM_RESERVE_MB": "3072", "STRATA_GLM_RAM_HEADROOM_GB": "16",
+            "STRATA_GLM_PREFILL_SUB": "1024", "STRATA_GLM_PREFILL_MB": "4096"})
+        self.assertFalse(maya.hip_unified_memory(self.gpus[1]))
 
     def test_hip_build_enables_mmq_and_never_cuda(self):
         pc = maya.check_pc(self.a)

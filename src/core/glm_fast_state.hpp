@@ -6,6 +6,7 @@
 #include "strata/core/glm_model.hpp"
 #include "strata/kernels/glm_fast.hpp"
 #include "strata/kernels/cpu/native_expert.hpp"
+#include "glm_memory.hpp"
 
 #include "ggml.h"
 
@@ -140,6 +141,7 @@ inline size_t expert_stride(size_t blob, int gu_type, int d_type) {
 namespace gf = strata::kernels::glmf;
 
 struct Glm5Model::FastState {
+    bool unified_memory = false;   // set only for integrated HIP devices; CUDA keeps its existing policy
     cudaStream_t cs = nullptr, copy = nullptr, ps = nullptr;   // ps: the prefetch side stream
     cudaEvent_t ev_hop = nullptr, ev_done = nullptr, ev_pred = nullptr, ev_pf = nullptr, ev_pf_prev = nullptr;
     int max_pf = 0;   // STRATA_GLM_PREFETCH_N: measured a net LOSS on Mercury (the window between routes is shorter than one fetch)

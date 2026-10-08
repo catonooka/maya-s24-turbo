@@ -536,6 +536,9 @@ bool Glm5Model::prefill_setup(std::string& err) {
         constexpr int kMinLand = PrefillState::NG * PrefillState::GE;
         int want = (int) std::min<int64_t>(96, std::max<int64_t>(kMinLand, (int64_t) (0.03 * (double) avail_ram_bytes() /
                                                                                       (double) gstride)));
+        // On an APU these pinned pages compete with the expert pool. A small
+        // landing ring suffices for disk reads while the prompt borrows its tail.
+        if (F->unified_memory) want = kMinLand;
         if (const char* v = getenv("STRATA_GLM_PREFILL_LAND")) want = std::max(kMinLand, std::atoi(v));
         int n = want;
         while (cudaHostAlloc((void**) &S->gpin, (size_t) n * gstride, cudaHostAllocDefault) != cudaSuccess) {

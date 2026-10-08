@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Project Maya - set up and start GLM-5.3-Flash on your own GPU(s).
-CUDA: Linux; Windows (experimental). HIP: experimental Linux gfx1100/gfx1201, text only.
+CUDA: Linux; Windows (experimental). HIP: experimental Linux gfx1100/gfx1201/gfx1151, text only.
 
     ./maya.sh                 the first run sets everything up and starts the dashboard; later runs just start it
     ./maya.sh --setup         set up again (other GPUs, another context length, another model folder)
@@ -14,7 +14,7 @@ pip, llama.cpp's source and resumable downloads.
 What the first run does (each step is skipped when it is already done):
 
   1. checks the PC: NVIDIA GPU(s) of compute capability 7.0+, driver, CUDA toolkit (nvcc), the C++ compiler (g++;
-     on Windows Visual Studio 2022's Build Tools), CMake, RAM, CPU; HIP checks AMD gfx1100/gfx1201 and ROCm 7 instead
+     on Windows Visual Studio 2022's Build Tools), CMake, RAM, CPU; HIP checks AMD gfx1100/gfx1201/gfx1151 and ROCm 7 instead
   2. asks: which GPUs (one, or several that split the layers), how much context, which model to download (Maya-S,
      Maya-M or GSQ-RCO 3.5-bit)
   3. Python packages into .venv, llama.cpp's source at the pinned commit (it lists them and asks first)
@@ -67,6 +67,7 @@ VEXE = VBUILD / "bin" / ("strata-vision.exe" if WIN else "strata-vision")  # the
 VSTAMP = VBUILD / "MAYA-BUILD.json"
 MIN_CC = 70                                        # Volta (V100) and newer (the GLM path; see arch_setting)
 MAX_GPUS = 16                                      # the layer split's parts at most (glm_model.hpp, kMaxParts)
+HIP_ARCHS = ("gfx1100", "gfx1201", "gfx1151")        # Maya also supports Strix Halo (unified memory)
 PY_PACKAGES = list(S.PY_PACKAGES)                  # (pillow: pictures in formats other than JPEG/PNG/BMP/GIF)
 CONTEXTS = [8192, 32768, 65536, 131072]
 DEFAULT_CONTEXT = 32768
@@ -229,15 +230,23 @@ def select_build_backend(backend: str) -> None:
     STAMP = BUILD / "MAYA-BUILD.json"
 
 
+def hip_unified_memory(g) -> bool:
+    # gfx1151 is Strix Halo, even when KFD/sysfs has no product name or reports
+    # only a tiny firmware VRAM carve-out. This is independent of vram_gb.
+    return g.get("arch") == "gfx1151" or bool(g.get("integrated")) or bool(
+        re.search(r"Ryzen AI Max|Radeon\s+(?:8050S|8060S)", g.get("name", ""), re.I))
+
+
 def check_hip_pc(a) -> dict:
     if WIN or not sys.platform.startswith("linux") or S.is_wsl():
         fail("Maya's experimental HIP backend requires native Linux")
     found = S.amd_gpus()
-    usable = [g for g in found if g["arch"] in S.AMD_ARCHS]
+    usable = [g for g in found if g["arch"] in HIP_ARCHS]
     for g in found:
         say(f"    {gpu_label(g)} - " + ("can be used" if g in usable else "not supported by Maya's HIP build"))
     if not usable:
-        fail("no supported AMD GPU found", "this port targets RX 7900 XT / XTX (gfx1100) and RX 9070 / AI PRO R9700 (gfx1201)")
+        fail("no supported AMD GPU found", "this port targets RX 7900 XT / XTX (gfx1100), RX 9070 / AI PRO R9700 "
+             "(gfx1201), and Strix Halo / Radeon 8060S (gfx1151)")
     if a.gpus:
         # two cards split the layers (each caches the experts of its own half); the larger card goes first, as it
         # takes the bigger first half - the order measured on an R9700 + RX 7900 XT
@@ -251,6 +260,10 @@ def check_hip_pc(a) -> dict:
         for i, g in zip(want, picked):
             if g is None:
                 fail(f"GPU {i} is not a supported AMD card")
+        apu = next((g for g in picked if hip_unified_memory(g)), None)
+        if apu is not None:
+            fail(f"GPU {apu['index']} ({apu['name']}) is an APU with unified memory, which stays single-GPU",
+                 "use --gpu N for it, or pick two discrete cards with --gpus")
         chosen = sorted(picked, key=lambda g: -g["vram_gb"])
     else:
         one = next((g for g in usable if g["index"] == a.gpu), None) if a.gpu is not None else max(
@@ -273,8 +286,10 @@ def check_hip_pc(a) -> dict:
        f"{'two GPUs (layer split)' if len(chosen) == 2 else 'one GPU'}, text only")
     ok(f"ROCm: {root}; CPU: {cpu} ({'AVX-512' if avx512 else 'AVX2'})")
     ok(f"RAM: {total:.0f} GB, {avail:.0f} GB available now")
+    if any(hip_unified_memory(g) for g in chosen):
+        ok("APU / unified memory: the engine sizes the GPU expert pool from available system RAM")
     select_build_backend("hip")
-    return {"backend": "hip", "gpus": chosen, "archs": ["gfx1100", "gfx1201", "gfx1151"], "rocm": str(root)}
+    return {"backend": "hip", "gpus": chosen, "archs": list(HIP_ARCHS), "rocm": str(root)}
 
 
 def nvcc_range(archs) -> tuple:
@@ -1197,7 +1212,11 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vi
             hip_env["STRATA_GLM_SPLIT"] = "0"   # two cards: the engine picks the split (and drafts with MTP)
         # Larger prompt sub-batches feed the matrix cores much better (7900 XT: ~250 -> ~410 tok/s); they need
         # a bigger prompt budget, borrowed from the expert pool only while a prompt runs.
-        if min(g.get("vram_gb", 0) for g in gpus) >= 20:
+        if any(hip_unified_memory(g) for g in gpus):   # an APU is always the only GPU (check_hip_pc)
+            total_ram, _ = mem_gb()
+            hip_env.update({"STRATA_GLM_RESERVE_MB": "1024", "STRATA_GLM_PREFILL_SUB": "1024",
+                            "STRATA_GLM_PREFILL_MB": "6144" if total_ram >= 96 else "4096"})
+        elif min(g.get("vram_gb", 0) for g in gpus) >= 20:
             hip_env.update({"STRATA_GLM_PREFILL_SUB": "1024", "STRATA_GLM_PREFILL_MB": "4096"})
         # The prompt projections' hipBLASLt solutions measured per architecture (tools/hip), one table per card's
         # architecture (':'-separated: each card takes its own). The engine refuses a table made for another
@@ -1583,7 +1602,7 @@ def bench(cfg_path: Path, version: str) -> int:
 # ------------------------------------------------------------------------------------------------ main
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--backend", choices=["cuda", "hip"], help="GPU backend (HIP: experimental gfx1100/gfx1201 on Linux)")
+    ap.add_argument("--backend", choices=["cuda", "hip"], help="GPU backend (HIP: experimental gfx1100/gfx1201/gfx1151 on Linux)")
     ap.add_argument("--setup", action="store_true", help="set up again instead of starting the installed model")
     ap.add_argument("--check", action="store_true", help="only check this PC and exit")
     ap.add_argument("--no-start", action="store_true", help="set up, but do not start the dashboard")

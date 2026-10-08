@@ -261,6 +261,13 @@ bool Glm5Model::fast_setup(std::string& err) {
     cudaSetDevice(dev_);
     auto* F = new FastState();
     fast_ = F;
+#if defined(STRATA_USE_HIP)
+    int integrated = 0;
+    if (cudaDeviceGetAttribute(&integrated, cudaDevAttrIntegrated, dev_) == cudaSuccess)
+        F->unified_memory = integrated != 0;
+    else
+        cudaGetLastError();
+#endif
     const Glm5Geometry& g = g_;
     F->timing = getenv("STRATA_GLM_TIMING") != nullptr;
     F->prof_on = getenv("STRATA_GLM_PROF") != nullptr;
@@ -562,9 +569,35 @@ bool Glm5Model::fast_setup(std::string& err) {
         }
         // headroom: cuBLAS-free path; the context's own growth is already allocated (state arena);
         // keep ~700 MB for the driver, the sampler and kernel launches' local memory
-        size_t reserve = (size_t) 700 << 20;
+        size_t reserve = (size_t) (F->unified_memory ? 1024 : 700) << 20;
         if (const char* r = getenv("STRATA_GLM_RESERVE_MB")) reserve = (size_t) std::atoll(r) << 20;
-        size_t avail = free_b > reserve ? free_b - reserve : 0;
+        size_t avail = glmfast::expert_pool_budget(false, free_b, 0, reserve, 0, 0);
+#if defined(STRATA_USE_HIP)
+        if (F->unified_memory) {
+            // Measure after dense/KV/scratch and pinned prompt staging are allocated.
+            // Prompt device buffers borrow the pool, so their budget is not subtracted again.
+            long long avail_kb = 0;
+            if (FILE* mf = std::fopen("/proc/meminfo", "r")) {
+                char line[256];
+                while (std::fgets(line, sizeof line, mf))
+                    if (std::sscanf(line, "MemAvailable: %lld kB", &avail_kb) == 1) break;
+                std::fclose(mf);
+            }
+            double head_gb = 16.0;
+            if (const char* h = getenv("STRATA_GLM_RAM_HEADROOM_GB")) head_gb = std::max(0.0, std::atof(h));
+            size_t expert_bytes = 0;
+            for (int il = l0_; il < lt_; ++il) {
+                const auto& Ly = F->L[(size_t) il];
+                if (Ly.moe) expert_bytes += (size_t) g.n_expert * glmfast::expert_stride(Ly.blob, Ly.gu_type, Ly.d_type);
+            }
+            avail = glmfast::expert_pool_budget(true, free_b, (size_t) std::max(0LL, avail_kb) * 1024,
+                                                reserve, (size_t) (head_gb * 1073741824.0), expert_bytes);
+            std::fprintf(stderr, "glm fast: HIP%d unified memory: MemAvailable %.2f GB, headroom %.2f GB + "
+                                 "%zu MB reserve, experts need %.2f GB, pool budget %.2f GB\n", dev_,
+                         (double) avail_kb / 1048576.0, head_gb, reserve >> 20,
+                         (double) expert_bytes / 1073741824.0, (double) avail / 1073741824.0);
+        }
+#endif
         if (const char* cap = getenv("STRATA_GLM_POOL_GB"))
             avail = std::min(avail, (size_t) (std::atof(cap) * 1073741824.0));
         // STRATA_GLM_VRAM_GB=<n>: behave like a card with n GB - the cap counts everything this process already
@@ -643,7 +676,9 @@ bool Glm5Model::fast_setup(std::string& err) {
         std::vector<int> nsl((size_t) NL, 0);
         for (int il = l0_; il < lt_; ++il)
             if (F->L[(size_t) il].moe) nsl[(size_t) il] = per;
-        if (getenv("STRATA_GLM_UNIFORM_SLOTS") == nullptr) {
+        // When the APU can hold every expert, keep exactly that many slots in each
+        // layer rather than spending the capped budget on uneven partitions/spares.
+        if (getenv("STRATA_GLM_UNIFORM_SLOTS") == nullptr && !(F->unified_memory && per == g.n_expert)) {
             std::vector<std::vector<double>> share((size_t) NL);
             std::ifstream cf(pack_dir_ + "/expert_counts.txt");
             std::string line;
@@ -816,6 +851,14 @@ bool Glm5Model::fast_setup(std::string& err) {
         double wsum = 0;
         for (double w : cls_weight) wsum += w;
         int64_t budget = ram_budget_;
+        const bool staging_only = glmfast::minimal_ram_tier(F->unified_memory, nmin >= g.n_expert,
+                                                           ram_budget_ >= 0 || getenv("STRATA_GLM_RAM_GB") != nullptr);
+        if (staging_only) {
+            // Decode misses and pool-tail lending still need landing slots. Keep
+            // only the existing per-class floor; do not duplicate the expert cache.
+            budget = 0;
+            std::fprintf(stderr, "glm fast: HIP%d all experts fit in the GPU pool; RAM tier is staging only\n", dev_);
+        }
         // the whole machine's budget is measured ONCE (the first half's pinning would shrink what the second
         // half sees): MemAvailable minus headroom for the OS, the server and the page cache the disk reads go
         // through; STRATA_GLM_RAM_GB pins it.  Each half takes its share of the MoE layers still unserved,
@@ -843,7 +886,7 @@ bool Glm5Model::fast_setup(std::string& err) {
                         std::fclose(mf);
                     }
 #endif
-                    double head_gb = 6.0;
+                    double head_gb = F->unified_memory ? 16.0 : 6.0;
                     if (const char* h = getenv("STRATA_GLM_RAM_HEADROOM_GB")) head_gb = std::atof(h);
                     total = std::max<int64_t>(0, avail_kb * 1024 - (int64_t) (head_gb * 1073741824.0));
                 }
@@ -891,7 +934,7 @@ bool Glm5Model::fast_setup(std::string& err) {
             R.tick.assign((size_t) n, 0);
             F->ram_bytes += (size_t) n * R.stride;
         }
-        if (ram_budget_ < 0 && remaining >= 0) {
+        if (!staging_only && ram_budget_ < 0 && remaining >= 0) {
             remaining = std::max<int64_t>(0, remaining - (int64_t) F->ram_bytes);
             remaining_layers -= n_moe;
         }
@@ -1487,7 +1530,7 @@ bool Glm5Model::fast_warm(std::string& err) {
     for (int il = l0_; il < lt_; ++il) {
         if (!F->L[(size_t) il].moe) continue;
         auto& P = F->lp[(size_t) il];
-        const int nv = std::max(0, P.n - gf::kSpares);
+        const int nv = glmfast::warm_pool_slots(F->unified_memory, P.n, g.n_expert, gf::kSpares);
         for (int j = 0; j < nv; ++j) {
             const int e = order[(size_t) il][(size_t) j];
             const int key = il * g.n_expert + e;
@@ -2312,6 +2355,9 @@ void Glm5Model::fast_boundary() {
                 upd(F->spare_key(il, j), (unsigned long long) P.slot_ptr(s));
                 continue;
             }
+            // A full unified pool needs spares only in empty slots (e.g. after
+            // prompt lending). Never evict an expert just to reserve a spare.
+            if (glmfast::full_unified_pool(F->unified_memory, P.n, g.n_expert)) break;
             // evict the least-used resident of this layer (recency breaks ties)
             int v = -1;
             uint32_t bc = UINT32_MAX;
