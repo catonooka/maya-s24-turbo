@@ -1,8 +1,11 @@
 """tools/glm_expert_prior.py - the routed-expert frequency prior a GLM pack's fast path warms its tiers with.
 
-    python tools/glm_expert_prior.py <pack_dir> <trace> [<trace> ...]
+    python tools/glm_expert_prior.py <pack_dir> <trace|usage> [<trace|usage> ...]
 
-Each trace is the routing record `STRATA_GLM_TRACE=<file>` writes (one "layer expert" line per routed expert).
+Each trace is the routing record `STRATA_GLM_TRACE=<file>` writes (one "layer expert" line per routed expert); a
+usage file is what the fast path saves after every request (`STRATA_GLM_USAGE=<file>`, default
+<pack>/expert_usage.txt: "layer e:count e:count ...", the routes of every prompt and answer since it started) - a
+session over a corpus typical of the model's use, with STRATA_GLM_USAGE pointing at a fresh file, is a profile.
 Writes <pack_dir>/expert_prior.txt: one line per MoE layer, "layer e0 e1 ... e287", the layer's experts in
 descending frequency (ties: lower id first; experts never seen keep their id order at the end).  At load the engine
 puts each layer's first experts in VRAM and the rest in the pinned RAM tier, so the first request runs warm; the
@@ -26,9 +29,18 @@ def main() -> int:
         with open(tr, encoding="utf-8") as f:
             for line in f:
                 parts = line.split()
+                if len(parts) < 2 or line.startswith("#"):
+                    continue
+                layer = int(parts[0])
+                if ":" in parts[1]:                     # a usage line: "layer e:count ..."
+                    for tok in parts[1:]:
+                        e, n = tok.split(":")
+                        counts[layer][int(e)] += int(n)
+                        n_expert = max(n_expert, int(e) + 1)
+                    continue
                 if len(parts) != 2:
                     continue
-                layer, e = int(parts[0]), int(parts[1])
+                e = int(parts[1])
                 counts[layer][e] += 1
                 n_expert = max(n_expert, e + 1)
     n_expert = max(n_expert, 288)

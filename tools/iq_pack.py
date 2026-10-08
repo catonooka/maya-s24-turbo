@@ -219,7 +219,10 @@ def index_standalone(src, out, model: Model, compat_bf16: bool = False, arch: st
                 if il.isdigit() and int(il) >= block_count:
                     dropped += 1
                     continue
-            if len(t.shape) > 2 and not (arch in ("glm5-next", "glm5next") and len(t.shape) == 3):
+            # a trailing ne3 of 1 adds no bytes: some converters write glm5-next's conv weights as
+            # [4, 1, 8192, 1] instead of [4, 1, 8192], and index_shape packs both as (4, 8192)
+            dims = len(t.shape) - (len(t.shape) == 4 and int(t.shape[3]) == 1)
+            if dims > 2 and not (arch in ("glm5-next", "glm5next") and dims == 3):
                 print("tensor %s has %d dimensions; the index holds two" % (t.name, len(t.shape)))
                 return 1
             ne0, ne1 = index_shape(t.shape)

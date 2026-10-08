@@ -906,8 +906,8 @@ double probe_pcie_h2d_gbps() {
 static int glm_pack_generate(const Options& o) {
     strata::core::Glm5Model model;
     std::string err;
-    // honours STRATA_GLM_SPLIT=<layer> (+STRATA_GLM_DEV1): the two-GPU layer split
-    if (!model.load_pack_env(o.glm_pack, o.max_context, err)) {
+    // the layer split across the visible GPUs: STRATA_GLM_SPLIT, else --layer-split (auto | K1,K2,..)
+    if (!model.load_pack_env(o.glm_pack, o.max_context, err, o.layer_split)) {
         std::fprintf(stderr, "strata generate: %s\n", err.c_str());
         return 1;
     }
@@ -917,12 +917,14 @@ static int glm_pack_generate(const Options& o) {
     if (model.fast()) {
         // INFO facts for the server's Monitor tab (strata app): the expert tiers this engine runs with
         const auto st = model.fast_stats();
+        // (+ the CPU lane setup's calibration reads: its threads and its PCIe share, as the engine started)
         std::printf("INFO context=%lld kv=f32 expert_slots=%lld expert_cache_mib=%lld engine_kind=glm-fast experts=%d "
-                    "vram_slots=%lld vram_gb=%.1f ram_slots=%lld ram_gb=%.1f mtp=%d vision_lend=%zu\n",
+                    "vram_slots=%lld vram_gb=%.1f ram_slots=%lld ram_gb=%.1f mtp=%d vision_lend=%zu cpu_threads=%d "
+                    "pcie_share=%.2f\n",
                     (long long) o.max_context, (long long) st.pool_slots, (long long) (st.pool_gb * 1024.0),
                     model.geometry().n_expert * (model.geometry().n_layers - model.geometry().dense_lead),
                     (long long) st.pool_slots, st.pool_gb, (long long) st.ram_slots, st.ram_gb, model.has_mtp() ? 1 : 0,
-                    model.vision_lend_bytes());
+                    model.vision_lend_bytes(), model.cpu_lane_threads(), model.pcie_share());
     }
 
     strata::kernels::SamplerParams sp;
@@ -1555,6 +1557,8 @@ static int glm_pack_generate(const Options& o) {
             bool any_key = false, greedy_req = false;
             req_think_budget = 0;
             req_think_end = -1;
+            double req_pcie = -1.0;   // setup's calibration: this request's CPU lane (as the engine started: -1 / 0)
+            int req_threads = 0;
             std::string tok2, ids, emb_path;
             while (ss >> tok2) {
                 const size_t eq = tok2.find('=');
@@ -1575,11 +1579,15 @@ static int glm_pack_generate(const Options& o) {
                 else if (k == "seed") { rq.seed = (uint64_t) std::atoll(v.c_str()); }
                 else if (k == "think_budget") { req_think_budget = std::atoll(v.c_str()); }
                 else if (k == "think_end") { req_think_end = std::atoi(v.c_str()); }
-                // penalty_* and the calibration keys need machinery this mode does not have (history rows,
-                // request-scoped engine settings): ignored rather than approximated
+                else if (k == "pcie_frac") { req_pcie = std::atof(v.c_str()); }
+                else if (k == "cpu_threads") { req_threads = std::atoi(v.c_str()); }
+                // penalty_* need machinery this mode does not have (history rows): ignored rather than approximated
             }
             if (any_key) rq.greedy = false;   // any sampler key switches the request to the sampled path
             if (greedy_req) rq.greedy = true;
+            // the CPU lane for this request: what it names, else what the engine started with
+            model.set_pcie_share(req_pcie >= 0.0 && req_pcie <= 1.0 ? req_pcie : -1.0);
+            model.set_cpu_lane_threads(req_threads > 0 ? req_threads : 0);
             std::vector<int64_t> toks;
             std::string e;
             if (max_new <= 0 || ids.empty() || !parse_i64_list(ids.c_str(), toks, e)) {

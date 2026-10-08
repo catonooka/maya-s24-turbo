@@ -796,15 +796,21 @@ __device__ __forceinline__ void rows_dot(const uint8_t* const* rows, const block
 #pragma unroll
             for (int r = 0; r < NR; ++r) acc[r] += dwk<T>(rows[r], kbx, iqs, xk);
         }
+    } else if constexpr (T == 12 || T == 13 || T == 14) {
+        // Q4_K / Q5_K / Q6_K experts (K-quant GGUFs other than Maya's): no shared-activation form yet - each row
+        // takes the dense GEMV's dot (row_dot), the activation re-read per row
+        for (int k = lane; k < nb * Fm::ipb; k += 32) {
+            const int kbx = k / Fm::ipb, iqs = Fm::step * (k % Fm::ipb);
 #pragma unroll
-        for (int r = 0; r < NR; ++r) s[r] = warp_sum(acc[r]);
-        return;
-    }
-    for (int k = lane; k < nb * Fm::ipb; k += 32) {
-        const int kbx = k / Fm::ipb, ki = k % Fm::ipb, iqs = Fm::step * ki;
-        const XV xv = load_xv(x + kbx * (Fm::qk / 32) + ki);
+            for (int r = 0; r < NR; ++r) acc[r] += Fm::dot(rows[r], x + kbx * (Fm::qk / 32), kbx, iqs);
+        }
+    } else {
+        for (int k = lane; k < nb * Fm::ipb; k += 32) {
+            const int kbx = k / Fm::ipb, ki = k % Fm::ipb, iqs = Fm::step * ki;
+            const XV xv = load_xv(x + kbx * (Fm::qk / 32) + ki);
 #pragma unroll
-        for (int r = 0; r < NR; ++r) acc[r] += dw<T>(rows[r], kbx, iqs, xv, tab);
+            for (int r = 0; r < NR; ++r) acc[r] += dw<T>(rows[r], kbx, iqs, xv, tab);
+        }
     }
 #pragma unroll
     for (int r = 0; r < NR; ++r) s[r] = warp_sum(acc[r]);
@@ -2664,6 +2670,11 @@ void launch_check(const char* what) {
 
 bool mv_supported(int type) { return mv_type_ok(type) != 0; }
 
+bool moe_supported(int type) {   // moe_gate_up's and moe_down's instantiations
+    return type == 10 || type == 11 || type == 12 || type == 13 || type == 14 || type == 16 || type == 17 ||
+           type == 18 || type == 19 || type == 21 || type == 22 || type == 23 || type == 29;
+}
+
 int launch_errors() { return g_launch_errors.load(std::memory_order_relaxed); }
 
 size_t row_bytes(int type, int64_t n_in) {
@@ -2968,6 +2979,7 @@ void moe_gate_up(int gu_type, const MoeDev& d, int k, int n_embd, int n_ff, floa
         case T: moe_gate_up_kernel<T><<<grid, GU_WARPS * 32, 0, s>>>(d, kk, n_embd, n_ff, limit, X, H, SD, sh_type, SH, \
                                                                      n_ff_sh, sh_out); break;
         GLMF_GU(16) GLMF_GU(18) GLMF_GU(19) GLMF_GU(23) GLMF_GU(10) GLMF_GU(11) GLMF_GU(17) GLMF_GU(22) GLMF_GU(21) GLMF_GU(29)
+        GLMF_GU(12) GLMF_GU(13) GLMF_GU(14)
 #undef GLMF_GU
         default: std::fprintf(stderr, "glm_fast moe_gate_up: type %d unsupported\n", gu_type); return;
     }
@@ -3009,6 +3021,7 @@ void moe_down(int d_type, const MoeDev& d, int k, int n_embd, int n_ff, size_t d
 #define GLMF_DN(T) \
         case T: moe_down_kernel<T><<<blocks, 256, 0, s>>>(d, k, n_embd, n_ff, down_off, H, sh_out, out); break;
         GLMF_DN(16) GLMF_DN(18) GLMF_DN(19) GLMF_DN(23) GLMF_DN(10) GLMF_DN(11) GLMF_DN(17) GLMF_DN(22) GLMF_DN(21) GLMF_DN(29)
+        GLMF_DN(12) GLMF_DN(13) GLMF_DN(14)
 #undef GLMF_DN
         default: std::fprintf(stderr, "glm_fast moe_down: type %d unsupported\n", d_type); return;
     }

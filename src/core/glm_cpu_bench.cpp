@@ -98,7 +98,7 @@ int main(int argc, char** argv) {
         std::string w;
         ss >> w;
         if (l == layer) {
-            shard = w;
+            shard = w.empty() ? shard0 : w;   // a v3 row without a shard lies in shard 1 (a single-file model)
             break;
         }
     }

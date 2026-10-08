@@ -15,7 +15,8 @@ What the first run does (each step is skipped when it is already done):
 
   1. checks the PC: NVIDIA GPU(s) of compute capability 7.0+, driver, CUDA toolkit (nvcc), the C++ compiler (g++;
      on Windows Visual Studio 2022's Build Tools), CMake, RAM, CPU; HIP checks AMD gfx1100/gfx1201 and ROCm 7 instead
-  2. asks: which GPUs (one, or two that split the layers), how much context
+  2. asks: which GPUs (one, or several that split the layers), how much context, which model to download (Maya-S,
+     Maya-M or GSQ-RCO 3.5-bit)
   3. Python packages into .venv, llama.cpp's source at the pinned commit (it lists them and asks first)
   4. compiles the engine (`build/strata`, or `build-hip/strata`) for your GPU(s): 10-30 minutes, once
   5. the model: GGUF files you already have (--gguf-dir), or a download it shows you first - the exact commands
@@ -23,8 +24,15 @@ What the first run does (each step is skipped when it is already done):
   6. builds the pack (the engine's index of the GGUF files) inside the model folder
   7. images: compiles the vision encoder (`build-vision/bin/strata-vision`) and fetches the model's vision files
      (1.1 GB, shown and asked first like the model; --no-vision and HIP skip it)
-  8. writes maya-<model>.json and run-maya-<model>.sh (.bat on Windows), and starts the dashboard on
+  8. writes maya-<model>.json and run-maya-<model>.sh (.bat on Windows) - with the settings tuned for this PC
+     earlier, or it offers the tuning (./maya.sh --calibrate does it any time) - and starts the dashboard on
      http://127.0.0.1:8080
+
+The tuning (tools/calibrate_glm.py, like Strata's --calibrate): decode speed measured with a few splits of the RAM-tier
+experts between the CPU and the PCIe link, and with fewer CPU threads, in one engine run (~10-15 minutes, the model
+loads first); a setting is kept when it is more than 3% faster than the engine's own choice.  The result goes into the
+config's "env" (STRATA_GLM_PCIE_SHARE, STRATA_GLM_CPU_LANE) and into ~/.config/project-maya/calibration.json for this
+PC, model and context, so a setup again keeps it.
 
 Nothing is installed system-wide: a missing tool is reported with the command that installs it.
 """
@@ -46,6 +54,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "tools"))
 import setup as S  # noqa: E402  Strata's installer: PC checks, pip, llama.cpp, downloads (nothing runs on import)
 from setup import ask, fail, ok, run, say, step, warn  # noqa: E402
+import calibrate_glm as CAL  # noqa: E402  the CPU lane's tuning for this PC (./maya.sh --calibrate)
 
 WIN = S.WIN
 ME = "START-MAYA.bat" if WIN else "./maya.sh"      # how this is started, for the messages
@@ -57,17 +66,20 @@ VBUILD = ROOT / "build-vision"
 VEXE = VBUILD / "bin" / ("strata-vision.exe" if WIN else "strata-vision")  # the image encoder (llama.cpp's mtmd)
 VSTAMP = VBUILD / "MAYA-BUILD.json"
 MIN_CC = 70                                        # Volta (V100) and newer (the GLM path; see arch_setting)
+MAX_GPUS = 16                                      # the layer split's parts at most (glm_model.hpp, kMaxParts)
 PY_PACKAGES = list(S.PY_PACKAGES)                  # (pillow: pictures in formats other than JPEG/PNG/BMP/GIF)
 CONTEXTS = [8192, 32768, 65536, 131072]
 DEFAULT_CONTEXT = 32768
 MODEL_NAME = "glm-5.3-flash"
 SAMPLING = {"temperature": 1.0, "top_p": 0.95}     # the dashboard's and the API's defaults for requests that set none
 EFFORT = "medium"                                  # thinking level for requests that name none
-HF = "https://huggingface.co/{repo}/resolve/{revision}/{folder}/{file}"
+HF = "https://huggingface.co/{repo}/resolve/{revision}/{path}"
 # The models the installer can download: Project Maya's own quants, made from Z.ai's FP8 release (their model card
-# has the measurements against it).  Another glm5-next GGUF can be used with --gguf-dir (experimental).  "sha256" per
-# file name: every download is verified.  "vision": the image encoder's files (the mmproj, made from the official
-# vision tower, and the tokenizer it reads its markers with).
+# has the measurements against it), and GSQ-RCO 3.5-bit, a community quant measured with Maya on one RTX 3090.
+# Another glm5-next GGUF can be used with --gguf-dir (experimental).  "folder": the files' folder in the repo ("" =
+# its top).  "sha256" per file name: every download is verified.  "vision": the image encoder's files (the mmproj,
+# made from the official vision tower, and the tokenizer it reads its markers with) - from "repo" / "revision" when
+# it names them, else the model's own repo.
 MODELS = {
     "Maya-S-v2-IQ2_XXS": {
         "about": "Maya-S, Project Maya's compact quant: error-feedback-rounded IQ2_XXS gate/up experts, "
@@ -108,13 +120,36 @@ MODELS = {
                            "3627575df16bd152db0f3fd7e488d270b33f3a9e6c7fa3b1b8ac381faafde882",
                        "GLM-5.3-Flash-vocab.gguf":
                            "8f53cb1bd2e631c14ef413e3284735d9e53f3c508d07a6f609e705b487105912"}}},
+    "GSQ-RCO-3.5bit": {
+        "about": "GSQ-RCO 3.5-bit, a community quant (pfeifferj, with IST-DASLab's GSQ and RCO methods, not a Project "
+                 "Maya quant): Q3_K/Q2_K experts, Q8_0 dense weights, no MTP draft block; on one RTX 3090 with the "
+                 "rest in ~120 GB of RAM about 20 tokens/s decode and 480-970 tokens/s prefill",
+        "repo": "pfeifferj/GLM-5.3-Flash-GSQ-RCO-GGUF", "revision": "892aabe2e45835f58f3f24bf03dc5427d345e230",
+        "folder": "", "file": "GLM-5.3-Flash-GSQ-RCO-3.5bit.gguf", "shards": 1, "download_gb": 137.1,
+        "sha256": {"GLM-5.3-Flash-GSQ-RCO-3.5bit.gguf":
+                       "12c32d32c284337d0e9da759dbd559fb41567a4b1c57ede0259057e6f8658f1b"},
+        # Maya's image files: the vision tower is the same in every GLM-5.3-Flash quant
+        "vision": {
+            "repo": "peasantsmith/GLM-5.3-Flash-Maya-GGUF", "revision": "main",
+            "folder": "vision", "mmproj": "mmproj-GLM-5.3-Flash-F16.gguf", "vocab": "GLM-5.3-Flash-vocab.gguf",
+            "download_gb": 1.14,
+            "sha256": {"mmproj-GLM-5.3-Flash-F16.gguf":
+                           "3627575df16bd152db0f3fd7e488d270b33f3a9e6c7fa3b1b8ac381faafde882",
+                       "GLM-5.3-Flash-vocab.gguf":
+                           "8f53cb1bd2e631c14ef413e3284735d9e53f3c508d07a6f609e705b487105912"}}},
 }
 SHARD_RE = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
+GLM_ARCHS = ("glm5-next", "glm5next")             # llama.cpp's spelling and unsloth's
 PACK_FILES = ("index.txt", "native_experts.txt", "dense.bin", "tokenizer/vocab.json", "tokenizer/merges.txt",
               "tokenizer/token_type.json", "tokenizer/chat_template.jinja")
 
 
 # ------------------------------------------------------------------------------------------------ small helpers
+def hf_url(repo: str, revision: str, folder: str, file: str) -> str:
+    """A file's download URL on Hugging Face (folder "" = the repo's top)."""
+    return HF.format(repo=repo, revision=revision, path=f"{folder}/{file}" if folder else file)
+
+
 def read_json(path: Path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8-sig"))
@@ -294,7 +329,7 @@ def cuda_lib_dirs(nvcc: str) -> list:
 
 # ------------------------------------------------------------------------------------------------ 1. the PC
 def choose_gpus(a, found) -> list:
-    """The GPUs the model runs on: --gpu / --gpus, else asked when two can share it (both recommended)."""
+    """The GPUs the model runs on: --gpu / --gpus, else asked when several can share it (all of them recommended)."""
     byid = {g["index"]: g for g in found}
     usable = [g for g in found if int(g["arch"]) >= MIN_CC]
     if a.gpus or a.gpu is not None:
@@ -302,8 +337,9 @@ def choose_gpus(a, found) -> list:
             want = [int(x) for x in str(a.gpus).split(",") if x.strip()] if a.gpus else [a.gpu]
         except ValueError:
             fail(f"--gpus takes GPU numbers as nvidia-smi numbers them, e.g. --gpus 0,1, not {a.gpus!r}")
-        if not 1 <= len(want) <= 2 or len(set(want)) != len(want):
-            fail("Maya runs on one GPU or splits the model across two: --gpu 0, or --gpus 0,1")
+        if not 1 <= len(want) <= MAX_GPUS or len(set(want)) != len(want):
+            fail(f"Maya runs on one GPU or splits the model's layers across up to {MAX_GPUS}: --gpu 0, or "
+                 "--gpus 0,1,2,3 (each number once)")
         for i in want:
             if i not in byid or int(byid[i]["arch"]) < MIN_CC:
                 fail(f"GPU {i} cannot be used" + ("" if i in byid else " (not found)"),
@@ -314,15 +350,23 @@ def choose_gpus(a, found) -> list:
     best = sorted(usable, key=lambda g: (-round(g["vram_gb"]), g["index"]))
     if len(best) == 1:
         return best
-    pair = best[:2]
+    opts = ([best[:MAX_GPUS]] if len(best) > 2 else []) + [best[:2], best[:1]]
     say()
-    say("  Maya can run on one GPU, or split the model's layers across two: each then caches the experts of its own")
-    say("  layers, so together they hold about twice as many (V100s: ~50 tok/s benchmark on two, ~24 on one).")
-    say(f"  1) {gpu_label(pair[0])} + {gpu_label(pair[1])} together   (recommended)")
-    say(f"  2) {gpu_label(best[0])} only")
+    say("  Maya can run on one GPU, or split the model's layers across several: each then caches the experts of its")
+    say("  own layers, so together they hold more of them (V100s: ~50 tok/s benchmark on two, ~24 on one).")
+    for i, gs in enumerate(opts, 1):
+        if len(gs) > 2:
+            label = (f"all {len(gs)} together: GPUs " + ", ".join(str(g["index"]) for g in gs) +
+                     f" ({sum(g['vram_gb'] for g in gs):.0f} GB of VRAM)")
+        elif len(gs) == 2:
+            label = f"{gpu_label(gs[0])} + {gpu_label(gs[1])} together"
+        else:
+            label = f"{gpu_label(gs[0])} only"
+        say(f"  {i}) {label}" + ("   (recommended)" if i == 1 else ""))
     if len(best) > 2:
-        say("     (the engine splits across two GPUs at most: --gpus picks another pair)")
-    return pair if ask("Which GPUs?", ["1", "2"], "1", a.yes or a.check) == "1" else best[:1]
+        say("     (a model with a draft block - Maya-S - drafts tokens on exactly two GPUs; --gpus picks any others,")
+        say("     e.g. --gpus 0,2,5)")
+    return opts[int(ask("Which GPUs?", [str(i) for i in range(1, len(opts) + 1)], "1", a.yes or a.check)) - 1]
 
 
 def check_pc(a) -> dict:
@@ -349,7 +393,7 @@ def check_pc(a) -> dict:
     archs = sorted({int(g["arch"]) for g in chosen})
     vram = sum(g["vram_gb"] for g in chosen)
     ok("using " + " + ".join(gpu_label(g) for g in chosen) +
-       (": the model's layers are split across both" if len(chosen) > 1 else ""))
+       (f": the model's layers are split across the {len(chosen)}" if len(chosen) > 1 else ""))
     if vram < 23:
         say(f"  {vram:.0f} GB of VRAM in total: the engine fills it with the most-used experts and serves the rest from "
             "RAM and the SSD - give it a try (more VRAM is faster; tell us your speed)")
@@ -445,6 +489,42 @@ def choose_context(a, prev_ctx) -> int:
         say(f"  {i}) {c // 1024}K tokens" + ("   (recommended)" if c == DEFAULT_CONTEXT else ""))
     pick = ask("Context?", [str(i) for i in range(1, len(CONTEXTS) + 1)], str(CONTEXTS.index(default) + 1), a.yes)
     return CONTEXTS[int(pick) - 1]
+
+
+def download_dir(models: Path, quant: str) -> Path:
+    """A download's folder: <models folder>/<quant> (--models-dir).  Files already there are used where they are:
+    in that folder, in <models folder>/glm-5.3-flash-<quant> (an earlier version's downloads), or straight in the
+    models folder."""
+    m = MODELS[quant]
+    names = [m["file"].format(i=i, n=m["shards"]) for i in range(1, m["shards"] + 1)]
+    d = models / quant
+    for c in (d, models / f"glm-5.3-flash-{quant}".lower(), models):
+        if all((c / n).exists() for n in names):
+            return c
+    return d
+
+
+def choose_model(a, models: Path, inst: dict) -> tuple:
+    """("download", one of MODELS) or ("local", the model's first .gguf file): --gguf-dir, --model, else asked among
+    the downloads - the earlier download is the default."""
+    if a.gguf_dir:
+        first, why = local_first(Path(a.gguf_dir))
+        if first is None:
+            fail(why, "--gguf-dir takes the folder that holds the GLM-5.3-Flash .gguf files, or the (first) .gguf file")
+        return "local", first
+    if a.model:
+        return "download", a.model
+    opts = list(MODELS)
+    default = inst["quant"] if inst.get("quant") in MODELS else opts[0]
+    say()
+    say("  The model to download (GLM-5.3-Flash GGUF files you already have: --gguf-dir <file or folder>):")
+    for i, q in enumerate(opts, 1):
+        m, d = MODELS[q], download_dir(models, q)
+        have = all((d / m["file"].format(i=j, n=m["shards"])).exists() for j in range(1, m["shards"] + 1))
+        label = f"downloaded, in {d}" if have else f"download {m['download_gb']:.1f} GB from Hugging Face"
+        say(f"  {i}) {q}: {label}" + ("   (recommended)" if i == 1 else ""))
+    pick = ask("Model?", [str(i) for i in range(1, len(opts) + 1)], str(opts.index(default) + 1), a.yes)
+    return "download", opts[int(pick) - 1]
 
 
 # ------------------------------------------------------------------------------------------------ 3. tools
@@ -728,9 +808,78 @@ def shard_set(first: Path) -> list:
     return [first.with_name(f"{stem}-{i:05d}-of-{n:05d}.gguf") for i in range(1, n + 1)]
 
 
-def find_first_shard(d: Path):
-    c = sorted(d.glob("*-00001-of-*.gguf")) or sorted(p for p in d.glob("*.gguf") if not SHARD_RE.search(p.name))
-    return c[0] if c else None
+def gguf_head(path: Path) -> tuple:
+    """(general.architecture, tensor count) from the start of a GGUF header: only the key/values before the
+    architecture are read (gguf-py writes it first), so a folder of big files is scanned quickly.  ("", 0) when it
+    is not a GGUF file or the key does not come early."""
+    import struct
+    from gguf_reader import GGUF_MAGIC, GGUF_META
+    try:
+        with open(path, "rb") as f:
+            def blob():
+                (n,) = struct.unpack("<Q", f.read(8))
+                if n > 1 << 20:
+                    raise ValueError("not a GGUF string")
+                return f.read(n)
+            magic, _, n_tensors, n_kv = struct.unpack("<IIQQ", f.read(24))
+            if magic != GGUF_MAGIC:
+                return "", 0
+            for _ in range(min(n_kv, 32)):
+                key = blob()
+                kind, size = GGUF_META[struct.unpack("<I", f.read(4))[0]]
+                if kind == "string":
+                    val = blob()
+                    if key == b"general.architecture":
+                        return val.decode("utf-8", "replace"), n_tensors
+                elif kind == "array":
+                    _, esize = GGUF_META[struct.unpack("<I", f.read(4))[0]]
+                    (count,) = struct.unpack("<Q", f.read(8))
+                    if esize is None:                  # an array of strings (the vocabulary) - the key was not early
+                        break
+                    f.seek(esize * count, 1)
+                else:
+                    f.seek(size, 1)
+    except (OSError, ValueError, KeyError, struct.error):
+        pass
+    return "", 0
+
+
+def glm_files(d: Path) -> list:
+    """The GLM-5.3-Flash models in the folder `d`, as their first files (-00001-of- for a split one).  A single file
+    without tensors (a vocabulary, like the vision folder's) is no model; unsloth's split models keep only metadata
+    in their first file."""
+    try:
+        files = sorted(d.glob("*.gguf"))
+    except OSError:
+        return []
+    found = []
+    for f in files:
+        m = SHARD_RE.search(f.name)
+        if m and int(m.group(1)) != 1:
+            continue
+        arch, n = gguf_head(f)
+        if arch in GLM_ARCHS and (n > 0 or m):
+            found.append(f)
+    return found
+
+
+def local_first(p: Path) -> tuple:
+    """(the model's first .gguf file, None) from one of its files or the folder that holds it, or (None, why not)."""
+    p = p.expanduser().resolve()
+    if p.is_file():
+        first = shard_set(p)[0]
+        arch = gguf_head(first)[0] if first.exists() else ""
+        if first.exists() and arch not in GLM_ARCHS:
+            return None, f"{first.name} is " + (f"a {arch!r} model, not GLM-5.3-Flash ({GLM_ARCHS[0]})" if arch else
+                                                "not a GGUF file")
+        return first, None
+    found = glm_files(p) if p.is_dir() else []
+    if not found:
+        return None, (f"no GLM-5.3-Flash GGUF file in {p}" if p.is_dir() else f"{p} does not exist")
+    if len(found) > 1:
+        return None, f"{p} holds {len(found)} GLM-5.3-Flash models: name the file (" + \
+                     ", ".join(f.name for f in found) + ")"
+    return found[0], None
 
 
 def incomplete(path: Path):
@@ -767,7 +916,7 @@ def offer_download(a, quant: str, d: Path, shards: list) -> bool:
     (or --download-model).  False: nothing was downloaded."""
     m = MODELS[quant]
     missing = [s for s in shards if incomplete(s)]
-    urls = {s: HF.format(repo=m["repo"], revision=m["revision"], folder=m["folder"], file=s.name) for s in shards}
+    urls = {s: hf_url(m["repo"], m["revision"], m["folder"], s.name) for s in shards}
     on_disk = sum(s.stat().st_size for s in shards if s.exists()) / 1e9
     remaining = max(0.0, m["download_gb"] - on_disk)
     free = shutil.disk_usage(existing(d)).free / 1e9
@@ -775,17 +924,19 @@ def offer_download(a, quant: str, d: Path, shards: list) -> bool:
     cmds = [["mkdir"] + ([] if WIN else ["-p"]) + [str(d)]] + \
         [["curl", "-L", "--fail", "--retry", "5", "-C", "-", "-o", str(s), urls[s]] for s in missing]
     say(f"  {quant}: {m['about']}.")
-    say(f"  Source: https://huggingface.co/{m['repo']} (folder {m['folder']}/); the files' own license applies.")
-    say(f"  The model is {m['download_gb']:.1f} GB in {len(shards)} files; {len(missing)} still to download, about "
+    say(f"  Source: https://huggingface.co/{m['repo']}" + (f" (folder {m['folder']}/)" if m["folder"] else "") +
+        "; the files' own license applies.")
+    say(f"  The model is {m['download_gb']:.1f} GB in {len(shards)} file{'s' if len(shards) != 1 else ''}; "
+        f"{len(missing)} still to download, about "
         f"{remaining:.0f} GB, into")
     say(f"    {d}   ({free:.0f} GB free there)")
     if free < remaining + 3:
         fail(f"not enough free space in {d}: about {remaining + 3:.0f} GB are needed (the model + its pack)",
-             f"free some space, or put the model on another drive: {ME} --setup --data-dir " +
-             (r"D:\Maya-data" if WIN else "/path/on/nvme"))
+             f"free some space, or put the model on another drive: {ME} --setup --models-dir " +
+             (r"D:\Maya-models" if WIN else "/path/on/nvme"))
     if rotational(d):
         warn(f"{d} is on a spinning hard disk: the engine reads experts from these files while it answers - use an "
-             "NVMe SSD (--data-dir)")
+             "NVMe SSD (--models-dir)")
     say("  The exact commands (resumable: running them again continues an interrupted download):")
     for c in cmds:
         say("    " + shell_join(c))
@@ -821,15 +972,12 @@ def offer_download(a, quant: str, d: Path, shards: list) -> bool:
     return True
 
 
-def model_step(a, data: Path):
+def model_step(a, models: Path, choice: tuple):
     """(model folder, shards, quant name), or None when the files are not there and were not downloaded."""
     step(5, "the model (GLM-5.3-Flash, GGUF)")
-    if a.gguf_dir:
-        d = Path(a.gguf_dir).expanduser().resolve()
-        first = find_first_shard(d) if d.is_dir() else None
-        if first is None:
-            fail(f"no GGUF file in {d}", "--gguf-dir takes the folder that holds the GLM-5.3-Flash .gguf files")
-        shards, quant = shard_set(first), quant_of(first)
+    kind, what = choice
+    if kind == "local":
+        shards, quant, d = shard_set(what), quant_of(what), what.parent
         for s in shards:
             why = incomplete(s)
             if why:
@@ -837,15 +985,15 @@ def model_step(a, data: Path):
         if quant not in MODELS:
             warn(f"{quant}: experimental - only {', '.join(MODELS)} has been measured with Maya (README.md)")
     else:
-        quant = a.model or next(iter(MODELS))
+        quant = what
         m = MODELS[quant]
-        d = data / "models" / f"glm-5.3-flash-{quant}".lower()
+        d = download_dir(models, quant)
         shards = [d / m["file"].format(i=i, n=m["shards"]) for i in range(1, m["shards"] + 1)]
         if any(incomplete(s) for s in shards) and not offer_download(a, quant, d, shards):
             return None
     from gguf_reader import GGUFFile
     arch = str(GGUFFile(shards[0]).metadata.get("general.architecture", ""))
-    if arch not in ("glm5-next", "glm5next"):
+    if arch not in GLM_ARCHS:
         fail(f"{shards[0].name} is a {arch!r} model, not GLM-5.3-Flash (glm5-next)")
     gb = sum(s.stat().st_size for s in shards) / 1e9
     ok(f"{quant}: {len(shards)} file(s), {gb:.1f} GB in {d}")
@@ -856,11 +1004,24 @@ def model_step(a, data: Path):
 
 
 # ------------------------------------------------------------------------------------------------ 6. the pack
+def pack_source(pack: Path):
+    """The first .gguf file a pack indexes (native_experts.txt's header names it), or None (no pack there)."""
+    try:
+        with open(pack / "native_experts.txt", encoding="utf-8") as f:
+            m = re.search(r"absolute offsets in ([^,)]+)", f.readline())
+    except OSError:
+        return None
+    return m.group(1) if m else None
+
+
 def pack_step(a, d: Path, shards: list, llama: Path) -> Path:
     step(6, "the pack (the engine's index of the model files)")
-    # the engine finds the GGUF files at <pack>/.. (src/core/glm_model.cu, load_pack): the pack lives in their folder
+    # the engine finds the GGUF files at <pack>/.. (src/core/glm_model.cu, load_pack): the pack lives in their folder,
+    # in pack/ - or pack-<model>/ when pack/ indexes another model of the same folder
     pack = d / "pack"
-    if not a.repack and all((pack / f).exists() for f in PACK_FILES):
+    if pack_source(pack) not in (None, shards[0].name):
+        pack = d / f"pack-{quant_of(shards[0])}".lower()
+    if not a.repack and pack_source(pack) == shards[0].name and all((pack / f).exists() for f in PACK_FILES):
         ok(f"pack already built: {pack}")
         return pack
     if not os.access(d, os.W_OK):
@@ -937,7 +1098,10 @@ def vision_step(a, pc, meta, llama: Path, d: Path, quant: str) -> dict | None:
     if pc.get("backend") == "hip":
         ok("HIP port: text only; vision is not enabled")
         return None
-    m = (MODELS.get(quant) or {}).get("vision")
+    # a GGUF of your own reads pictures with the same files: the vision tower and the tokenizer are the same in
+    # every GLM-5.3-Flash quant
+    spec = MODELS.get(quant) or MODELS[next(iter(MODELS))]
+    m = spec.get("vision")
     if a.no_vision:
         ok("skipped (--no-vision): the model reads text only")
         return None
@@ -948,10 +1112,10 @@ def vision_step(a, pc, meta, llama: Path, d: Path, quant: str) -> dict | None:
     files = {k: vd / m[k] for k in ("mmproj", "vocab")}
     missing = [p for p in files.values() if not p.exists() or (m["sha256"].get(p.name) and p.stat().st_size == 0)]
     if missing:
-        src_url = {p: HF.format(repo=MODELS[quant]["repo"], revision=MODELS[quant]["revision"], folder=m["folder"],
-                                file=p.name) for p in missing}
+        repo, rev = m.get("repo", spec["repo"]), m.get("revision", spec["revision"])
+        src_url = {p: hf_url(repo, rev, m["folder"], p.name) for p in missing}
         say(f"  The vision encoder's files ({m['download_gb']:.2f} GB) from https://huggingface.co/"
-            f"{MODELS[quant]['repo']} (folder {m['folder']}/), into {vd}:")
+            f"{repo} (folder {m['folder']}/), into {vd}:")
         for p in missing:
             say("    " + shell_join(["curl", "-L", "--fail", "-C", "-", "-o", str(p), src_url[p]]))
         if not (a.download_model or a.yes) and ask("  Download them now? (y/n)", ["y", "n"], "y", False) != "y":
@@ -999,7 +1163,8 @@ def write_run_script(cfg_path: Path, port: int) -> Path:
     return script
 
 
-def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, data: Path, vision: dict | None) -> Path:
+def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vision: dict | None,
+                 choice: tuple | None = None) -> Path:
     step(8, "the configuration and the start script")
     port = a.port or 8080
     cfg = {"exe": str(EXE), "args": ["--glm-pack", str(pack), "--max-context", str(ctx)], "cwd": str(ROOT),
@@ -1034,13 +1199,118 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, data: Path, visi
     suffix = "-hip" if pc.get("backend") == "hip" else ""
     cfg_path = ROOT / f"maya-{quant.lower()}{suffix}.json"
     cfg["log"] = str(cfg_path.with_suffix(".log"))
-    cfg["installer"] = {"data_dir": str(data), "quant": quant,
-                        "gguf_dir": str(Path(a.gguf_dir).expanduser().resolve()) if a.gguf_dir else None,
-                        "written": time.strftime("%Y-%m-%d %H:%M")}
+    local = choice[1] if choice and choice[0] == "local" else None   # (choose_model's answer)
+    gguf_dir = local.parent if local else Path(a.gguf_dir).expanduser().resolve() if a.gguf_dir else None
+    cfg["installer"] = {"models_dir": str(models), "quant": quant, "gguf": str(local) if local else None,
+                        "gguf_dir": str(gguf_dir) if gguf_dir else None, "written": time.strftime("%Y-%m-%d %H:%M")}
+    cal = saved_calibration(cfg)                       # tuned on this PC for this model and context before
+    if cal is not None:
+        tuned = CAL.apply(cfg.get("env") or {}, cal.get("settings") or {})
+        tuned.update(env)                              # (an --env given now wins)
+        if tuned:
+            cfg["env"] = tuned
+        ok("the settings tuned for this PC earlier are used" + (f" ({cal['date']})" if cal.get("date") else "") +
+           (": " + ", ".join(f"{k}={v}" for k, v in cal["settings"].items()) if cal.get("settings") else ""))
     cfg_path.write_text(json.dumps(cfg, indent=1), encoding="utf-8")
     ok(f"config: {cfg_path}")
     ok(f"start script: {write_run_script(cfg_path, port)}")
     return cfg_path
+
+
+# ------------------------------------------------------------------------------------------------ calibration
+CAL_STORE = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "project-maya" / "calibration.json"
+
+
+def hardware_key(cfg: dict) -> str:
+    """What a calibration is valid for: these GPUs, this CPU and RAM, the model (its quant), the context, text or
+    images (the context's KV cache and the image encoder take VRAM from the expert pool)."""
+    found = {g["index"]: g for g in S.gpus() or []}
+    sel = [found.get(i) or {} for i in cfg.get("gpu") or []]
+    a = cfg.get("args") or []
+    ctx = a[a.index("--max-context") + 1] if "--max-context" in a[:-1] else "?"
+    quant = (cfg.get("installer") or {}).get("quant") or cfg.get("model_name", "?")
+    return "|".join([" + ".join(g.get("name", "?") for g in sel) or "?",
+                     f"{sum(g.get('vram_gb', 0) for g in sel):.0f}GB", S.cpu_info()[0], f"{S.ram_gb():.0f}GB", quant,
+                     str(ctx), "images" if cfg.get("vision") else "text"])
+
+
+def load_calibrations() -> dict:
+    try:
+        return json.loads(CAL_STORE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def saved_calibration(cfg: dict) -> dict | None:
+    """The settings an earlier tuning found for this PC, model and context, if any (CUDA only, as the tuning)."""
+    if cfg.get("backend") == "hip":
+        return None
+    return load_calibrations().get(hardware_key(cfg))
+
+
+def busy_gpus(cfg: dict) -> list:
+    """The config's GPUs with more than 1 GiB of VRAM in use (another engine on them): [(index, MiB)]."""
+    try:
+        txt = subprocess.run(["nvidia-smi", "--query-gpu=index,memory.used", "--format=csv,noheader,nounits"],
+                             capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    used = {}
+    for line in txt.splitlines():
+        i, _, m = line.partition(",")
+        try:
+            used[int(i)] = int(float(m))
+        except ValueError:
+            pass
+    return [(i, used[i]) for i in cfg.get("gpu") or [] if used.get(i, 0) > 1024]
+
+
+def calibrate_config(cfg_path: Path) -> bool:
+    """Tune the CPU lane on this PC (tools/calibrate_glm.py): the result goes into the config's env and into
+    CAL_STORE for this PC, model and context (a setup again applies it)."""
+    cfg = read_json(cfg_path)
+    if cfg.get("backend") == "hip":
+        warn("the tuning measures the CUDA engine's CPU lane (NVIDIA GPUs): the HIP port keeps its own settings")
+        return False
+    busy = busy_gpus(cfg)
+    if busy:
+        warn("the tuning needs the GPU(s) to itself: " + ", ".join(f"GPU {i} has {m} MiB in use" for i, m in busy) +
+             " (a model server still running?) - stop it, then run ./maya.sh --calibrate")
+        return False
+    say()
+    say("  Tuning Maya for this PC: the output speed is measured with a few splits of the work between the CPU and")
+    say("  the PCIe link, and with fewer CPU threads. It takes about 10-15 minutes (the model loads first); the PC is")
+    say("  busy meanwhile.")
+    log = cfg.get("log")
+    since = os.path.getsize(log) if log and os.path.isfile(log) else 0
+    try:
+        res = CAL.run(cfg, say=say)
+    except Exception as e:                             # never stops a setup: the engine's own choices stay
+        warn(f"the tuning did not finish ({e}): the engine's own settings stay")
+        why = CAL.engine_error(log, since)
+        if why:
+            say(f"       the engine said: {why}")
+        return False
+    env = CAL.apply(cfg.get("env") or {}, res["settings"])
+    if env:
+        cfg["env"] = env
+    else:
+        cfg.pop("env", None)
+    cfg_path.write_text(json.dumps(cfg, indent=1), encoding="utf-8")
+    store = load_calibrations()
+    store[hardware_key(cfg)] = {"settings": res["settings"], "tok_s": res["report"].get("tok_s"),
+                                "date": time.strftime("%Y-%m-%d")}
+    try:
+        CAL_STORE.parent.mkdir(parents=True, exist_ok=True)
+        CAL_STORE.write_text(json.dumps(store, indent=1), encoding="utf-8")
+    except OSError as e:
+        warn(f"could not save {CAL_STORE} ({e}): {cfg_path.name} has the settings, a setup again does not")
+    speed = f" ({res['report']['tok_s']} tok/s)" if res["report"].get("tok_s") else ""
+    if res["settings"]:
+        ok("tuned for this PC: " + ", ".join(f"{k}={v}" for k, v in res["settings"].items()) + speed)
+    else:
+        ok("tuned for this PC: the engine's own settings are already the fastest here" + speed)
+    return True
 
 
 def start(cfg_path: Path, a) -> int:
@@ -1299,15 +1569,20 @@ def main() -> int:
                     help="take the recommended answers (the model download still needs --download-model)")
     ap.add_argument("--download-model", action="store_true",
                     help="download the model without asking (the commands and the size are still printed)")
-    ap.add_argument("--model", choices=list(MODELS), help=f"which download (default: {next(iter(MODELS))})")
+    ap.add_argument("--model", choices=list(MODELS), help=f"which download (default: asked, {next(iter(MODELS))} "
+                                                          "recommended)")
     ap.add_argument("--no-vision", action="store_true", help="text only: no image encoder (saves its build and "
                                                              "its 1.1 GB of files)")
-    ap.add_argument("--gguf-dir", help="use GLM-5.3-Flash GGUF files you already have: the folder with all of them "
-                                       "(it must be writable - the pack is written inside it)")
-    ap.add_argument("--data-dir", help="where a downloaded model goes (default: Maya-data next to this folder); use a "
-                                       "fast NVMe SSD with ~100 GB free")
+    ap.add_argument("--gguf-dir", help="use GLM-5.3-Flash GGUF files you already have: the folder with all of them, "
+                                       "or the .gguf file (the first one of a split model) when the folder holds "
+                                       "several models; it must be writable - the pack is written inside it "
+                                       "(without this option the setup lists the ones it finds in ~/models*)")
+    ap.add_argument("--models-dir", help="where downloaded models go, each in a folder named after it, e.g. "
+                                         "<DIR>/GSQ-RCO-3.5bit/ (default: Maya-data/models next to this folder); use "
+                                         "a fast NVMe SSD with ~100 GB free")
     ap.add_argument("--gpu", type=int, help="run on this one GPU (CUDA: nvidia-smi; HIP: KFD topology order)")
-    ap.add_argument("--gpus", help="split the model across these two GPUs, e.g. 0,1")
+    ap.add_argument("--gpus", help=f"split the model's layers across these GPUs (up to {MAX_GPUS}), e.g. 0,1 or "
+                                   "0,1,2,3")
     ap.add_argument("--context", type=int, help=f"context length in tokens (default {DEFAULT_CONTEXT})")
     ap.add_argument("--port", type=int, help="the dashboard's and the API's port (default 8080)")
     ap.add_argument("--host", help="where the server listens: 127.0.0.1 = this machine only (default), 0.0.0.0 = also "
@@ -1327,7 +1602,16 @@ def main() -> int:
     ap.add_argument("--bench", action="store_true", help="a standard speed test of the installed model (a few "
                                                          "minutes, with Maya stopped): decode on three questions and "
                                                          "prefill at 2k / 8k tokens; writes maya-bench.txt")
+    ap.add_argument("--calibrate", action="store_true",
+                    help="tune the engine's CPU lane for this PC (the PCIe share and the CPU threads, ~10-15 minutes), "
+                         "then start the model (with --no-start: only tune)")
     a = ap.parse_args()
+    if not WIN and sys.prefix == sys.base_prefix and not os.environ.get("MAYA_SH"):
+        # started as `python3 maya.py`: a system Python takes no pip installs (PEP 668, "externally-managed-
+        # environment") - maya.sh makes the private .venv and runs this file with its Python
+        say("Starting through ./maya.sh, which runs Maya with its own Python environment (.venv) ...")
+        sys.stdout.flush()
+        os.execve("/bin/sh", ["/bin/sh", str(HERE / "maya.sh"), *sys.argv[1:]], dict(os.environ, MAYA_SH="1"))
     version = (HERE / "VERSION").read_text(encoding="utf-8").strip() if (HERE / "VERSION").exists() else "?"
     say(f"Project Maya v{version} - GLM-5.3-Flash on your own GPU(s). Built on Strata (MIT) and ggml/llama.cpp "
         "(MIT).")
@@ -1344,19 +1628,27 @@ def main() -> int:
         have = [p for p in have if read_json(p).get("backend", "cuda") == a.backend]
     else:
         a.backend = "hip" if have and read_json(have[0]).get("backend") == "hip" else "cuda"
-    setting_up = a.setup or a.check or a.no_start or a.gguf_dir or a.model or a.rebuild or a.repack or a.download_model
-    if have and not setting_up:
+    setting_up = a.setup or a.check or a.gguf_dir or a.model or a.rebuild or a.repack or a.download_model
+    if have and not setting_up and (a.calibrate or not a.no_start):
         pick = have[0]
         if len(have) > 1:
             say()
             for i, c in enumerate(have, 1):
                 say(f"  {i}) {c.name}")
             pick = have[int(ask("Which one?", [str(i) for i in range(1, len(have) + 1)], "1", a.yes)) - 1]
+        if a.calibrate:
+            refresh_engine(read_json(pick))            # (the engine the tuning measures is the current one)
+            if not calibrate_config(pick):
+                say()
+                warn("this PC is NOT tuned (the reason is above): the model " +
+                     ("keeps" if a.no_start else "starts with") + " the engine's own settings")
+            if a.no_start:
+                return 0
         return start(pick, a)
+    if not have and a.calibrate:
+        say("Nothing is set up yet: the setup runs first, then the tuning.")
     prev = read_json(have[0]) if have else {}
     inst = prev.get("installer") or {}
-    if not a.model:                                    # --model asks for that download, not the files set up before
-        a.gguf_dir = a.gguf_dir or inst.get("gguf_dir")
     prev_args = prev.get("args") or []
     prev_ctx = int(prev_args[prev_args.index("--max-context") + 1]) if "--max-context" in prev_args[:-1] else None
 
@@ -1371,19 +1663,37 @@ def main() -> int:
     step(2, "your choices")                            # 2
     ctx = choose_context(a, prev_ctx)
     ok(f"context: {ctx} tokens")
-    data = (Path(a.data_dir).expanduser().resolve() if a.data_dir else
-            Path(inst["data_dir"]) if inst.get("data_dir") else ROOT.parent / "Maya-data")
-    if not a.gguf_dir:
-        ok(f"model folder: {data / 'models'}")
+    # the models folder: --models-dir, else the one set up before (a config from before the option has its data
+    # folder, whose models/ held the downloads), else Maya-data/models next to this folder
+    models = (Path(a.models_dir).expanduser().resolve() if a.models_dir else
+              Path(inst["models_dir"]) if inst.get("models_dir") else
+              Path(inst["data_dir"]) / "models" if inst.get("data_dir") else ROOT.parent / "Maya-data" / "models")
+    choice = choose_model(a, models, inst)
+    if choice[0] == "download":
+        ok(f"model: {choice[1]}, in {download_dir(models, choice[1])}")
+    else:
+        ok(f"model: {choice[1]} (yours)")
     llama = tools_step(a)                              # 3
     meta = build_step(a, pc, llama)                    # 4
-    got = model_step(a, data)                          # 5
+    got = model_step(a, models, choice)                # 5
     if got is None:
         return 0
     d, shards, quant = got
     pack = pack_step(a, d, shards, llama)              # 6
     vision = vision_step(a, pc, meta, llama, d, quant)  # 7
-    cfg_path = write_config(a, pc, meta, pack, quant, ctx, data, vision)   # 8
+    cfg_path = write_config(a, pc, meta, pack, quant, ctx, models, vision, choice)   # 8
+    # the tuning: asked for (--calibrate), or offered when nothing was tuned for this PC and model yet and someone
+    # answers (--yes and --no-start setups are not held up by it)
+    tuned = None
+    cfg = read_json(cfg_path)
+    offer = cfg.get("backend") != "hip" and saved_calibration(cfg) is None and not a.yes and not a.no_start
+    if a.calibrate or (offer and ask(
+            "Tune Maya for this PC now? It measures the split of the work between the CPU and the PCIe link and the "
+            "CPU threads (about 10-15 minutes; later: ./maya.sh --calibrate)", ["y", "n"], "y", a.yes) == "y"):
+        tuned = calibrate_config(cfg_path)
+    if tuned is False:
+        say()
+        warn("this PC is NOT tuned (the reason is above): ./maya.sh --calibrate tries again")
     if a.no_start:
         say()
         say(f"All set. Start it with {ME} (or " + (f"run-{cfg_path.stem}.bat" if WIN else f"./run-{cfg_path.stem}.sh")

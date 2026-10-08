@@ -19,6 +19,9 @@ size_t matrix_bytes(int ggml_type, int64_t rows, int64_t cols);
 /// Bytes of `rows` activation rows of `cols` values quantized for MMQ (the row padded to 512 values).
 size_t q8_bytes(int64_t rows, int64_t cols);
 
+/// One q8_1 MMQ block's bytes: the activations are laid out column block by column block, so within a block row
+/// r + 1 follows row r by this much (a product over rows [a, b) of a buffer quantized from row a points a blocks back).
+size_t q8_block_bytes();
 /// q8_1 activations for MMQ against weights of `ggml_type`: row i of the output is row ids[i] of x (or row i when
 /// ids is null); `x` has `ld` floats per row.
 void quantize(const float* x, const int32_t* ids, void* xq, int ggml_type, int64_t cols, int64_t ld, int64_t rows,
