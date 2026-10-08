@@ -6,6 +6,10 @@
 // serial reference kernels - the values agree to float rounding, which the fast-vs-reference check in
 // glm_pack_test pins on the real model.
 #include "strata/kernels/glm_fast.hpp"
+#if defined(STRATA_USE_HIP)
+#include "strata/kernels/glm_expert_bench.hpp"
+#include <cstring>
+#endif
 
 #if !defined(STRATA_USE_HIP)
 #include <cuda_bf16.h>
@@ -718,6 +722,126 @@ template<> __device__ __forceinline__ float dw<29>(const uint8_t* row, int kbx, 
     const int sc1 = 2 * ((tmp >> 3) & 0x07) + 1;
     return d * ((sumi[0] + sumf[0]) * sc0 + (sumi[1] + sumf[1]) * sc1);
 }
+// HIP sign decode adapted from Strata src/prefill/moe_fused_iq.cu (MIT).
+// Every IQ2/IQ3 grid byte is nonzero and <= 62, so two's-complement negation
+// can use a whole-word add without carries across byte boundaries. Multiplying
+// a four-bit sign nibble by 0x10204080 puts its bits at each byte's high bit;
+// after masking/shifting, these are the +1 corrections and *255 gives the masks.
+// The integer scale divisions and floating-point accumulation order stay intact.
+#if defined(STRATA_USE_HIP)
+__device__ __forceinline__ uint4 direct_signs(unsigned b, bool parity) {
+    b &= parity ? 127u : 255u;
+    if (parity) b |= (__popc(b) & 1) << 7;
+    const unsigned lo = (((b & 15u) * 0x10204080u) & 0x80808080u) >> 7;
+    const unsigned hi = ((((b >> 4) & 15u) * 0x10204080u) & 0x80808080u) >> 7;
+    return make_uint4(lo * 255u, lo, hi * 255u, hi);
+}
+__device__ __forceinline__ uint2 quant_load8(const void* p) {
+    uint2 words;
+    __builtin_memcpy(&words, p, sizeof(words)); // GGUF super-blocks are only 2-byte aligned.
+    return words;
+}
+template<int T> constexpr int sign_count = T == 22 ? 256 : 128;
+template<int T>
+__device__ __forceinline__ void load_signs(uint4* signs) {
+    for (int i = threadIdx.x; i < sign_count<T>; i += blockDim.x) {
+        unsigned b = i;
+        if constexpr (T != 22) b |= (__popc(b) & 1) << 7;
+        unsigned lo = 0, hi = 0;
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            lo |= (0u - ((b >> j) & 1u)) & (255u << (8 * j));
+            hi |= (0u - ((b >> (j + 4)) & 1u)) & (255u << (8 * j));
+        }
+        signs[i] = make_uint4(lo, lo & 0x01010101u, hi, hi & 0x01010101u);
+    }
+}
+template<int T>
+__device__ __forceinline__ float dw_rdna(const uint8_t* row, int kbx, int iqs, const XV& x,
+                                        const uint32_t* tab, const uint4* signs, bool direct, bool wide);
+template<> __device__ __forceinline__ float dw_rdna<16>(const uint8_t* row, int kbx, int iqs,
+    const XV& x, const uint32_t* tab, const uint4* sign_tab, bool direct, bool wide) {
+    const block_iq2_xxs* bq2 = (const block_iq2_xxs*) row + kbx;
+    const int q2 = wide ? quant_load8(bq2->qs + 2 * iqs).x : get_int_b2(bq2->qs, iqs);
+    const uint8_t* aux8 = (const uint8_t*) &q2;
+    const uint32_t aux32 = wide ? quant_load8(bq2->qs + 2 * iqs).y : get_int_b2(bq2->qs, iqs + 1);
+    int sumi = 0;
+#pragma unroll
+    for (int k0 = 0; k0 < 8; k0 += 2) {
+        const uint2 grid_pos = ((const uint2*) tab)[aux8[k0 / 2]];
+        const uint4 signs = direct ? direct_signs(aux32 >> (7 * k0 / 2), true) : sign_tab[(aux32 >> (7 * k0 / 2)) & 127];
+        sumi = __dp4a((int) ((grid_pos.x ^ signs.x) + signs.y), x.u[k0 + 0], sumi);
+        sumi = __dp4a((int) ((grid_pos.y ^ signs.z) + signs.w), x.u[k0 + 1], sumi);
+    }
+    const int ls = aux32 >> 27 | 1;
+    sumi = sumi * ls / 8;
+    return __half2float(bq2->d) * x.d * sumi;
+}
+template<> __device__ __forceinline__ float dw_rdna<18>(const uint8_t* row, int kbx, int iqs,
+    const XV& x, const uint32_t* tab, const uint4* sign_tab, bool direct, bool wide) {
+    const block_iq3_xxs* bq3 = (const block_iq3_xxs*) row + kbx;
+    const uint2 q3_wide = wide ? quant_load8(bq3->qs + 4 * iqs) : make_uint2(0, 0);
+    const int2 q3_packed = wide ? make_int2(q3_wide.x, q3_wide.y) :
+        make_int2(get_int_b2(bq3->qs, iqs), get_int_b2(bq3->qs, iqs + 1));
+    const uint8_t* q3 = (const uint8_t*) &q3_packed;
+    const uint32_t aux32 = get_int_b2(bq3->qs, QK_K / 16 + iqs / 2);
+    int sumi = 0;
+#pragma unroll
+    for (int l0 = 0; l0 < 8; l0 += 2) {
+        const int2 grid_pos = make_int2(tab[q3[l0 + 0]], tab[q3[l0 + 1]]);
+        const uint4 signs = direct ? direct_signs(aux32 >> (7 * l0 / 2), true) : sign_tab[(aux32 >> (7 * l0 / 2)) & 127];
+        sumi = __dp4a((int) ((grid_pos.x ^ signs.x) + signs.y), x.u[l0 + 0], sumi);
+        sumi = __dp4a((int) ((grid_pos.y ^ signs.z) + signs.w), x.u[l0 + 1], sumi);
+    }
+    const int ls = aux32 >> 28;
+    sumi = (ls * sumi + sumi / 2) / 2;
+    return __half2float(bq3->d) * x.d * sumi;
+}
+template<> __device__ __forceinline__ float dw_rdna<22>(const uint8_t* row, int kbx, int iqs,
+    const XV& x, const uint32_t* tab, const uint4* sign_tab, bool direct, bool wide) {
+    (void) wide;
+    const block_iq2_s* bq2 = (const block_iq2_s*) row + kbx;
+    const int qs_packed = get_int_b2(bq2->qs, iqs / 2);
+    const uint8_t* qs = (const uint8_t*) &qs_packed;
+    const int qh = bq2->qh[iqs / 2];
+    const int signs_packed_32 = get_int_b2(bq2->qs, QK_K / 32 + iqs / 2);
+    const uint8_t* signs_packed_8 = (const uint8_t*) &signs_packed_32;
+    const int ls0 = bq2->scales[iqs / 2] & 0x0F;
+    const int ls1 = bq2->scales[iqs / 2] >> 4;
+    int sumi0 = 0, sumi1 = 0;
+#pragma unroll
+    for (int l0 = 0; l0 < 8; l0 += 2) {
+        const uint2 grid_pos = ((const uint2*) tab)[qs[l0 / 2] | ((qh << (8 - l0)) & 0x300)];
+        const uint4 signs = direct ? direct_signs(signs_packed_8[l0 / 2], false) : sign_tab[signs_packed_8[l0 / 2]];
+        const int grid_l = ((grid_pos.x ^ signs.x) + signs.y);
+        const int grid_h = ((grid_pos.y ^ signs.z) + signs.w);
+        if (l0 < 4) {
+            sumi0 = __dp4a(grid_l, x.u[l0 + 0], sumi0);
+            sumi0 = __dp4a(grid_h, x.u[l0 + 1], sumi0);
+        } else {
+            sumi1 = __dp4a(grid_l, x.u[l0 + 0], sumi1);
+            sumi1 = __dp4a(grid_h, x.u[l0 + 1], sumi1);
+        }
+    }
+    const int sumi = (sumi0 * ls0 + sumi1 * ls1 + (sumi0 + sumi1) / 2) / 4;
+    return __half2float(bq2->d) * x.d * sumi;
+}
+template<int T, int NR>
+__device__ __forceinline__ void rows_dot_rdna(const uint8_t* const* rows, const block_q8_1* x,
+                                             int n_in, int lane, const uint32_t* tab,
+                                             const uint4* signs, float* s, bool direct = false, bool wide = false) {
+    float acc[NR] = {};
+    for (int k = lane; k < n_in / 32; k += 32) {
+        const XV xv = load_xv(x + k);
+#pragma unroll
+        for (int r = 0; r < NR; ++r)
+            acc[r] += dw_rdna<T>(rows[r], k / 8, 2 * (k % 8), xv, tab, signs, direct, wide);
+    }
+#pragma unroll
+    for (int r = 0; r < NR; ++r) s[r] = warp_sum(acc[r]);
+}
+#endif
+
 // their F entries (the dense GEMV and row_dot read the codebook from global memory; the call's q8_1 block is
 // iqs / step of the super-block's)
 #define GLMF_IQ_F(T, BLOCK, STEP, TABLE)                                                                          \
@@ -2123,19 +2247,33 @@ constexpr int GU_WARPS = 16;  // ... 2 gate + 2 up rows per warp (8 per warp mea
 
 // grid (n_ff / GU_ROWS, k [+ 1]): the extra row of blocks (blockIdx.y == k) computes the SHARED expert's down rows
 // into sh_out while the routed experts' blocks run - in moe_down it was a serial tail (~25 us of 72)
+#if defined(STRATA_USE_HIP)
+template<int TG, int NW = GU_WARPS, bool LUT = false, bool GLOBAL = false, bool SPLIT = false,
+         bool DIRECT = false, bool WIDE = false, int MINWAVES = 0>
+__attribute__((amdgpu_waves_per_eu(MINWAVES > 0 ? MINWAVES : 1)))
+__global__ void __launch_bounds__(NW * 32)
+#else
 template<int TG>
-__global__ void __launch_bounds__(GU_WARPS * 32) moe_gate_up_kernel(MoeDev d, int k, int n_embd, int n_ff, float limit,
+__global__ void __launch_bounds__(GU_WARPS * 32)
+#endif
+moe_gate_up_kernel(MoeDev d, int k, int n_embd, int n_ff, float limit,
                                                                     const block_q8_1* __restrict__ xq,
                                                                     block_q8_1* __restrict__ hq,
                                                                     const uint8_t* __restrict__ sh_down, int sh_type,
                                                                     const block_q8_1* __restrict__ sh_hq, int n_ff_sh,
                                                                     float* __restrict__ sh_out) {
+#if !defined(STRATA_USE_HIP)
+    constexpr int NW = GU_WARPS;
+#endif
     const int ei = blockIdx.y, chunk = blockIdx.x;
     const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+#if defined(STRATA_USE_HIP)
+    if constexpr (!SPLIT)
+#endif
     if (ei == k) {
         const int per = (n_embd + (int) gridDim.x - 1) / (int) gridDim.x;
         const int r1 = min(n_embd, (chunk + 1) * per);
-        for (int r = chunk * per + warp; r < r1; r += GU_WARPS) {
+        for (int r = chunk * per + warp; r < r1; r += NW) {
             const float v = any_row_dot(sh_type, sh_down, r, sh_hq, nullptr, n_ff_sh, lane);
             if (lane == 0) sh_out[r] = v;
         }
@@ -2145,12 +2283,17 @@ __global__ void __launch_bounds__(GU_WARPS * 32) moe_gate_up_kernel(MoeDev d, in
     if (ptr == 0ull) return;
     __shared__ float sg[GU_ROWS], su[GU_ROWS];
     __shared__ uint32_t s_tab[TabWords<TG>::n > 0 ? TabWords<TG>::n : 1];
+#if defined(STRATA_USE_HIP)
+    __shared__ uint4 s_sign[LUT && !DIRECT ? sign_count<TG> : 1];
+    if constexpr (LUT && !DIRECT) load_signs<TG>(s_sign);
+    if constexpr (!GLOBAL)
+#endif
     load_tab<TG>(s_tab);
     __syncthreads();
     const size_t rb = rbytes<TG>(n_embd);
     const uint8_t* blob = (const uint8_t*) ptr;
     // each warp: 2 gate + 2 up rows in ONE pass (one activation load per call for all four)
-    constexpr int RPW = GU_ROWS / GU_WARPS;
+    constexpr int RPW = GU_ROWS / NW;
     const uint8_t* rows[2 * RPW];
 #pragma unroll
     for (int j = 0; j < RPW; ++j) {
@@ -2159,7 +2302,15 @@ __global__ void __launch_bounds__(GU_WARPS * 32) moe_gate_up_kernel(MoeDev d, in
         rows[RPW + j] = blob + (size_t) n_ff * rb + (size_t) r * rb;
     }
     float s[2 * RPW];
-    rows_dot<TG, 2 * RPW>(rows, xq, n_embd, lane, s_tab, s);
+    const uint32_t* tab = s_tab;
+#if defined(STRATA_USE_HIP)
+    if constexpr (GLOBAL) tab = TG == 16 ? (const uint32_t*) iq2xxs_grid :
+                                TG == 18 ? (const uint32_t*) iq3xxs_grid : (const uint32_t*) iq2s_grid;
+    if constexpr (LUT) {
+        rows_dot_rdna<TG, 2 * RPW>(rows, xq, n_embd, lane, tab, s_sign, s, DIRECT, WIDE);
+    } else
+#endif
+    rows_dot<TG, 2 * RPW>(rows, xq, n_embd, lane, tab, s);
     if (lane == 0) {
 #pragma unroll
         for (int j = 0; j < RPW; ++j) {
@@ -2177,16 +2328,28 @@ __global__ void __launch_bounds__(GU_WARPS * 32) moe_gate_up_kernel(MoeDev d, in
 
 constexpr int DOWN_ROWS = 4;
 
+#if defined(STRATA_USE_HIP)
+template<int TD, int NR = DOWN_ROWS, bool LUT = false, bool GLOBAL = false, bool DIRECT = false, bool WIDE = false>
+#else
 template<int TD>
+#endif
 __global__ void __launch_bounds__(256) moe_down_kernel(MoeDev d, int k, int n_embd, int n_ff, size_t down_off,
                                                        const block_q8_1* __restrict__ hq,
                                                        const float* __restrict__ sh_out, float* __restrict__ out) {
-    // DOWN_ROWS output rows per block; warp w computes those rows for expert w (one activation load per call
+#if !defined(STRATA_USE_HIP)
+    constexpr int NR = DOWN_ROWS;
+#endif
+    // NR output rows per block; warp w computes those rows for expert w (one activation load per call
     // for all of them), the combine runs in plan order like the reference's axpy chain
     __shared__ unsigned long long s_ptr[8];
     __shared__ float s_w[8];
-    __shared__ float s_part[8][DOWN_ROWS];
+    __shared__ float s_part[8][NR];
     __shared__ uint32_t s_tab[TabWords<TD>::n > 0 ? TabWords<TD>::n : 1];
+#if defined(STRATA_USE_HIP)
+    __shared__ uint4 s_sign[LUT && !DIRECT ? sign_count<TD> : 1];
+    if constexpr (LUT && !DIRECT) load_signs<TD>(s_sign);
+    if constexpr (!GLOBAL)
+#endif
     load_tab<TD>(s_tab);
     if (threadIdx.x < 8) {
         s_ptr[threadIdx.x] = (int) threadIdx.x < k ? d.plan_ptr[threadIdx.x] : 0ull;
@@ -2194,25 +2357,33 @@ __global__ void __launch_bounds__(256) moe_down_kernel(MoeDev d, int k, int n_em
     }
     __syncthreads();
     const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
-    const int r0 = blockIdx.x * DOWN_ROWS;
+    const int r0 = blockIdx.x * NR;
     const size_t drb = rbytes<TD>(n_ff);
     {
-        float s[DOWN_ROWS];
+        float s[NR];
         if (warp < k && s_ptr[warp] != 0ull) {
-            const uint8_t* rows[DOWN_ROWS];
+            const uint8_t* rows[NR];
 #pragma unroll
-            for (int j = 0; j < DOWN_ROWS; ++j) rows[j] = (const uint8_t*) s_ptr[warp] + down_off + (size_t) (r0 + j) * drb;
-            rows_dot<TD, DOWN_ROWS>(rows, hq + (size_t) warp * (n_ff / 32), n_ff, lane, s_tab, s);
+            for (int j = 0; j < NR; ++j) rows[j] = (const uint8_t*) s_ptr[warp] + down_off + (size_t) (r0 + j) * drb;
+            const uint32_t* tab = s_tab;
+#if defined(STRATA_USE_HIP)
+            if constexpr (GLOBAL) tab = TD == 16 ? (const uint32_t*) iq2xxs_grid :
+                                        TD == 18 ? (const uint32_t*) iq3xxs_grid : (const uint32_t*) iq2s_grid;
+            if constexpr (LUT) {
+                rows_dot_rdna<TD, NR>(rows, hq + (size_t) warp * (n_ff / 32), n_ff, lane, tab, s_sign, s, DIRECT, WIDE);
+            } else
+#endif
+            rows_dot<TD, NR>(rows, hq + (size_t) warp * (n_ff / 32), n_ff, lane, tab, s);
         } else {
 #pragma unroll
-            for (int j = 0; j < DOWN_ROWS; ++j) s[j] = 0.0f;
+            for (int j = 0; j < NR; ++j) s[j] = 0.0f;
         }
         if (lane == 0)
 #pragma unroll
-            for (int j = 0; j < DOWN_ROWS; ++j) s_part[warp][j] = s[j];
+            for (int j = 0; j < NR; ++j) s_part[warp][j] = s[j];
     }
     __syncthreads();
-    if (threadIdx.x < DOWN_ROWS) {
+    if (threadIdx.x < NR) {
         const int j = threadIdx.x, r = r0 + j;
         float m = 0.0f;
         for (int i = 0; i < k; ++i) m += s_w[i] * s_part[i][j];
@@ -2954,8 +3125,75 @@ void moe_fetch(const MoeDev& d, int k, size_t blob_bytes, cudaStream_t s) {
     launch_check("moe_fetch");
 }
 
+#if defined(STRATA_USE_HIP)
+namespace {
+// Limit automatic dispatch to the measured decode geometry and RDNA3/3.5
+// targets. RDNA4 and all other shapes retain the original expert kernels.
+bool rdna3_expert_device() {
+    static const bool legacy = [] {
+        const char* v = std::getenv("STRATA_HIP_EXPERTS_LEGACY");
+        return v && v[0] == '1';
+    }();
+    if (legacy) return false;
+    int device = 0;
+    if (hipGetDevice(&device) != hipSuccess) return false;
+    static thread_local int cached_device = -1;
+    static thread_local bool rdna3 = false;
+    if (cached_device != device) {
+        hipDeviceProp_t prop{};
+        if (hipGetDeviceProperties(&prop, device) != hipSuccess) return false;
+        rdna3 = std::strncmp(prop.gcnArchName, "gfx1100", 7) == 0 ||
+                std::strncmp(prop.gcnArchName, "gfx1151", 7) == 0;
+        cached_device = device;
+    }
+    return rdna3;
+}
+// Splitting shared down removes its dynamic type switch from routed gate/up's
+// register budget. The routed grid keeps exactly the original dot/reduction order.
+__global__ void __launch_bounds__(256) rdna_shared_down_kernel(const uint8_t* weights, int type,
+                                                         const block_q8_1* h, int n_in,
+                                                         int n_out, float* out) {
+    const int lane = threadIdx.x & 31, wave = threadIdx.x >> 5;
+    const int row = blockIdx.x * 8 + wave;
+    if (row < n_out) {
+        const float v = any_row_dot(type, weights, row, h, nullptr, n_in, lane);
+        if (lane == 0) out[row] = v;
+    }
+}
+template<int T, int NW, bool GLOBAL = false, bool LUT = true, bool SPLIT = false,
+         bool DIRECT = false, bool WIDE = false, int MINWAVES = 0>
+void launch_expert_gu(const MoeDev& d, int k, int n_embd, int n_ff, float limit, const void* xq, void* hq,
+               const void* sh_down, int sh_type, const void* sh_hq, int n_ff_sh, float* sh_out, cudaStream_t s) {
+    const bool shared = sh_down && sh_out;
+    const dim3 grid(n_ff / GU_ROWS, k + (shared && !SPLIT ? 1 : 0));
+    moe_gate_up_kernel<T, NW, LUT, GLOBAL, SPLIT, DIRECT, WIDE, MINWAVES><<<grid, NW * 32, 0, s>>>(d, shared ? k : k + 1, n_embd, n_ff,
+        limit, (const block_q8_1*) xq, (block_q8_1*) hq, (const uint8_t*) sh_down, sh_type,
+        (const block_q8_1*) sh_hq, n_ff_sh, sh_out);
+    if constexpr (SPLIT) {
+        if (shared) rdna_shared_down_kernel<<<(n_embd + 7) / 8, 256, 0, s>>>(
+            (const uint8_t*) sh_down, sh_type, (const block_q8_1*) sh_hq, n_ff_sh, n_embd, sh_out);
+    }
+}
+template<int T, int NR, bool GLOBAL = false, bool LUT = true, bool DIRECT = false, bool WIDE = false>
+void launch_expert_down(const MoeDev& d, int k, int n_embd, int n_ff, size_t off, const void* hq,
+               const float* sh, float* out, cudaStream_t s) {
+    moe_down_kernel<T, NR, LUT, GLOBAL, DIRECT, WIDE><<<n_embd / NR, 256, 0, s>>>(d, k, n_embd, n_ff, off,
+        (const block_q8_1*) hq, sh, out);
+}
+} // namespace
+#endif
+
 void moe_gate_up(int gu_type, const MoeDev& d, int k, int n_embd, int n_ff, float limit, const void* xq, void* hq,
                  const void* sh_down, int sh_type, const void* sh_hq, int n_ff_sh, float* sh_out, cudaStream_t s) {
+#if defined(STRATA_USE_HIP)
+    if (gu_type == 16 && n_embd == 4096 && n_ff == 2048 && rdna3_expert_device()) {
+        // Packed sign expansion, original 16-wave/four-row geometry, grid in LDS.
+        launch_expert_gu<16, 16, false, true, false, true>(d, k, n_embd, n_ff, limit,
+            xq, hq, sh_down, sh_type, sh_hq, n_ff_sh, sh_out, s);
+        launch_check("moe_gate_up RDNA3");
+        return;
+    }
+#endif
     const bool sh = sh_down != nullptr && sh_out != nullptr;
     const dim3 grid((unsigned) (n_ff / GU_ROWS), (unsigned) (k + (sh ? 1 : 0)));
     const auto* X = (const block_q8_1*) xq;
@@ -2973,6 +3211,57 @@ void moe_gate_up(int gu_type, const MoeDev& d, int k, int n_embd, int n_ff, floa
     }
     launch_check("moe_gate_up");
 }
+
+#if defined(STRATA_USE_HIP)
+namespace hip_expert_bench {
+
+void gate_up(Variant v, int type, const MoeDev& d, int k, int n_embd, int n_ff, float limit,
+             const void* xq, void* hq, const void* sh_down, int sh_type, const void* sh_hq,
+             int n_ff_sh, float* sh_out, cudaStream_t s) {
+    if (v == Variant::production) return moe_gate_up(type, d, k, n_embd, n_ff, limit, xq, hq,
+                                                   sh_down, sh_type, sh_hq, n_ff_sh, sh_out, s);
+#define BENCH_GU(T) case T: \
+    if (v == Variant::baseline) launch_expert_gu<T,16,false,false>(d,k,n_embd,n_ff,limit,xq,hq,sh_down,sh_type,sh_hq,n_ff_sh,sh_out,s); \
+    else if (v == Variant::direct_lds) launch_expert_gu<T,16,false,true,false,true>(d,k,n_embd,n_ff,limit,xq,hq,sh_down,sh_type,sh_hq,n_ff_sh,sh_out,s); \
+    else if (v == Variant::direct_signs) launch_expert_gu<T,16,true,true,false,true>(d,k,n_embd,n_ff,limit,xq,hq,sh_down,sh_type,sh_hq,n_ff_sh,sh_out,s); \
+    else if (v == Variant::vector_load) launch_expert_gu<T,16,true,true,false,false,true>(d,k,n_embd,n_ff,limit,xq,hq,sh_down,sh_type,sh_hq,n_ff_sh,sh_out,s); \
+    else if (v == Variant::occupancy8) launch_expert_gu<T,16,true,true,true,false,false,8>(d,k,n_embd,n_ff,limit,xq,hq,sh_down,sh_type,sh_hq,n_ff_sh,sh_out,s); \
+    else if (v == Variant::split_shared) launch_expert_gu<T, 16, true, true, true>(d,k,n_embd,n_ff,limit,xq,hq,sh_down,sh_type,sh_hq,n_ff_sh,sh_out,s); \
+    else if (v == Variant::global_plain) launch_expert_gu<T, 16, true, false>(d,k,n_embd,n_ff,limit,xq,hq,sh_down,sh_type,sh_hq,n_ff_sh,sh_out,s); \
+    else if (v == Variant::global_waves8) launch_expert_gu<T, 8, true>(d,k,n_embd,n_ff,limit,xq,hq,sh_down,sh_type,sh_hq,n_ff_sh,sh_out,s); \
+    else if (v == Variant::waves8) launch_expert_gu<T, 8>(d,k,n_embd,n_ff,limit,xq,hq,sh_down,sh_type,sh_hq,n_ff_sh,sh_out,s); \
+    else if (v == Variant::global_grid) launch_expert_gu<T, 16, true>(d,k,n_embd,n_ff,limit,xq,hq,sh_down,sh_type,sh_hq,n_ff_sh,sh_out,s); \
+    else launch_expert_gu<T, 16>(d,k,n_embd,n_ff,limit,xq,hq,sh_down,sh_type,sh_hq,n_ff_sh,sh_out,s); break;
+    switch (type) { BENCH_GU(16) BENCH_GU(18) BENCH_GU(22)
+        default: std::fprintf(stderr, "expert bench: unsupported type %d\n", type); std::abort(); }
+#undef BENCH_GU
+    launch_check("expert bench gate/up");
+}
+
+void down(Variant v, int type, const MoeDev& d, int k, int n_embd, int n_ff, size_t off,
+          const void* hq, const float* sh, float* out, cudaStream_t s) {
+    if (v == Variant::production) return moe_down(type,d,k,n_embd,n_ff,off,hq,sh,out,s);
+#define BENCH_DN(T) case T: \
+    if (v == Variant::baseline) launch_expert_down<T,4,false,false>(d,k,n_embd,n_ff,off,hq,sh,out,s); \
+    else if (v == Variant::direct_lds) launch_expert_down<T,2,false,true,true>(d,k,n_embd,n_ff,off,hq,sh,out,s); \
+    else if (v == Variant::direct_rows4) launch_expert_down<T,4,true,true,true>(d,k,n_embd,n_ff,off,hq,sh,out,s); \
+    else if (v == Variant::direct_lds_rows4) launch_expert_down<T,4,false,true,true>(d,k,n_embd,n_ff,off,hq,sh,out,s); \
+    else if (v == Variant::direct_signs) launch_expert_down<T,2,true,true,true>(d,k,n_embd,n_ff,off,hq,sh,out,s); \
+    else if (v == Variant::vector_load) launch_expert_down<T,2,true,true,false,true>(d,k,n_embd,n_ff,off,hq,sh,out,s); \
+    else if (v == Variant::global_plain) launch_expert_down<T, 4, true, false>(d,k,n_embd,n_ff,off,hq,sh,out,s); \
+    else if (v == Variant::global_rows2) launch_expert_down<T, 2, true>(d,k,n_embd,n_ff,off,hq,sh,out,s); \
+    else if (v == Variant::global_rows8) launch_expert_down<T, 8, true>(d,k,n_embd,n_ff,off,hq,sh,out,s); \
+    else if (v == Variant::rows2) launch_expert_down<T, 2>(d,k,n_embd,n_ff,off,hq,sh,out,s); \
+    else if (v == Variant::rows8) launch_expert_down<T, 8>(d,k,n_embd,n_ff,off,hq,sh,out,s); \
+    else if (v == Variant::global_grid) launch_expert_down<T, 4, true>(d,k,n_embd,n_ff,off,hq,sh,out,s); \
+    else launch_expert_down<T, 4>(d,k,n_embd,n_ff,off,hq,sh,out,s); break;
+    switch (type) { BENCH_DN(16) BENCH_DN(18) BENCH_DN(22)
+        default: std::fprintf(stderr, "expert bench: unsupported type %d\n", type); std::abort(); }
+#undef BENCH_DN
+    launch_check("expert bench down");
+}
+} // namespace hip_expert_bench
+#endif
 
 bool rows_experts(int gu_type, int d_type, const uint8_t* base, size_t stride, size_t down_off, const int* light, int n,
                   const int* row_tok, const float* x, int n_tok, int n_embd, int n_ff, float limit, int rlo, int rhi,
@@ -3003,6 +3292,16 @@ bool rows_experts(int gu_type, int d_type, const uint8_t* base, size_t stride, s
 
 void moe_down(int d_type, const MoeDev& d, int k, int n_embd, int n_ff, size_t down_off, const void* hq,
               const float* sh_out, float* out, cudaStream_t s) {
+#if defined(STRATA_USE_HIP)
+    if ((d_type == 22 || d_type == 18) && n_embd == 4096 && n_ff == 2048 && rdna3_expert_device()) {
+        // Two rows lower the register budget; IQ2_S prefers global grid reads,
+        // while the smaller IQ3_XXS grid is faster in LDS on gfx1100.
+        if (d_type == 22) launch_expert_down<22, 2, true, true, true>(d, k, n_embd, n_ff, down_off, hq, sh_out, out, s);
+        else launch_expert_down<18, 2, false, true, true>(d, k, n_embd, n_ff, down_off, hq, sh_out, out, s);
+        launch_check("moe_down RDNA3");
+        return;
+    }
+#endif
     const int blocks = n_embd / DOWN_ROWS;   // n_embd % DOWN_ROWS == 0 (4096)
     const auto* H = (const block_q8_1*) hq;
     switch (d_type) {
