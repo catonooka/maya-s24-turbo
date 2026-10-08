@@ -84,6 +84,61 @@ int main() {
     CHECK(hipFree(d_counts)); CHECK(hipFree(d_cells)); CHECK(hipFree(d_lat)); CHECK(hipFree(d_out)); CHECK(hipFree(d_q));
     std::printf("GLM prefill attention: max absolute error %.3e (tolerance 5e-5)\n", worst);
     if (worst > 5e-5) return 5;
+
+    // The rocWMMA kernel (FP16 Q) against the F32 kernel on the same FP16-rounded Q: random data, many cells
+    {
+        constexpr int T2 = 48, H2 = 32, rows2 = 2048, stride2 = 700;
+        std::vector<float> q2((size_t) T2 * H2 * KV), lat2((size_t) rows2 * KV), a(q2.size()), b(q2.size());
+        std::vector<uint16_t> lat16(lat2.size()), q16(q2.size());
+        std::vector<int> cells2((size_t) T2 * stride2, -1), cnt2(T2);
+        uint32_t rng = 12345u;
+        const auto rnd = [&rng]() { rng = rng * 1664525u + 1013904223u; return ((rng >> 8) & 0xffff) / 32768.0f - 1.0f; };
+        const auto to_h = [](float v) { const __half h = __float2half(v); uint16_t u; std::memcpy(&u, &h, 2); return u; };
+        for (size_t i = 0; i < q2.size(); ++i) {
+            q16[i] = to_h(1.5f * rnd());
+            const __half h = *reinterpret_cast<const __half*>(&q16[i]);
+            q2[i] = __half2float(h);
+        }
+        for (size_t i = 0; i < lat2.size(); ++i) lat16[i] = to_h(rnd());
+        for (int t = 0; t < T2; ++t) {
+            cnt2[t] = t % 5 == 0 ? 3 : std::min(stride2, 40 + 15 * t);   // includes partial 16-cell chunks
+            for (int s = 0; s < cnt2[t]; ++s) cells2[(size_t) t * stride2 + s] = (7 * s + 13 * t) % rows2;
+        }
+        uint16_t *dq16 = nullptr, *dl = nullptr;
+        float *dq = nullptr, *da = nullptr, *db = nullptr;
+        int *dc = nullptr, *dn = nullptr;
+        CHECK(hipMalloc((void**) &dq16, q16.size() * 2)); CHECK(hipMalloc((void**) &dq, q2.size() * 4));
+        CHECK(hipMalloc((void**) &dl, lat16.size() * 2)); CHECK(hipMalloc((void**) &da, q2.size() * 4));
+        CHECK(hipMalloc((void**) &db, q2.size() * 4)); CHECK(hipMalloc((void**) &dc, cells2.size() * 4));
+        CHECK(hipMalloc((void**) &dn, cnt2.size() * 4));
+        CHECK(hipMemcpy(dq16, q16.data(), q16.size() * 2, hipMemcpyHostToDevice));
+        CHECK(hipMemcpy(dq, q2.data(), q2.size() * 4, hipMemcpyHostToDevice));
+        CHECK(hipMemcpy(dl, lat16.data(), lat16.size() * 2, hipMemcpyHostToDevice));
+        CHECK(hipMemcpy(dc, cells2.data(), cells2.size() * 4, hipMemcpyHostToDevice));
+        CHECK(hipMemcpy(dn, cnt2.data(), cnt2.size() * 4, hipMemcpyHostToDevice));
+        CHECK(hipMemset(da, 0xff, q2.size() * 4));
+        strata::kernels::glmb::mla_attn_f16q(dq16, dl, dc, dn, stride2, H2, KV, scale, T2, da, nullptr);
+        strata::kernels::glmb::mla_attn(dq, dl, dc, dn, stride2, H2, KV, scale, T2, db, nullptr);
+        CHECK(hipDeviceSynchronize());
+        if (strata::kernels::glmb::launch_errors()) return 3;
+        CHECK(hipMemcpy(a.data(), da, a.size() * 4, hipMemcpyDeviceToHost));
+        CHECK(hipMemcpy(b.data(), db, b.size() * 4, hipMemcpyDeviceToHost));
+        double num = 0, den = 0, worst_head = 0;
+        for (size_t r = 0; r < (size_t) T2 * H2; ++r) {
+            double rn = 0, rd = 0;
+            for (int j = 0; j < KV; ++j) {
+                const double d = (double) a[r * KV + j] - b[r * KV + j];
+                if (!std::isfinite(a[r * KV + j])) { std::fprintf(stderr, "nonfinite WMMA output row %zu\n", r); return 4; }
+                rn += d * d; rd += (double) b[r * KV + j] * b[r * KV + j];
+            }
+            num += rn; den += rd;
+            worst_head = std::max(worst_head, std::sqrt(rn / std::max(1e-30, rd)));
+        }
+        const double rel = std::sqrt(num / std::max(1e-30, den));
+        std::printf("GLM prefill WMMA attention vs F32 kernel: rel L2 %.3e, worst head %.3e (tolerance 1e-3)\n", rel, worst_head);
+        if (rel > 1e-3 || worst_head > 5e-3) return 6;
+        hipFree(dq16); hipFree(dq); hipFree(dl); hipFree(da); hipFree(db); hipFree(dc); hipFree(dn);
+    }
     std::puts("PASS: empty/masked cells, partial tiles, multiple tiles and head groups");
     return 0;
 }

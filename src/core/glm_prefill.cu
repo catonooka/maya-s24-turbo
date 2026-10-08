@@ -30,6 +30,7 @@
 #include "ggml.h"
 
 #include <cublas_v2.h>
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -114,6 +115,36 @@ KdaBufs carve_kda(Carve& c, size_t T, const Glm5Geometry& g) {
     return b;
 }
 
+#if defined(STRATA_USE_HIP)
+// The MLA batched products in FP16 with every head's tokens contiguous (hipBLAS picks far faster kernels than for the
+// F32 ones); the rocWMMA attention reads q_abs in FP16 too.  Both are on by default; STRATA_GLM_MLA_F16=0 and
+// STRATA_GLM_MLA_WMMA=0 turn them off (WMMA off keeps the F32 attention, F16 off also the F32 products).
+__global__ void pack_heads_f16(const float* __restrict__ src, uint16_t* __restrict__ dst, int T, int H, int K) {
+    const int64_t n = (int64_t) T * H * K;
+    for (int64_t i = blockIdx.x * (int64_t) blockDim.x + threadIdx.x; i < n; i += (int64_t) gridDim.x * blockDim.x) {
+        const int k = (int) (i % K);
+        const int64_t r = i / K;
+        const int t = (int) (r % T), h = (int) (r / T);
+        dst[i] = __half_as_ushort(__float2half(src[((int64_t) t * H + h) * K + k]));
+    }
+}
+__global__ void bf16_to_f16(const uint16_t* __restrict__ src, uint16_t* __restrict__ dst, int64_t n) {
+    for (int64_t i = blockIdx.x * (int64_t) blockDim.x + threadIdx.x; i < n; i += (int64_t) gridDim.x * blockDim.x)
+        dst[i] = __half_as_ushort(__float2half(__uint_as_float((uint32_t) src[i] << 16)));
+}
+bool env_on(const char* name) {
+    const char* v = getenv(name);
+    return !(v && v[0] == '0');
+}
+bool mla_wmma_on() {
+    static const bool on = env_on("STRATA_GLM_MLA_WMMA");
+    return on;
+}
+bool mla_f16_on() {
+    static const bool on = env_on("STRATA_GLM_MLA_F16") || mla_wmma_on();
+    return on;
+}
+#endif
 struct DsaBufs {
     float *qr_raw, *qr, *kv_raw, *ik_raw, *ig_raw, *iw, *q, *iq, *score, *q_abs, *ctx, *attn;
     uint16_t *qr16, *attn16;
@@ -442,7 +473,12 @@ bool Glm5Model::prefill_setup(std::string& err) {
     if (has_dsa)
         w32_elems = std::max<int64_t>({w32_elems, (int64_t) g.n_head * g.kv_lora * g.qk_nope,
                                        (int64_t) g.n_head * g.v_head * g.kv_lora});
-    const int64_t w16_elems = std::max<int64_t>((int64_t) g.d_inner() * E, (int64_t) 2048 * E);
+    int64_t w16_elems = std::max<int64_t>((int64_t) g.d_inner() * E, (int64_t) 2048 * E);
+#if defined(STRATA_USE_HIP)
+    if (has_dsa)   // the MLA products' FP16 copy of wk_b / wv_b
+        w16_elems = std::max<int64_t>({w16_elems, (int64_t) g.n_head * g.kv_lora * g.qk_nope,
+                                       (int64_t) g.n_head * g.v_head * g.kv_lora});
+#endif
     const size_t ws_bytes = (size_t) 16 << 20;
     const size_t fixed = (size_t) w16_elems * 2 + (size_t) w32_elems * 4 + ws_bytes +
                          (size_t) PrefillState::NG * PrefillState::GE * gstride + ((size_t) 64 << 20);
@@ -1347,23 +1383,63 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
                                B.cells, B.n_sel, s);
                 S->mark("dsa_index", s);
                 // q_abs[t][h] = wk_b[h] (kv_lora x qk_nope) . q[t][h]
+#if defined(STRATA_USE_HIP)
+                // FP16 products; q is packed per head into B.attn's space and the context into B.q_abs's (both idle there)
+                const bool f16 = mla_f16_on() && (int64_t) g.qk_nope <= 2 * (int64_t) g.v_head;
+                const bool wmma = f16 && mla_wmma_on();
+                uint16_t* const hp_q = (uint16_t*) B.attn;
+                uint16_t* const hp_c = (uint16_t*) B.q_abs;
+                if (f16) {
+                    bf16_to_f16<<<1024, 256, 0, s>>>(Ly.k_b, S->w16, (int64_t) g.n_head * g.kv_lora * g.qk_nope);
+                    pack_heads_f16<<<2048, 256, 0, s>>>(B.q, hp_q, tn, g.n_head, g.qk_nope);
+                    blas_ck(hipblasGemmStridedBatchedEx(S->blas, HIPBLAS_OP_T, HIPBLAS_OP_N, g.kv_lora, tn, g.qk_nope, &one,
+                                                        S->w16, HIP_R_16F, g.qk_nope, (long long) g.kv_lora * g.qk_nope,
+                                                        hp_q, HIP_R_16F, g.qk_nope, (long long) tn * g.qk_nope, &zero,
+                                                        B.q_abs, wmma ? HIP_R_16F : HIP_R_32F, g.n_head * g.kv_lora,
+                                                        g.kv_lora, g.n_head, HIPBLAS_COMPUTE_32F, HIPBLAS_GEMM_DEFAULT),
+                            "q_abs f16");
+                } else
+#endif
+                {
                 gb::bf16_to_f32(Ly.k_b, S->w32, (int64_t) g.n_head * g.kv_lora * g.qk_nope, s);
                 blas_ck(cublasSgemmStridedBatched(S->blas, CUBLAS_OP_T, CUBLAS_OP_N, g.kv_lora, tn, g.qk_nope, &one,
                                                   S->w32, g.qk_nope, (long long) g.kv_lora * g.qk_nope, B.q,
                                                   g.n_head * g.qk_nope, g.qk_nope, &zero, B.q_abs, g.n_head * g.kv_lora,
                                                   g.kv_lora, g.n_head),
                         "q_abs");
+                }
                 S->mark("dsa_qabs", s);
+#if defined(STRATA_USE_HIP)
+                if (wmma)
+                    gb::mla_attn_f16q((const uint16_t*) B.q_abs, (const uint16_t*) (state_ + dsa_lat_[(size_t) il]), B.cells,
+                                      B.n_sel, g.n_sel_max(), g.n_head, g.kv_lora, 1.0f / std::sqrt((float) g.qk_nope), tn,
+                                      B.ctx, s);
+                else
+#endif
                 gb::mla_attn(B.q_abs, (const uint16_t*) (state_ + dsa_lat_[(size_t) il]), B.cells, B.n_sel, g.n_sel_max(), g.n_head,
                              g.kv_lora, 1.0f / std::sqrt((float) g.qk_nope), tn, B.ctx, s);
                 S->mark("dsa_attn", s);
                 // out[t][h] = wv_b[h] (v_head x kv_lora) . ctx[t][h]
+#if defined(STRATA_USE_HIP)
+                if (f16) {
+                    bf16_to_f16<<<1024, 256, 0, s>>>(Ly.v_b, S->w16, (int64_t) g.n_head * g.v_head * g.kv_lora);
+                    pack_heads_f16<<<2048, 256, 0, s>>>(B.ctx, hp_c, tn, g.n_head, g.kv_lora);
+                    blas_ck(hipblasGemmStridedBatchedEx(S->blas, HIPBLAS_OP_T, HIPBLAS_OP_N, g.v_head, tn, g.kv_lora, &one,
+                                                        S->w16, HIP_R_16F, g.kv_lora, (long long) g.v_head * g.kv_lora,
+                                                        hp_c, HIP_R_16F, g.kv_lora, (long long) tn * g.kv_lora, &zero,
+                                                        B.attn, HIP_R_32F, g.n_head * g.v_head, g.v_head, g.n_head,
+                                                        HIPBLAS_COMPUTE_32F, HIPBLAS_GEMM_DEFAULT),
+                            "mla out f16");
+                } else
+#endif
+                {
                 gb::bf16_to_f32(Ly.v_b, S->w32, (int64_t) g.n_head * g.v_head * g.kv_lora, s);
                 blas_ck(cublasSgemmStridedBatched(S->blas, CUBLAS_OP_T, CUBLAS_OP_N, g.v_head, tn, g.kv_lora, &one,
                                                   S->w32, g.kv_lora, (long long) g.v_head * g.kv_lora, B.ctx,
                                                   g.n_head * g.kv_lora, g.kv_lora, &zero, B.attn, g.n_head * g.v_head,
                                                   g.v_head, g.n_head),
                         "mla out");
+                }
                 gb::f32_to_f16(B.attn, B.attn16, (int64_t) tn * g.n_head * g.v_head, s);
                 hgemm_q(Ly.out, E, g.n_head * g.v_head, B.attn16, g.n_head * g.v_head, mixer, E, tn, 0.0f);
                 if (t0 + tn == T) {
@@ -1371,6 +1447,9 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
                     dump_row("dsa_qr-" + Ls, B.qr, g.q_lora, tn - 1);
                     dump_row("dsa_q-" + Ls, B.q, g.n_head * g.qk_nope, tn - 1);
                     dump_row("dsa_iq-" + Ls, B.iq, g.idx_heads * g.idx_key, tn - 1);
+#if defined(STRATA_USE_HIP)
+                    if (!f16)   // with the FP16 products q_abs holds FP16 / the packed context
+#endif
                     dump_row("pf_qabs-" + Ls, B.q_abs, g.n_head * g.kv_lora, tn - 1);
                     dump_row("pf_ctx-" + Ls, B.ctx, g.n_head * g.kv_lora, tn - 1);
                     dump_row("pf_attn-" + Ls, B.attn, g.n_head * g.v_head, tn - 1);
