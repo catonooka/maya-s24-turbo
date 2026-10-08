@@ -182,8 +182,17 @@ class Tokenizer:
         return parts
 
     def _encode_plain(self, text: str) -> list[int]:
+        # a piece always encodes to the same ids, so they are remembered (a prompt repeats most of its words, and an
+        # agent re-sends the whole conversation every turn); the memo is dropped whole when it grows past ~300K pieces
+        memo = self.__dict__.setdefault("_piece_memo", {})
+        if len(memo) > 300_000:
+            memo.clear()
         out: list[int] = []
         for piece in self._re.findall(text):
+            hit = memo.get(piece)
+            if hit is not None:
+                out.extend(hit)
+                continue
             # The vocab is stored in the BYTE-LEVEL alphabet, so the ignore_merges whole-vocab
             # lookup (llama-vocab.cpp L633-637: an exact hit is emitted whole, only leftovers
             # reach BPE) must run on the byte-MAPPED piece - for ASCII the mapping is the
@@ -191,14 +200,47 @@ class Tokenizer:
             # mapped piece 'Â²' is one token, the raw piece '²' is not in the vocab at all).
             mapped = "".join(BYTE_TO_UNICODE[b] for b in piece.encode("utf-8"))
             if self.ignore_merges and mapped in self.ids:
-                out.append(self.ids[mapped])
-                continue
-            for tok in self._bpe(mapped):
-                i = self.ids.get(tok)
-                if i is None:
-                    raise KeyError("BPE produced a token outside the vocabulary: %r" % tok)
-                out.append(i)
+                ids = (self.ids[mapped],)
+            else:
+                got = []
+                for tok in self._bpe(mapped):
+                    i = self.ids.get(tok)
+                    if i is None:
+                        raise KeyError("BPE produced a token outside the vocabulary: %r" % tok)
+                    got.append(i)
+                ids = tuple(got)
+            memo[piece] = ids
+            out.extend(ids)
         return out
+
+    def _encode_segment(self, text: str) -> list[int]:
+        """_encode_plain, remembering long segments (the text between two special tokens: a message, a tool result):
+        BPE never merges across a special token, so a re-sent conversation's earlier messages encode to the same ids
+        and come from here (LRU, up to ~1M tokens)."""
+        if len(text) < 2048:
+            return self._encode_plain(text)
+        cache = self.__dict__.get("_seg_cache")
+        if cache is None:
+            import collections
+            import threading
+            cache = self.__dict__["_seg_cache"] = collections.OrderedDict()
+            self.__dict__["_seg_lock"] = threading.Lock()
+            self.__dict__["_seg_tokens"] = 0
+        lock = self.__dict__["_seg_lock"]
+        with lock:
+            hit = cache.get(text)
+            if hit is not None:
+                cache.move_to_end(text)
+                return list(hit)
+        ids = self._encode_plain(text)
+        with lock:
+            if text not in cache:
+                cache[text] = tuple(ids)
+                self.__dict__["_seg_tokens"] += len(ids)
+                while self.__dict__["_seg_tokens"] > 1_000_000 and len(cache) > 1:
+                    _, old = cache.popitem(last=False)
+                    self.__dict__["_seg_tokens"] -= len(old)
+        return ids
 
     def _encode_matching(self, text: str, pat) -> list[int]:
         """Encode `text`, emitting any literal `pat` matches as single tokens and BPE-ing the rest.
@@ -208,16 +250,16 @@ class Tokenizer:
         normally - which is why a near-miss like `<|im_star` still costs ordinary tokens.
         """
         if pat is None:
-            return self._encode_plain(text)
+            return self._encode_segment(text)
         out: list[int] = []
         pos = 0
         for m in pat.finditer(text):
             if m.start() > pos:
-                out.extend(self._encode_plain(text[pos:m.start()]))
+                out.extend(self._encode_segment(text[pos:m.start()]))
             out.append(self.special_tokens[m.group(0)])
             pos = m.end()
         if pos < len(text):
-            out.extend(self._encode_plain(text[pos:]))
+            out.extend(self._encode_segment(text[pos:]))
         return out
 
     def encode(self, text: str, parse_special: bool = False) -> list[int]:
