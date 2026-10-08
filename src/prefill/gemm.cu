@@ -145,8 +145,25 @@ std::unique_ptr<HipLtState> create_hipblaslt_state(void* workspace, size_t works
     const auto suffix = arch.find(':');
     if (suffix != std::string::npos) arch.resize(suffix);
 
-    std::string error;
-    if (!state->table.load(path, arch, version, error)) {
+    // A ':'-separated list (one table per architecture, for a layer split across different cards): each device
+    // takes the first table whose header names its architecture and hipBLASLt version.
+    std::string error, list(path);
+    bool loaded = false;
+    for (size_t at = 0; at <= list.size() && !loaded;) {
+        const size_t end = std::min(list.find(':', at), list.size());
+        const std::string one = list.substr(at, end - at);
+        at = end + 1;
+        if (one.empty()) continue;
+        strata::prefill::hipblaslt::TuningTable table;
+        std::string e;
+        if (table.load(one, arch, version, e)) {
+            state->table = std::move(table);
+            loaded = true;
+        } else {
+            error += (error.empty() ? "" : "; ") + one + ": " + e;
+        }
+    }
+    if (!loaded) {
         std::fprintf(stderr, "prefill gemm: %s; using hipBLASEx\n", error.c_str());
         return nullptr;
     }
