@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT))   # run as a script (run-<model>.bat) as well as a module
-from serve.frontend import (ChatTemplate, Event, OutputParser, anthropic_to_messages,  # noqa: E402
+from serve.frontend import (CALL_START, ChatTemplate, Event, OutputParser, anthropic_to_messages,  # noqa: E402
                             effort_kwargs, images_of, openai_to_messages)
 from serve.mcp import McpCancelled, hub_from_config  # noqa: E402
 
@@ -1005,10 +1005,22 @@ class Service:
 
     def prepare(self, messages, tools, kwargs, max_new=None):
         """-> (ids, thinking, max_new). An unset or non-positive max_new (some clients send -1) means "unlimited":
-        the rest of the context."""
+        the rest of the context.  A tool_choice that requires a call ("_force_tool": "" any, else the tool's name)
+        starts the answer with the call's opening, thinking off; that text goes back in kwargs["_prefill"] for run()."""
+        given, force = kwargs, kwargs.get("_force_tool")
+        kwargs = {k: v for k, v in kwargs.items() if k != "_force_tool"}
+        if force is not None and tools:
+            kwargs["enable_thinking"] = False
         if self.default_effort and "reasoning_effort" not in kwargs and "enable_thinking" not in kwargs:
             kwargs = {**kwargs, **effort_kwargs(self.default_effort)}   # the run config's thinking level
         prompt = self.template.render(messages, tools=tools, **kwargs)
+        prefill = ""
+        if force is not None and tools:
+            # GLM's form opens with the tool's name, Qwen's with <function=NAME>
+            glm_calls = "<arg_key>" in self.template.source
+            prefill = CALL_START + (force if glm_calls else "\n" + (f"<function={force}>\n" if force else ""))
+            prompt += prefill
+        given["_prefill"] = prefill
         ids = self.tok.encode(prompt, parse_special=True)
         self.embeddings.path = None
         images = images_of(messages)
@@ -1105,6 +1117,8 @@ class Service:
             req_values = {k: v for k, v in (sampling or {}).items() if v is not None}
             sampling = {**defaults, **req_values}
         parser = OutputParser(thinking=thinking, tools=tools, stream_tools=True)
+        prefill = (sampling or {}).get("_prefill") or ""   # the call's opening, already in the prompt (prepare)
+        pre_events = parser.feed(prefill) if prefill else []
         detok, n, finish = Detokenizer(self.tok), 0, "length"
         held = ""                                       # text that may be the start of a stop marker (stop_texts)
         # the client's own stop strings (OpenAI "stop", Anthropic "stop_sequences"): the answer ends before one.  They
@@ -1146,6 +1160,8 @@ class Service:
                     sampling = {**(sampling or {}), "_think_budget": self.think_budget, "_think_end": self.think_end_id}
                 gen = self.engine.generate(ids, max_new, sampling, cancel, embeddings=emb) if emb else \
                     self.engine.generate(ids, max_new, sampling, cancel)
+                for ev in pre_events:                   # a required call's opening (prepare put it in the prompt)
+                    yield "event", ev
                 try:
                     for t in gen:
                         if t is None:                   # heartbeat while the engine is quiet
@@ -1376,6 +1392,9 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
                          **({"reasoning_content": "".join(reasoning).strip()} if reasoning else {}),
                          "tool_calls": [{"function": {"name": c.name, "arguments": c.arguments}} for c in calls]})
         messages += [{"role": "tool", "content": r} for r in results]
+        # a required tool call applies to the first answer only: after the tools ran, the model answers freely
+        kw = {k: v for k, v in kw.items() if k not in ("_force_tool", "_prefill")}
+        sampling = {k: v for k, v in (sampling or {}).items() if k != "_prefill"}
         ids, thinking, max_new = svc.prepare(messages, tools, kw, max_req)
     yield "done", {**done, "completion_tokens": total, "prompt_tokens": len(ids)}
 
@@ -1957,6 +1976,8 @@ def make_handler(svc: Service):
                 use_mcp = bool(extra)
                 tools = (tools or []) + extra or None
             ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new)
+            if kw.get("_prefill"):                             # a required tool call starts the answer
+                req = {**req, "_prefill": kw["_prefill"]}
             _debug_req("openai", req, messages, tools, max_new, thinking, len(ids))
             cancel = threading.Event()
             run = run_with_mcp(svc, svc.mcp, messages, tools, kw, ids, thinking, max_new, max_req, req, cancel,
@@ -2043,6 +2064,8 @@ def make_handler(svc: Service):
             messages, tools, kw = anthropic_to_messages(req)
             max_new = int(req.get("max_tokens") or 0)                  # 0/-1: the rest of the context
             ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new)
+            if kw.get("_prefill"):                             # a required tool call starts the answer
+                req = {**req, "_prefill": kw["_prefill"]}
             _debug_req("anthropic", req, messages, tools, max_new, thinking, len(ids))
             cancel = threading.Event()
             events = anthropic_events(svc, req, ids, thinking, tools, max_new, cancel)

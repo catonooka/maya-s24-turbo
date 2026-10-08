@@ -235,5 +235,55 @@ class ClientStops(unittest.TestCase):
         self.assertEqual([m["role"] for m in msgs], ["user", "user"])
 
 
+class ForcedToolCalls(unittest.TestCase):
+    """tool_choice "required" / a named function (Anthropic "any" / "tool"): the answer starts with the call - the
+    prompt ends with its opening, thinking off - and the model's continuation is the call (from Strata #790)."""
+
+    BODY = "<parameter=city>\nParis\n</parameter>\n</function>\n</tool_call>"
+
+    def server(self, script):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, script, max_context=8192)
+        svc = Service(engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        httpd = serve(svc, port=0)
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        self.base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        return engine, tok
+
+    post = HttpToolCalls.post
+
+    def test_named(self):
+        engine, tok = self.server(self.BODY)
+        tools = [{"type": "function", "function": TOOLS[0]}]
+        code, b = self.post("/v1/chat/completions", {"model": "m", "tools": tools, "messages": [
+            {"role": "user", "content": "hi"}], "tool_choice": {"type": "function", "function": {"name": "get_weather"}}})
+        self.assertEqual(code, 200, b)
+        self.assertTrue(tok.decode(engine.last_prompt).endswith("<tool_call>\n<function=get_weather>\n"))
+        fn = b["choices"][0]["message"]["tool_calls"][0]["function"]
+        self.assertEqual((fn["name"], json.loads(fn["arguments"])), ("get_weather", {"city": "Paris"}))
+
+    def test_required_and_anthropic_any(self):
+        engine, tok = self.server("<function=get_weather>\n" + self.BODY)
+        tools = [{"type": "function", "function": TOOLS[0]}]
+        code, b = self.post("/v1/chat/completions", {"model": "m", "tools": tools, "tool_choice": "required",
+                                                      "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(b["choices"][0]["finish_reason"], "tool_calls", b)
+        self.assertTrue(tok.decode(engine.last_prompt).endswith("<tool_call>\n"))
+        atools = [{"name": "get_weather", "input_schema": TOOLS[0]["parameters"]}]
+        code, b = self.post("/v1/messages", {"model": "m", "max_tokens": 300, "tools": atools,
+                                             "tool_choice": {"type": "any"},
+                                             "messages": [{"role": "user", "content": "hi"}]})
+        use = [c for c in b["content"] if c["type"] == "tool_use"]
+        self.assertEqual((b["stop_reason"], use[0]["name"], use[0]["input"]), ("tool_use", "get_weather", {"city": "Paris"}))
+
+    def test_auto_adds_nothing(self):
+        engine, tok = self.server("</think>\n\nhello")
+        tools = [{"type": "function", "function": TOOLS[0]}]
+        self.post("/v1/chat/completions", {"model": "m", "tools": tools, "tool_choice": "auto",
+                                           "messages": [{"role": "user", "content": "hi"}]})
+        self.assertFalse(tok.decode(engine.last_prompt).rstrip().endswith("<tool_call>"))
+
+
 if __name__ == "__main__":
     unittest.main()

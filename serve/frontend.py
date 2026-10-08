@@ -176,7 +176,8 @@ def openai_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dict]:
         messages.append(out)
     tools = [t.get("function", t) if isinstance(t, dict) and t.get("type") == "function" else t
              for t in req.get("tools") or []] or None
-    if req.get("tool_choice") == "none":   # the tools stay declared to the client, but none is offered to the model
+    tc = req.get("tool_choice")
+    if tc == "none":   # the tools stay declared to the client, but none is offered to the model
         tools = None
     kwargs = {}
     # OpenAI Chat Completions: "reasoning_effort"; Responses style: "reasoning": {"effort": ...}
@@ -188,6 +189,11 @@ def openai_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dict]:
             kwargs = {"enable_thinking": False}
         elif k == "reasoning_effort" and "enable_thinking" not in kwargs:
             kwargs.update(effort_kwargs(v))
+    # "required" / a named function: the answer starts with the call (Service.prepare; from Strata #790)
+    if tools and tc == "required":
+        kwargs["_force_tool"] = ""
+    elif tools and isinstance(tc, dict) and tc.get("type") == "function" and (tc.get("function") or {}).get("name"):
+        kwargs["_force_tool"] = tc["function"]["name"]
     return _late_system_to_user(messages), tools, kwargs
 
 
@@ -239,6 +245,11 @@ def anthropic_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dic
         kwargs.update(effort_kwargs(effort))
     elif isinstance(thinking, dict) and thinking.get("budget_tokens"):
         kwargs.update(budget_effort(thinking["budget_tokens"]))
+    tc = req.get("tool_choice") if isinstance(req.get("tool_choice"), dict) else {}
+    if tools and tc.get("type") == "any":            # a call is required: the answer starts with it
+        kwargs["_force_tool"] = ""
+    elif tools and tc.get("type") == "tool" and tc.get("name"):
+        kwargs["_force_tool"] = tc["name"]
     return _late_system_to_user(messages), tools, kwargs
 
 
