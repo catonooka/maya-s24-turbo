@@ -972,6 +972,21 @@ def start(cfg_path: Path, a) -> int:
 # prompt path's chunks, and the per-token breakdown ("glm stat": VRAM hits, RAM fetches, disk reads, CPU lane)
 REPORT_LINES = re.compile(r"glm fast:|glm prefill: CUDA|glm split|glm stat|glm prefill: \d|ERR|error|failed|out of memory",
                           re.I)
+STAT_DECODE = re.compile(r"glm stat: decode ([\d.]+) ms/tok")
+
+
+def speed_lines(text) -> list:
+    """The log lines REPORT_LINES picks.  A request that only read a prompt (one token out) has no decode to report:
+    its "glm stat" line keeps only the prompt part, not a meaningless decode speed (96,000 tokens/s, issue #8)."""
+    picked = []
+    for x in text:
+        if not REPORT_LINES.search(x) or "warming the expert tiers" in x:
+            continue
+        m = STAT_DECODE.search(x)
+        if m and float(m.group(1)) < 1.0 and "| prompt " in x:
+            x = "glm stat (prompt only): prompt " + x.split("| prompt ", 1)[1]
+        picked.append(x.strip())
+    return picked
 
 
 def report(version: str) -> int:
@@ -1028,7 +1043,7 @@ def report(version: str) -> int:
         log = Path(cfg.get("log") or c.with_suffix(".log"))
         if log.exists():
             text = log.read_text(encoding="utf-8", errors="replace").splitlines()
-            picked = [x for x in text if REPORT_LINES.search(x) and "warming the expert tiers" not in x]
+            picked = speed_lines(text)
             add(f"Engine log {log.name}: the speed and memory lines (last 80 of {len(picked)})", "\n".join(picked[-80:]))
             add(f"Engine log {log.name}: the last 25 lines", "\n".join(text[-25:]))
         else:
@@ -1121,6 +1136,8 @@ def bench(cfg_path: Path, version: str) -> int:
             if f[0] == "DONE" and float(f[4]) > 0:
                 results.append(("decode", q, int(f[1]) / float(f[4]) * 1000.0))
                 say(f"  decode  {results[-1][2]:6.1f} tokens/s   {q[:60]}")
+        if lens:                                            # warm-up: the first prompt after a start is slower
+            gen(doc[-lens[0]:], 1)                          # (cold caches, issue #8); its opening is not reused below
         for i, n in enumerate(lens):
             f = gen(doc[i * 997:i * 997 + n], 1)            # different openings: nothing reused between them
             if f[0] == "DONE" and float(f[3]) > 0:
@@ -1132,8 +1149,7 @@ def bench(cfg_path: Path, version: str) -> int:
             p.wait(timeout=120)
         except subprocess.TimeoutExpired:
             p.kill()
-    stats = [x.strip() for x in log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-             if REPORT_LINES.search(x) and "warming the expert tiers" not in x]
+    stats = speed_lines(log_path.read_text(encoding="utf-8", errors="replace").splitlines())
     dec = [r[2] for r in results if r[0] == "decode"]
     gpus = ", ".join(f"{g['name']} {g['vram_gb']:.0f} GB" for g in S.gpus()) or "?"
     total, _ = mem_gb()

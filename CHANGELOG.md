@@ -3,6 +3,16 @@
 Every release is on GitHub (Releases) with these notes; every published change moves the last number. Update: `git pull`, then `./setup.sh` (Windows:
 `START-MAYA.bat`) - it recompiles only what changed and starts.
 
+## v1.0.8 - 2026-10-08
+
+`--bench` warms up before it measures prefill, so speed reports compare fairly.
+
+- **`--bench`:** one unmeasured prompt is read before the 2k and 8k prefill measurements. The 2k figure used to be
+  the first prompt after start-up, with the caches still cold, and could read lower than the 8k one (152 vs 238
+  tokens/s on a Titan RTX pair). Reported by @dummerjindabin (#8).
+- **`--bench` and `--report`:** a request that only read a prompt shows just its prefill time in the engine lines,
+  not a meaningless decode speed (it read "96,000 tokens/s").
+
 ## v1.0.7 - 2026-10-08
 
 RTX 20-series cards (Turing) no longer crash on long prompts.
