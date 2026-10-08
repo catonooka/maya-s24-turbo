@@ -25,6 +25,7 @@ import collections
 import contextlib
 import base64
 import hashlib
+import hmac
 import codecs
 import itertools
 import json
@@ -35,6 +36,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -93,6 +95,30 @@ class MockEngine:
 
 class EngineDied(RuntimeError):
     """The engine process ended in the middle of a request (issue #27: on Linux, the out-of-memory killer)."""
+
+
+# A FROZEN engine (Strata #1317).  Silence alone proves nothing: on a slow PC the engine reads a long prompt chunk for
+# minutes without a line.  But one that prints nothing for ENGINE_STALL_S and in that time uses no CPU, reads or writes
+# no disk and leaves its GPUs idle is not slow, it is stuck (a deadlock, a driver stall), and waiting cannot help: it is
+# ended, the request gets an error, and the next request starts it again.  One that is silent but working is never
+# ended.  STRATA_ENGINE_STALL_S sets it (0 = off); it needs psutil (setup installs it), without it nothing is ended.
+def _stall_seconds() -> float:
+    try:
+        return max(0.0, float(os.environ.get("STRATA_ENGINE_STALL_S", "90")))
+    except ValueError:
+        return 90.0
+
+
+ENGINE_STALL_S = _stall_seconds()
+STALL_CPU_SHARE = 0.02      # the engine may use 2% of one core over the window and still count as stuck: its idle
+                            # threads' polls (the GLM service threads sleep 2 ms at a time when quiet); work is cores
+STALL_IO_EPS_B = 1 << 20    # bytes it may read or write in that window
+STALL_GPU_BUSY = 5.0        # a GPU busier than this (%, NVML) is work
+
+
+def engine_frozen(base: tuple[float, int], now: tuple[float, int], window_s: float) -> bool:
+    """True when two (CPU seconds, disk bytes) samples of the engine process, window_s apart, show no work between."""
+    return (now[0] - base[0]) <= max(0.5, STALL_CPU_SHARE * window_s) and (now[1] - base[1]) <= STALL_IO_EPS_B
 
 
 def narrate_start(log_path: str, offset: int, args: list, done: threading.Event, heartbeat=20.0) -> None:
@@ -154,6 +180,8 @@ class StrataEngine:
     (`temperature=F top_p=F top_k=N seed=N`, the engine's own spelling).  An absent temperature keeps the
     engine's default, which is greedy; `temperature=0` means the same thing, so it is not forwarded.
     """
+
+    gpu_busy = None   # () -> bool: the engine's GPUs are working (the service's telemetry); kept across restarts
 
     def __init__(self, exe: str, args: list[str], cwd: str | None = None, log: str | None = None,
                  env: dict | None = None):
@@ -225,6 +253,47 @@ class StrataEngine:
 
     def alive(self) -> bool:
         return not getattr(self, "ended", False) and self.proc.poll() is None
+
+    def _activity(self):
+        """(CPU seconds, disk bytes read + written) the engine process has used so far; None without psutil."""
+        try:
+            import psutil
+            p = psutil.Process(self.proc.pid)
+            t, io = p.cpu_times(), p.io_counters()
+            return t.user + t.system, io.read_bytes + io.write_bytes
+        except Exception:  # noqa: BLE001 - no psutil or no access: nothing to decide on
+            return None
+
+    def _stall_check(self, heard: float, state: dict) -> str | None:
+        """Called while the engine is silent (since `heard`, monotonic): a baseline soon after its last line, and at
+        ENGINE_STALL_S of silence the comparison - no CPU, disk or GPU work in all that time: why it is ended."""
+        t = time.monotonic()
+        age = t - heard
+        if "base" not in state:
+            state["base"], state["t"], state["next"] = self._activity(), t, ENGINE_STALL_S
+            return None
+        if state["base"] is None or age < state["next"]:
+            return None
+        now = self._activity()
+        try:
+            gpu = bool(self.gpu_busy()) if self.gpu_busy is not None else False
+        except Exception:  # noqa: BLE001 - a telemetry hiccup must not decide anything
+            gpu = False
+        if now is not None and not gpu and engine_frozen(state["base"], now, t - state["t"]):
+            return (f"the engine said nothing for {age:.0f} s and used no CPU, disk or GPU in that time, so it was stuck "
+                    "and has been ended (STRATA_ENGINE_STALL_S sets this, 0 = off)")
+        state["base"], state["t"], state["next"] = now, t, age + ENGINE_STALL_S   # working: look again a window later
+        return None
+
+    def _end(self, why: str):
+        """End a stuck engine now; the next request starts it again (Service.run)."""
+        print(f"[strata] {why}", flush=True)
+        self.ended = True
+        try:
+            self.proc.kill()
+            self.proc.wait(timeout=20)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
     def exit_code(self):
         try:
@@ -348,6 +417,7 @@ class StrataEngine:
         except OSError:                                  # the pipe is gone: the engine died (not the client)
             raise EngineDied(f"the engine stopped unexpectedly (exit code {self.exit_code()})") from None
         done = False
+        heard, stall = time.monotonic(), {}               # the last line's time; the stall watchdog's samples
         try:
             while True:
                 try:
@@ -355,11 +425,19 @@ class StrataEngine:
                 except queue.Empty:
                     if cancel.is_set():
                         return
+                    if ENGINE_STALL_S > 0:
+                        why = self._stall_check(heard, stall)
+                        if why:
+                            done = True                   # no STOP and no drain: nothing is listening
+                            self._end(why)
+                            raise EngineDied(why)
                     yield None
                     continue
                 if line is None:
                     done = True
                     raise EngineDied(f"the engine stopped unexpectedly (exit code {self.exit_code()})")
+                heard = time.monotonic()
+                stall.clear()
                 if line.startswith("T "):
                     if cancel.is_set():
                         return
@@ -799,6 +877,14 @@ class Service:
                                                     "prefill_tok_s_mean": self._prefill_tok_s_mean()},
                                        gpu_index=int(getattr(self, "gpu_index", 0) or 0),
                                        gpu_indices=getattr(self, "gpu_indices", None))
+            if isinstance(self.engine, StrataEngine):
+                self.engine.gpu_busy = self._gpu_busy     # the stall watchdog's third sign of work
+
+    def _gpu_busy(self) -> bool:
+        """Any of the engine's GPUs busier than STALL_GPU_BUSY in the telemetry's last sample (one a second)."""
+        now = self.telemetry.now
+        utils = [g.get("util") for g in now.get("gpus") or []] or [now.get("gpu_util")]
+        return any(isinstance(u, (int, float)) and u > STALL_GPU_BUSY for u in utils)
 
     def _tok_s(self):
         """tok/s over the last RATE_WINDOW_S seconds.  Returns 0.0 while nothing is generating."""
@@ -1535,12 +1621,86 @@ def anthropic_collect(events) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------ HTTP
+def body_limit() -> int:
+    """The most a request body may hold, in bytes (it is read into memory): 256 MiB, a million-token conversation with
+    room to spare; STRATA_MAX_BODY_MIB changes it.  A larger one is answered 413 before it is read (Strata #893)."""
+    try:
+        mib = int(os.environ.get("STRATA_MAX_BODY_MIB", "0"))
+    except ValueError:
+        mib = 0
+    return (mib if mib > 0 else 256) << 20
+
+
+class BadBody(Exception):
+    """A request body that cannot be read (a bad Content-Length, a malformed or oversized chunked body)."""
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+
+
+def key_list(value) -> list[str]:
+    """The API keys the server accepts (Strata #1344): llama.cpp's form, several separated by commas ("k1,k2"), or a
+    list in the config ("api_key": ["k1", "k2"], for a key that contains a comma)."""
+    if not value:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(k) for k in value if str(k)]
+    return [k.strip() for k in str(value).split(",") if k.strip()]
+
+
 def make_handler(svc: Service):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.0"                       # SSE ends by closing the connection
+        answer_started = False                              # a malformed request's 400 only replaces an answer not begun
 
         def log_message(self, fmt, *args):
             pass
+
+        def send_response(self, code, message=None):
+            self.answer_started = True
+            super().send_response(code, message)
+
+        def _body(self) -> bytes:
+            """The request body: Content-Length checked first (a bad one is a 400, one over body_limit() a 413 before
+            anything is read), or a Transfer-Encoding: chunked one from a relay that does not buffer it."""
+            limit = body_limit()
+            te = self.headers.get("Transfer-Encoding", "") or ""
+            if te.split(",")[-1].strip().lower() == "chunked":
+                parts, total = [], 0
+                while True:
+                    line = self.rfile.readline(1025)
+                    try:
+                        size = int(line.split(b";", 1)[0].strip(), 16)
+                    except ValueError:
+                        raise BadBody(400, "malformed chunked request body") from None
+                    if size < 0 or not line.endswith(b"\n"):
+                        raise BadBody(400, "malformed chunked request body")
+                    if size == 0:
+                        for _ in range(64):                  # the trailers, up to the blank line
+                            if self.rfile.readline(8193).strip() == b"":
+                                break
+                        return b"".join(parts)
+                    total += size
+                    if total > limit:
+                        self.close_connection = True
+                        raise BadBody(413, f"the request body is larger than {limit >> 20} MiB "
+                                           "(STRATA_MAX_BODY_MIB raises the limit)")
+                    piece = self.rfile.read(size)
+                    if len(piece) != size or self.rfile.read(2) != b"\r\n":
+                        raise BadBody(400, "malformed chunked request body")
+                    parts.append(piece)
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                raise BadBody(400, "invalid Content-Length") from None
+            if length < 0:
+                raise BadBody(400, "invalid Content-Length")
+            if length > limit:
+                self.close_connection = True                 # not read: the connection ends with the answer
+                raise BadBody(413, f"the request body is larger than {limit >> 20} MiB "
+                                   "(STRATA_MAX_BODY_MIB raises the limit)")
+            return self.rfile.read(length)
 
         def _json(self, code, obj):
             body = json.dumps(obj, ensure_ascii=False).encode()
@@ -1555,7 +1715,7 @@ def make_handler(svc: Service):
                 return True
             auth = self.headers.get("Authorization", "")
             given = auth[7:].strip() if auth.lower().startswith("bearer ") else self.headers.get("x-api-key", "")
-            if given == svc.api_key:
+            if given and any(hmac.compare_digest(given.encode(), k.encode()) for k in key_list(svc.api_key)):
                 return True
             self._json(401, {"error": {"type": "authentication_error", "message": "missing or wrong API key"}})
             return False
@@ -1666,24 +1826,34 @@ def make_handler(svc: Service):
             if not self._authorized():
                 return
             path = self.path.split("?")[0].rstrip("/")   # issue #55: Claude Code posts /v1/messages?beta=true
-            if path == "/settings":
-                self._settings()
-                return
-            if path == "/v1/strata/cancel":
-                self._job_cancel()
-                return
             try:
-                req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+                if path == "/settings":
+                    self._settings()
+                    return
+                if path == "/v1/strata/cancel":
+                    self._job_cancel()
+                    return
+                req = json.loads(self._body() or b"{}")
+                if not isinstance(req, dict):
+                    raise ValueError("the request body must be a JSON object")
                 if path == "/v1/chat/completions":
                     self._openai(req)
                 elif path == "/v1/messages":
                     self._anthropic(req)
                 else:
                     self._json(404, {"error": {"message": "not found"}})
+            except BadBody as e:
+                self._json(e.status, {"error": {"type": "invalid_request_error", "message": str(e)}})
             except ValueError as e:
                 self._json(400, {"error": {"type": "invalid_request_error", "message": str(e)}})
             except EngineDied as e:                          # before the answer started (not streamed)
                 self._json(503, {"error": {"type": "server_error", "message": f"{e}; the next request restarts it"}})
+            except (KeyError, TypeError, AttributeError, IndexError) as e:
+                # a field of the wrong shape (Strata: a 400 with the traceback in the log, not a dropped connection)
+                traceback.print_exc()
+                if not self.answer_started:
+                    self._json(400, {"error": {"type": "invalid_request_error",
+                                               "message": f"malformed request ({type(e).__name__}: {e})"}})
 
         def _props(self):
             model = parse_qs(urlsplit(self.path).query).get("model", [svc.model])[0]
@@ -1724,7 +1894,7 @@ def make_handler(svc: Service):
 
         def _settings(self):
             # They change what every client gets, so only the app's own page may set them
-            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            body = self._body()
             if not self._own_page("settings can be changed"):
                 return
             try:
@@ -1826,7 +1996,7 @@ def make_handler(svc: Service):
             self._stream_job(job, start)
 
         def _job_cancel(self):
-            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            body = self._body()
             if not self._own_page("answers can be stopped"):
                 return
             try:
@@ -1875,6 +2045,17 @@ class Server(ThreadingHTTPServer):
     # On Windows SO_REUSEADDR lets a second server bind a port that is already serving, and requests then land on
     # either one (a forgotten second start of run-<model>.bat).  Without it the second start fails loudly instead.
     allow_reuse_address = os.name != "nt"
+    # socketserver listens with a backlog of 5: an agent or a load of clients opening 30-40 connections at once got
+    # "connection reset by peer" on the first ones (Strata 0.1.41); the requests wait in the server's queue instead
+    # (STRATA_HTTP_BACKLOG overrides it)
+    try:
+        request_queue_size = max(5, int(os.environ.get("STRATA_HTTP_BACKLOG") or 256))
+    except ValueError:
+        request_queue_size = 256
+
+    def handle_error(self, request, client_address):
+        if not isinstance(sys.exc_info()[1], ConnectionError):   # a client that hangs up needs no stack trace
+            super().handle_error(request, client_address)
 
 
 def warn_tight_ram(arena_mib) -> None:
@@ -2042,7 +2223,8 @@ def main() -> int:
                     help="clamp max_tokens to the remaining context instead of rejecting the request "
                          "(default: reject with 400, like llama.cpp; also \"fit_max_tokens\": true in the config)")
     ap.add_argument("--api-key", default=os.environ.get("STRATA_API_KEY", ""),
-                    help="require this key on /v1/* (Authorization: Bearer ... or x-api-key); also $STRATA_API_KEY")
+                    help="require this key on /v1/* (Authorization: Bearer ... or x-api-key); several separated by "
+                         "commas; also $STRATA_API_KEY")
     ap.add_argument("--mcp-config", help="a JSON file with MCP servers in Claude Desktop's format ({\"mcpServers\": "
                                          "{...}}); the web app's chat can use their tools (also \"mcp_servers\" in "
                                          "the config)")

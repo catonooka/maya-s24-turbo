@@ -939,5 +939,105 @@ class TimingsDrafts(unittest.TestCase):
         self.assertNotIn("draft_n", request_timings(24, 20, base))
         self.assertIsNone(request_timings(24, 20, {}))
 
+
+class StallWatchdog(unittest.TestCase):
+    """A silent engine is ended only when it also used no CPU, disk or GPU in the window (from Strata #1317)."""
+
+    def check(self, first, second, gpu=False):
+        e = StrataEngine.__new__(StrataEngine)            # no process: its activity samples are given
+        samples = iter([first, second])
+        e._activity = lambda: next(samples)
+        e.gpu_busy = lambda: gpu
+        state = {}
+        self.assertIsNone(e._stall_check(time.monotonic(), state))           # the baseline, soon after a line
+        return e._stall_check(time.monotonic() - 1000.0, state), state       # long silent since then
+
+    def test_stuck(self):
+        why, _ = self.check((10.0, 1000), (10.2, 1000 + 4096))
+        self.assertIn("stuck", why)
+
+    def test_working(self):
+        for second in ((30.0, 0), (10.0, 50 << 20)):                        # CPU time, disk bytes
+            why, state = self.check((10.0, 0), second)
+            self.assertIsNone(why, second)
+            self.assertEqual(state["base"], second)                          # the next window starts here
+        self.assertIsNone(self.check((10.0, 0), (10.0, 0), gpu=True)[0])
+
+    def test_without_psutil_nothing_is_ended(self):
+        self.assertIsNone(self.check(None, None)[0])
+
+
+class RequestBodies(unittest.TestCase):
+    """Bodies refused before they are read, a chunked body, a malformed one, several API keys and the listen backlog
+    (from Strata 0.1.41)."""
+
+    MSG = json.dumps({"model": "m", "messages": [{"role": "user", "content": "hi"}]}).encode()
+
+    @classmethod
+    def setUpClass(cls):
+        tok = ByteTokenizer()
+        cls.svc = Service(RecordingEngine(tok, "</think>\n\nhello", max_context=CTX), tok,
+                          ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        cls.httpd = serve(cls.svc, port=0)
+        cls.port = cls.httpd.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+
+    def raw(self, headers: str, body: bytes = b"") -> tuple[int, dict]:
+        """One POST written by hand (headers urllib would not send) -> (status, JSON answer)."""
+        import socket
+        head = ("POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n" + headers +
+                "\r\n").encode()
+        with socket.create_connection(("127.0.0.1", self.port), timeout=30) as s:
+            s.sendall(head + body)
+            data = b""
+            while True:
+                chunk = s.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+        status, _, rest = data.partition(b"\r\n\r\n")
+        return int(status.split()[1]), json.loads(rest or b"{}")
+
+    def test_a_body_over_the_limit_is_refused_unread(self):
+        code, b = self.raw(f"Content-Length: {300 << 20}\r\n")
+        self.assertEqual(code, 413)
+        self.assertIn("MiB", b["error"]["message"])
+
+    def test_a_bad_content_length(self):
+        self.assertEqual(self.raw("Content-Length: abc\r\n")[0], 400)
+        self.assertEqual(self.raw("Content-Length: -5\r\n")[0], 400)
+
+    def test_a_chunked_body(self):
+        body = b"%x\r\n%s\r\n0\r\n\r\n" % (len(self.MSG), self.MSG)
+        code, b = self.raw("Transfer-Encoding: chunked\r\n", body)
+        self.assertEqual(code, 200, b)
+        self.assertIn("hello", json.dumps(b))
+        self.assertEqual(self.raw("Transfer-Encoding: chunked\r\n", b"zz\r\nab\r\n0\r\n\r\n")[0], 400)
+
+    def test_a_malformed_body_is_a_400(self):
+        self.assertEqual(self.raw("Content-Length: 2\r\n", b"[]")[0], 400)
+        bad = json.dumps({"model": "m", "messages": [{"role": "user", "content": {"no": "list"}}, 7]}).encode()
+        code, b = self.raw(f"Content-Length: {len(bad)}\r\n", bad)
+        self.assertEqual(code, 400, b)
+
+    def test_several_api_keys(self):
+        self.svc.api_key = "k1, k2"
+        try:
+            for key, want in (("k1", 200), ("k2", 200), ("k3", 401), ("k1, k2", 401)):
+                code, _ = self.raw(f"Authorization: Bearer {key}\r\nContent-Length: {len(self.MSG)}\r\n", self.MSG)
+                self.assertEqual(code, want, key)
+            self.svc.api_key = ["a,b"]                     # a list in the config: a key with a comma in it
+            code, _ = self.raw(f"Authorization: Bearer a,b\r\nContent-Length: {len(self.MSG)}\r\n", self.MSG)
+            self.assertEqual(code, 200)
+        finally:
+            self.svc.api_key = ""
+
+    def test_the_listen_backlog(self):
+        self.assertGreaterEqual(self.httpd.request_queue_size, 256)
+
 if __name__ == "__main__":
     unittest.main()
