@@ -3,6 +3,29 @@
 Every release is on GitHub (Releases) with these notes; every published change moves the last number. Update: `git pull`, then `./setup.sh` (Windows:
 `START-MAYA.bat`) - it recompiles only what changed and starts.
 
+## v1.0.13 - 2026-10-08
+
+Tool calls work: GLM-5.3-Flash's function calls reach your apps and coding agents instead of ending the request.
+
+- **Tool calls (issue #5, reported by @xldistance):** GLM-5.x writes its calls in its own form
+  (`<tool_call>NAME<arg_key>...</arg_key><arg_value>...</arg_value></tool_call>`), and the server read only another
+  model family's form, so every tool call ended the request with "malformed tool call" - in the chat's tools, MCP,
+  and every OpenAI or Anthropic client (Claude Code, agents). Both forms are read now, whole and streamed (the call's
+  name as soon as it is written, then its arguments piece by piece), and checked end to end: the call, its result
+  in the next turn, both APIs.
+- **A call only quoted in the answer stays text:** a `<tool_call>` inside a code block or inline code (an example the
+  model shows) is never run - an example `rm -rf` must not reach your shell (from Strata #1058).
+- **A stuck engine is restarted:** an engine that says nothing for 90 s and in that time uses no CPU, disk or GPU is
+  ended, the request gets an error, and the next request starts it again; a silent engine that is working (a long
+  prompt on a slow PC) is never ended (`STRATA_ENGINE_STALL_S`, `0` = off; from Strata #1317).
+- **The server, from Strata 0.1.41:** up to 256 connections wait to be accepted (an agent opening many at once got
+  "connection reset"; `STRATA_HTTP_BACKLOG`); a request body is checked before it is read (a bad Content-Length is a
+  400, one over 256 MiB a 413 - `STRATA_MAX_BODY_MIB`), relays' chunked bodies are read, and a malformed request is
+  a 400 with its traceback in the server log instead of a dropped connection; `--api-key` takes several keys
+  (`KEY1,KEY2`, or a list in the config).
+- `--env` now also reaches these server settings (the rest still go to the engine).
+- Checked: 92 server tests (12 new for tool calls, 10 for the rest); the engine is unchanged from v1.0.12.
+
 ## v1.0.12 - 2026-10-08
 
 Maya runs on up to 16 GPUs and reads long prompts much faster on one GPU, contributed by @needmorevram.

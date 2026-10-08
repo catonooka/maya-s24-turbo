@@ -139,7 +139,7 @@ It takes 20-40 minutes plus the download:
 | `--no-vision` | text only: no image encoder |
 | `--gpu N` / `--gpus 0,1,2,3` | one GPU, or several (up to 16) that split the model's layers |
 | `--context N` | context length in tokens: 8192, 32768 (default), 65536, 131072 |
-| `--port N`, `--host 0.0.0.0 --api-key KEY` | another port; reachable from your network (always set a key) |
+| `--port N`, `--host 0.0.0.0 --api-key KEY` | another port; reachable from your network (always set a key; several: `KEY1,KEY2`) |
 | `--env KEY=VALUE` | an engine setting kept in the config (see [Tuning](#tuning)) |
 | `--host-compiler g++-12` | when your g++ is newer than your CUDA accepts ("unsupported GNU version") |
 | `--rebuild`, `--repack` | compile the engine / build the pack again |
@@ -152,7 +152,8 @@ It takes 20-40 minutes plus the download:
   and your GPU/CPU/RAM.
 - **Your apps and coding agents:** an "OpenAI-compatible" provider with the base URL `http://127.0.0.1:8080/v1`
   (any model name; any API key unless you set one). Anthropic's API: `http://127.0.0.1:8080/v1/messages`
-  (Claude Code: `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`).
+  (Claude Code: `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`). Tool calls (function calling) work through both, streamed
+  as the model writes them; a call the model only quotes in a code block stays text.
 - **Thinking:** off, low, medium (the default) or high, in the chat menu or the request's "reasoning effort". A
   reasoning block is capped at 32K tokens, then the answer follows (`"thinking_budget"` in the config; 0 = no cap).
 - **Pictures:** attach one in the chat, or send `image_url` parts (OpenAI) / `image` blocks (Anthropic). The image
@@ -160,7 +161,7 @@ It takes 20-40 minutes plus the download:
   the model keeps its whole GPU cache the rest of the time. On the first start Maya measures how much memory the
   encoder needs on your GPU and picks the largest picture size that fits it well (`vision-memory.json`).
 - **From another device:** `./maya.sh --setup --host 0.0.0.0 --api-key <secret>`. Always set a key.
-- **One request at a time:** others wait their turn.
+- **One request at a time:** others wait their turn (up to 256 connections queue; `STRATA_HTTP_BACKLOG`).
 
 ## Tuning
 
@@ -218,6 +219,8 @@ These settings change what the engine chooses (put them in the config with `--en
 | `STRATA_GLM_DROP_CACHE` | on with 2+ NUMA nodes | before the RAM tier is pinned, the model files' clean page cache is dropped (the engine reads experts with O_DIRECT): a cached GGUF filling one node made the interleaved tier land 78% on the other, and the CPU lane read one socket's memory; `0` = keep it |
 | `STRATA_GLM_PROFILE_WEIGHT` | 1 | the weight of the pack's routing profile (`expert_counts.txt`) against your usage file in the start-up order of the expert tiers; `0` = your usage only |
 | `STRATA_GLM_TIMING`, `STRATA_GLM_POOL_STATS` | off | `1` = timing and cache statistics in the engine log |
+| `STRATA_ENGINE_STALL_S` | 90 | the server: an engine silent this long that also used no CPU, disk or GPU in that time is stuck - it is ended, the request gets an error and the next request starts it again (a silent engine that is working is never ended); `0` = off |
+| `STRATA_HTTP_BACKLOG`, `STRATA_MAX_BODY_MIB` | 256, 256 | the server: connections that may wait to be accepted, and the largest request body in MiB (a larger one gets a 413 before it is read) |
 
 **A routing profile for a GGUF of your own.** At start the engine fills VRAM with each layer's most used experts:
 your usage file (above) blended with the pack's profile, `expert_counts.txt` / `expert_prior.txt`. To make one, start
