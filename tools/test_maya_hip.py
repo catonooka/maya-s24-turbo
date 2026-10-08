@@ -110,6 +110,16 @@ class HipSetupTests(unittest.TestCase):
         self.assertEqual(env["STRATA_GLM_RAM_HEADROOM_GB"], "16")
         self.assertEqual(env["STRATA_HIPBLASLT_TUNING"], str(tables / "gfx1100-glm-hipblaslt-100202.txt"))
 
+    def test_gpus_with_an_apu_is_rejected(self):
+        self.gpus.append({"index": 3, "arch": "gfx1151", "vendor": "amd", "name": "Radeon 8060S", "vram_gb": 4})
+        self.a.gpu = None
+        self.a.gpus = "1,3"
+        with self.assertRaises(SystemExit):
+            maya.check_pc(self.a)
+        self.a.gpus = None
+        self.a.gpu = 3
+        self.assertEqual(maya.check_pc(self.a)["gpus"], [self.gpus[3]])
+
     def test_strix_halo_defaults_use_system_ram_not_vram(self):
         self.gpus.append({"index": 3, "arch": "gfx1151", "vendor": "amd",
                           "name": "AMD Radeon (gfx1151)", "vram_gb": 0.5})
