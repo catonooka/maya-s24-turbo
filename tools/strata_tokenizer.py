@@ -145,6 +145,21 @@ class Tokenizer:
 
     # -------------------------------------------------------------- constructors
     @classmethod
+    def from_dir(cls, path) -> "Tokenizer":
+        """A pack's tokenizer/ directory (extract() below), with the pre-tokenizer its tokenizer.json names: built
+        without it, a GLM pack was split the qwen35 way - every number one digit a token where GLM groups up to three
+        (#27: numbers came back garbled in long prompts).  No tokenizer.json (never written by extract): qwen35."""
+        t = pathlib.Path(path)
+        vocab = json.loads((t / "vocab.json").read_text(encoding="utf-8"))
+        tokens = [None] * len(vocab)
+        for s, i in vocab.items():
+            tokens[i] = s
+        meta = json.loads((t / "tokenizer.json").read_text(encoding="utf-8")) if (t / "tokenizer.json").exists() else {}
+        types = json.loads((t / "token_type.json").read_text()) if (t / "token_type.json").exists() else None
+        return cls(tokens, (t / "merges.txt").read_text(encoding="utf-8").split("\n"), types,
+                   meta.get("pre", "qwen35"), meta.get("special_ids") or None)
+
+    @classmethod
     def from_gguf(cls, path) -> "Tokenizer":
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
         from gguf_reader import GGUFFile

@@ -1628,12 +1628,7 @@ def bench(cfg_path: Path, version: str) -> int:
     tp = Path(cfg.get("tokenizer") or (pack / "tokenizer" if pack else ""))
     if not (tp / "vocab.json").exists():
         fail(f"{cfg_path.name}: the tokenizer is missing ({tp})", f"run {ME} --setup to repair it")
-    vocab = json.loads((tp / "vocab.json").read_text(encoding="utf-8"))
-    names = [None] * len(vocab)
-    for t, i in vocab.items():
-        names[i] = t
-    tok = ST.Tokenizer(names, (tp / "merges.txt").read_text(encoding="utf-8").split("\n"),
-                       json.loads((tp / "token_type.json").read_text()))
+    tok = ST.Tokenizer.from_dir(tp)
     ctx = int(args[args.index("--max-context") + 1]) if "--max-context" in args[:-1] else 32768
     text = "\n\n".join(p.read_text(encoding="utf-8", errors="replace")
                        for p in [ROOT / "README.md"] + sorted((ROOT / "docs").glob("*.md")) +

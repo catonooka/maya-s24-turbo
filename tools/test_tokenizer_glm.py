@@ -92,6 +92,33 @@ class GlmPatternTest(unittest.TestCase):
         self.assertNotEqual(len(tk.encode("hello")), 1)
 
 
+class FromDir(unittest.TestCase):
+    """#27: the server built its tokenizer from a pack's tokenizer/ without the pre-tokenizer, so a GLM pack split
+    numbers the qwen35 way (one digit a piece).  from_dir reads it from tokenizer.json."""
+
+    def write(self, meta):
+        import json
+        import tempfile
+        d = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        tokens, _ = tiny_vocab()
+        (d / "vocab.json").write_text(json.dumps({t: i for i, t in enumerate(tokens)}), encoding="utf-8")
+        (d / "merges.txt").write_text("h e", encoding="utf-8")   # a pack's file always has merges
+        (d / "token_type.json").write_text(json.dumps([1] * len(tokens)))
+        if meta is not None:
+            (d / "tokenizer.json").write_text(json.dumps(meta), encoding="utf-8")
+        return d
+
+    def test_glm_pack_groups_digits(self):
+        tk = Tokenizer.from_dir(self.write({"pre": "glm4", "special_ids": {"tokenizer.ggml.eos_token_id": 3}}))
+        self.assertEqual(tk.pre, "glm4")
+        self.assertEqual(tk.special_ids, {"tokenizer.ggml.eos_token_id": 3})
+        self.assertEqual(tk._re.findall("504 9876"), ["504", " ", "987", "6"])
+
+    def test_without_tokenizer_json_stays_qwen35(self):
+        self.assertEqual(Tokenizer.from_dir(self.write(None)).pre, "qwen35")
+
+
 class PreSchemeGuard(unittest.TestCase):
     def test_unknown_scheme_refused(self):
         with self.assertRaises(ValueError):
