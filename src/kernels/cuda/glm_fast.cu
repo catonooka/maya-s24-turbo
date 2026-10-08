@@ -1813,6 +1813,8 @@ struct RouteArgs {
     int n_ahead;
     int skip_miss;              // experts not in VRAM are left out (no fetch, no wait): the draft block
     unsigned long long cpu_plan;   // the CPU LANE: of f RAM-tier experts, (plan >> 4 f) & 15 go to the host (0: off)
+    int promote_min;            // STRATA_GLM_PROMOTE_MIN: keep a fetched expert only when its aged route count
+                                // clears this; 0 keeps the old rule (a spare, if one is free)
 };
 
 __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_constant__ RouteArgs a) {
@@ -1951,9 +1953,11 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
                     src = 0ull;
                 } else {
                     // not in VRAM: land it in a spare slot of this layer (it becomes resident: the table says so
-                    // from here on) or, with none left, in this entry's scratch slot
+                    // from here on) or, with none left, in this entry's scratch slot.  promote_min > 1: keep it
+                    // only when its aged route count clears the bar - one-offs take scratch and do not churn the tier
+                    const unsigned int rc = a.d.dcnt != nullptr ? a.d.dcnt[key] : 0u;
                     while (next_spare < kSpares && spares[next_spare] == 0ull) ++next_spare;
-                    if (next_spare < kSpares) {
+                    if (next_spare < kSpares && (a.promote_min <= 1 || rc >= (unsigned int) a.promote_min)) {
                         ptr = spares[next_spare];
                         spares[next_spare] = 0ull;
                         a.d.tab[key] = ptr;
@@ -2916,10 +2920,10 @@ void moe_route(const float* logits, const float* bias, int n_expert, int k, floa
                const float* x, int n_embd, const MoeDev& d, const float* sh_gate, const float* sh_up, float sh_limit,
                int n_ff_sh, void* sh_hq, cudaStream_t s, const float* pred_logits, const float* pred_bias,
                int max_prefetch, const float* ahead_logits, const float* const* ahead_bias, int n_ahead,
-               bool skip_miss, unsigned long long cpu_plan) {
+               bool skip_miss, unsigned long long cpu_plan, int promote_min) {
     RouteArgs a{logits, bias, n_expert, k, w_scale, norm_w ? 1 : 0, layer, x, n_embd, d,
                 sh_gate, sh_up, sh_limit, n_ff_sh, (block_q8_1*) sh_hq, pred_logits, pred_bias, max_prefetch,
-                ahead_logits, {}, 0, skip_miss ? 1 : 0, d.cpu_seq != nullptr ? cpu_plan : 0ull};
+                ahead_logits, {}, 0, skip_miss ? 1 : 0, d.cpu_seq != nullptr ? cpu_plan : 0ull, promote_min};
     if (ahead_logits != nullptr && ahead_bias != nullptr && n_expert <= 512) {
         a.n_ahead = std::min(n_ahead, kAhead);
         for (int i = 0; i < a.n_ahead; ++i) a.ahead_bias[i] = ahead_bias[i];

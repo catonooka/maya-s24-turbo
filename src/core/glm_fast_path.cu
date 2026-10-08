@@ -2706,11 +2706,17 @@ bool Glm5Model::fast_moe(int il, bool& pf_pending, std::string& err) {
     md.pf_n = F->pf_n_buf[il & 1];
     // the CPU lane splits this layer's RAM-tier experts when the CPU has a dot product for its types
     const bool lane = F->cpu_plan != 0ull && F->cpu_fmt[(size_t) il].n_ff > 0;
+    // STRATA_GLM_PROMOTE_MIN=<n>: a fetched expert is kept in VRAM only when its aged route count clears n.
+    // Unset or <= 1: the old rule (keep it whenever a spare is free).
+    static const int promote_min = [] {
+        const char* v = getenv("STRATA_GLM_PROMOTE_MIN");
+        return v ? std::max(0, std::atoi(v)) : 0;
+    }();
     gf::moe_route(F->rlog, Ly.router_bias, g.n_expert, g.n_exp_used, g.w_scale, g.norm_w != 0, il, F->x,
                   g.n_embd, md, F->sh_g, F->sh_u, g.swiglu_shexp, FFs, F->sh_hq, s,
                   pred ? F->plog : nullptr, pred ? F->L[(size_t) il + 1].router_bias : nullptr,
                   pred ? F->max_pf : 0, n_ah > 0 ? F->alog : nullptr, ah_bias, n_ah, il == mtp_il_ && mtp_skip_miss(),
-                  lane ? F->cpu_plan : 0ull);
+                  lane ? F->cpu_plan : 0ull, promote_min);
     if (F->prof_on) F->mark("moe_route");
     ++F->expected;
     if (pred && F->max_pf > 0) {
