@@ -26,6 +26,13 @@ enabled by setup until the separate unified-memory work is validated.
 Configs are named `maya-<quant>-hip.json` and
 select the AMD device through `HIP_VISIBLE_DEVICES`.
 
+`--bench` and `--report` work on HIP: `./maya.sh --backend hip --bench` uses
+`build-hip/strata` and the config's GPU order and environment; run it with Maya
+stopped. `./maya.sh --backend hip --report` includes AMD GPU details from
+`rocm-smi` or `amd-smi` when available (KFD topology otherwise), the ROCm path
+and version, and the engine's speed lines. Add `--config /path/to/maya-hip.json`
+to either command to select a particular installed config.
+
 The HIP config starts with an 8K context when requested above, 3 GiB of GPU
 headroom, and 16 GiB of system-RAM headroom. The engine sizes the prompt chunk
 from its prompt-memory budget. The example additionally caps the pinned expert
