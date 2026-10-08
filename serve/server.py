@@ -1621,6 +1621,13 @@ def anthropic_collect(events) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------ HTTP
+def _backlog() -> int:
+    try:
+        return max(5, int(os.environ.get("STRATA_HTTP_BACKLOG") or 256))
+    except ValueError:
+        return 256
+
+
 def body_limit() -> int:
     """The most a request body may hold, in bytes (it is read into memory): 256 MiB, a million-token conversation with
     room to spare; STRATA_MAX_BODY_MIB changes it.  A larger one is answered 413 before it is read (Strata #893)."""
@@ -2048,14 +2055,26 @@ class Server(ThreadingHTTPServer):
     # socketserver listens with a backlog of 5: an agent or a load of clients opening 30-40 connections at once got
     # "connection reset by peer" on the first ones (Strata 0.1.41); the requests wait in the server's queue instead
     # (STRATA_HTTP_BACKLOG overrides it)
-    try:
-        request_queue_size = max(5, int(os.environ.get("STRATA_HTTP_BACKLOG") or 256))
-    except ValueError:
-        request_queue_size = 256
+    request_queue_size = _backlog()
 
     def handle_error(self, request, client_address):
         if not isinstance(sys.exc_info()[1], ConnectionError):   # a client that hangs up needs no stack trace
             super().handle_error(request, client_address)
+
+
+SERVER_ENV = ("STRATA_ENGINE_STALL_S", "STRATA_HTTP_BACKLOG", "STRATA_MAX_BODY_MIB")
+
+
+def apply_server_env(cfg: dict) -> None:
+    """The config's "env" entries this server reads itself (`--env` puts every setting there; the rest go to the
+    engine): in effect before it starts."""
+    global ENGINE_STALL_S
+    for k in SERVER_ENV:
+        v = (cfg.get("env") or {}).get(k)
+        if v is not None:
+            os.environ[k] = str(v)
+    ENGINE_STALL_S = _stall_seconds()
+    Server.request_queue_size = _backlog()
 
 
 def warn_tight_ram(arena_mib) -> None:
@@ -2230,6 +2249,7 @@ def main() -> int:
                                          "the config)")
     a = ap.parse_args()
     cfg = json.loads(Path(a.config).read_text(encoding="utf-8-sig")) if a.config else {}   # Notepad adds a BOM
+    apply_server_env(cfg)
     if a.gpu is not None:
         cfg["gpu"] = int(a.gpu) if a.gpu.strip().isdigit() else a.gpu
     a.host = a.host or cfg.get("host") or "127.0.0.1"   # issue #26: the run scripts pass no --host, the config can

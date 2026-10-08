@@ -966,6 +966,20 @@ class StallWatchdog(unittest.TestCase):
     def test_without_psutil_nothing_is_ended(self):
         self.assertIsNone(self.check(None, None)[0])
 
+    def test_the_config_env_reaches_the_server(self):
+        import serve.server as S
+        saved = {k: os.environ.get(k) for k in S.SERVER_ENV}
+        try:
+            S.apply_server_env({"env": {"STRATA_ENGINE_STALL_S": "0", "STRATA_HTTP_BACKLOG": "64"}})
+            self.assertEqual((S.ENGINE_STALL_S, S.Server.request_queue_size), (0.0, 64))
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            S.apply_server_env({})
+
 
 class RequestBodies(unittest.TestCase):
     """Bodies refused before they are read, a chunked body, a malformed one, several API keys and the listen backlog
