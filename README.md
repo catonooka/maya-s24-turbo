@@ -1,7 +1,7 @@
 <h1 align="center">Project Maya</h1>
 
-<p align="center"><b>Run GLM-5.3-Flash - a 321-billion-parameter AI model - on your own NVIDIA GPU(s)</b><br>
-One or two NVIDIA GPUs · Linux, Windows (experimental) · chat in the browser, pictures, OpenAI- and
+<p align="center"><b>Run GLM-5.3-Flash - a 321-billion-parameter AI model - on your own GPU(s)</b><br>
+One or two NVIDIA GPUs, AMD (experimental) · Linux, Windows (experimental) · chat in the browser, pictures, OpenAI- and
 Anthropic-compatible API</p>
 
 <p align="center"><a href="https://buymeacoffee.com/peasantsmith">☕ Support Project Maya - buy me a coffee</a></p>
@@ -67,10 +67,10 @@ Measured with Maya-S. A token is about ¾ of a word. `./maya.sh --bench` measure
 
 | | |
 | --- | --- |
-| **GPU** | NVIDIA, compute capability 7.0 or newer (V100 and newer); one GPU, or two that share the model (each holds half of the layers). The engine fills whatever VRAM you have with the most-used experts: more VRAM is faster. Measured: 1 and 2x V100 32 GB. |
+| **GPU** | NVIDIA, compute capability 7.0 or newer (V100 and newer); one GPU, or two that share the model (each holds half of the layers). The engine fills whatever VRAM you have with the most-used experts: more VRAM is faster. Measured: 1 and 2x V100 32 GB; by users: 2x TITAN RTX (above). **AMD (experimental):** RX 7900 XT / XTX and Radeon AI PRO R9700 / RX 9070, one GPU, text only ([docs/AMD_MAYA.md](docs/AMD_MAYA.md)). |
 | **RAM** | It runs with **32 GB** (the machine in the table above has 30 GB). More RAM keeps more experts close and is faster; what does not fit is read from the SSD while it answers. |
 | **Disk** | **~100 GB free on a fast NVMe SSD** (the model is 96.5 GB, its pictures encoder 1.1 GB, and the engine reads from the model while it answers). Not a hard disk. |
-| **System** | Linux (x86-64, CPU with AVX2), NVIDIA driver, CUDA toolkit 12.x (CUDA 13 can be used for Turing and newer, but it no longer compiles for Volta/V100), g++, Python 3.10+. Windows 10/11: experimental, with Visual Studio 2022 Build Tools instead of g++ ([Windows](#windows)). Not WSL2. |
+| **System** | Linux (x86-64, CPU with AVX2), NVIDIA driver, CUDA toolkit 12.x (CUDA 13 can be used for Turing and newer, but it no longer compiles for Volta/V100), g++, Python 3.10+. Windows 10/11: experimental, with Visual Studio 2022 Build Tools instead of g++ ([Windows](#windows)). Not WSL2. AMD: Linux with ROCm 7 instead of the NVIDIA driver and CUDA. |
 
 The installer checks all of this and prints the exact command for anything missing. It installs nothing
 system-wide by itself.
@@ -80,7 +80,8 @@ system-wide by itself.
 **You need:** an NVIDIA GPU (V100 / RTX 20 or newer) on Linux (Windows: [experimental](#windows)), ~100 GB free on
 an NVMe SSD, a current NVIDIA driver
 and the CUDA toolkit (12.x for a V100; the engine is compiled for your GPU). Everything else - Python, the engine, the
-model - is set up for you, the way Strata does it.
+model - is set up for you, the way Strata does it. On an AMD RX 7900 XT / XTX or R9700 / RX 9070 (experimental, Linux,
+ROCm 7): `./maya.sh --backend hip --gpu 0 --check` first, then [docs/AMD_MAYA.md](docs/AMD_MAYA.md).
 
 1. Get Project Maya:
    ```sh
