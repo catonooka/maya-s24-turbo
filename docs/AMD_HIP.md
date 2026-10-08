@@ -46,7 +46,7 @@ table. VRAM occupancy alone is not a throughput measurement.
 ```sh
 cmake -S . -B build-hip \
   -DCMAKE_BUILD_TYPE=Release \
-  -DSTRATA_ENABLE_HIP=ON -DSTRATA_ENABLE_CUDA=OFF \
+  -DSTRATA_ENABLE_HIP=ON -DSTRATA_ENABLE_CUDA=OFF -DSTRATA_PREFILL_MMQ=ON \
   -DCMAKE_HIP_ARCHITECTURES=gfx1100
 cmake --build build-hip --target strata -j2
 ```

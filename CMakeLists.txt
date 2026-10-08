@@ -34,9 +34,15 @@ endif()
 
 option(STRATA_ENABLE_CUDA "Build the CUDA targets (Phase 2+)" OFF)
 option(STRATA_ENABLE_HIP "Build the HIP targets for gfx1100 wave32 hardware" OFF)
-option(STRATA_PREFILL_MMQ "Build the optional GGML MMQ prefill path for HIP" OFF)
+option(STRATA_PREFILL_MMQ "Build the GGML MMQ prompt path for HIP (a HIP build needs it)" OFF)
 if(STRATA_PREFILL_MMQ AND NOT STRATA_ENABLE_HIP)
   message(FATAL_ERROR "STRATA_PREFILL_MMQ requires STRATA_ENABLE_HIP=ON")
+endif()
+# the GLM prompt path (src/core/glm_prefill.cu, always in strata_engine) multiplies its experts with MMQ, so a HIP
+# build without it does not link (found by @boxwrench in #17)
+if(STRATA_ENABLE_HIP AND NOT STRATA_PREFILL_MMQ)
+  message(FATAL_ERROR "A HIP build needs -DSTRATA_PREFILL_MMQ=ON: the GLM prompt path multiplies its experts with "
+                      "MMQ (./maya.sh --backend hip sets it)")
 endif()
 if(STRATA_ENABLE_CUDA AND STRATA_ENABLE_HIP)
   message(FATAL_ERROR "STRATA_ENABLE_CUDA and STRATA_ENABLE_HIP are separate backends; enable only one")
