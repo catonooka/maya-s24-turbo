@@ -53,14 +53,32 @@ class HipSetupTests(unittest.TestCase):
         self.assertEqual(pc["gpus"], [self.gpus[1]])
         self.assertEqual(maya.EXE, self.root / "build-hip/strata")
 
-    def test_rejects_unsupported_card_and_multi_gpu(self):
+    def test_rejects_unsupported_card_and_bad_gpu_lists(self):
         self.a.gpu = 2
         with self.assertRaises(SystemExit):
             maya.check_pc(self.a)
-        self.a.gpu = 0
+        self.a.gpu = None
+        for bad in ("0,2", "0,1,2", "1,1", "x"):
+            self.a.gpus = bad
+            with self.assertRaises(SystemExit):
+                maya.check_pc(self.a)
+
+    def test_two_gpu_split_config(self):
+        tables = self.root / "tools/hip"
+        tables.mkdir(parents=True)
+        for arch in ("gfx1100", "gfx1201"):
+            (tables / f"{arch}-glm-hipblaslt-100202.txt").write_text(f"STRATA_HIPBLASLT_TUNING_V1 {arch} 100202\n")
+        self.a.gpu = None
         self.a.gpus = "0,1"
-        with self.assertRaises(SystemExit):
-            maya.check_pc(self.a)
+        pc = maya.check_pc(self.a)
+        self.assertEqual([g["index"] for g in pc["gpus"]], [1, 0])   # the larger card first
+        p = maya.write_config(self.a, pc, {"lib_dirs": [str(self.rocm / "lib")]},
+                              self.root / "pack", "test", 8192, self.root / "data", None)
+        cfg = json.loads(p.read_text())
+        self.assertEqual(cfg["gpu"], [1, 0])
+        self.assertNotIn("STRATA_GLM_SPLIT", cfg["env"])
+        self.assertEqual(cfg["env"]["STRATA_HIPBLASLT_TUNING"],
+                         f"{tables / 'gfx1201-glm-hipblaslt-100202.txt'}:{tables / 'gfx1100-glm-hipblaslt-100202.txt'}")
 
     def test_config_selects_hip_and_preserves_user_tuning(self):
         pc = maya.check_pc(self.a)

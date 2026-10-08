@@ -1,8 +1,8 @@
 # Experimental Maya on RX 7900 XT / XTX and R9700 / RX 9070
 
 This branch adds a Linux HIP build and installer path for Maya's GLM-5.3-Flash
-engine on `gfx1100` and `gfx1201`. It uses one GPU and serves text. Images and HIP multi-GPU
-inference are not enabled by this installer.
+engine on `gfx1100` and `gfx1201`. It uses one GPU, or two that split the layers (see [Two GPUs](#two-gpus)),
+and serves text. Images are not enabled by this installer.
 
 Use a system ROCm 7 installation with its HIP compiler and hipBLAS, Python
 3.10+, CMake 3.24+, and a C++20 compiler. `ROCM_PATH` selects an installation
@@ -33,6 +33,26 @@ cache at 60 GiB. Change those settings with `--env KEY=VALUE` during setup.
 Available RAM, rather than installed RAM, determines how much can be cached.
 The engine reduces its RAM-tier allocation if ROCm cannot pin the requested
 amount.
+
+## Two GPUs
+
+`--gpus 0,1` splits the layers across two supported cards, as on NVIDIA: each card caches the experts of its own
+half, and the second half also runs the model's MTP block, which drafts the next token so both cards stay busy. Setup
+puts the card with more VRAM first (it takes the bigger first half), leaves the split point to the engine, and writes
+one hipBLASLt table per architecture (`STRATA_HIPBLASLT_TUNING` takes a `:`-separated list; each card uses the table
+for its own architecture). The two cards may be different architectures. The split passes one small host-memory hop
+per token, so no peer-to-peer access between the cards is needed.
+
+Measured on an AI PRO R9700 (32 GB, first) + RX 7900 XT (20 GB), 192 GB RAM, Maya-S, 8K context, 90 GB RAM tier,
+v1.0.11, greedy, 256-token answers (median of 10 requests):
+
+| | one RX 7900 XT | R9700 + RX 7900 XT |
+|---|---|---|
+| answer speed | ~15 tok/s | ~33 tok/s (drafts accepted ~76%) |
+| prompt speed, 4K-token prompt | ~414 tok/s | ~490 tok/s |
+
+39 back-to-back requests (1.8-4K-token prompts) ran without an error. The default split (the midpoint + 2) measured
+best: moving two or four more layers to the first card did not speed up answers.
 
 ## Prompt speed
 
