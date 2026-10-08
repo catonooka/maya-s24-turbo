@@ -110,6 +110,11 @@ class IndexShape(unittest.TestCase):
         # conv_w[tap + d_conv*channel], i.e. element (r, c) at r + rows*c
         self.assertEqual(iq_pack.index_shape((4, 1, 256)), (4, 256))
 
+    def test_4d_conv_weight_trailing_one(self):
+        # some converters write the conv weight as {d_conv, 1, d_inner, 1}: the trailing 1 adds no
+        # bytes, so it packs exactly like the 3-D form
+        self.assertEqual(iq_pack.index_shape((4, 1, 256, 1)), iq_pack.index_shape((4, 1, 256)))
+
     def test_flatten_is_byte_preserving(self):
         # the pack's 2-D convention is GGML: element (i0, i1) at i0 + ne0*i1 (ne0 fastest).  A 3-D
         # tensor stored as the (ne0*ne1, ne2) view preserves every byte offset exactly when

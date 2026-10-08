@@ -282,6 +282,9 @@ class StrataEngine:
                 v = tune.get(k)
                 if isinstance(v, (int, float)) and not isinstance(v, bool) and 0.0 <= float(v) <= 1.0:
                     tune_keys += f" {k}={float(v)!r}"
+            ct = tune.get("cpu_threads")   # the GLM engine's CPU lane threads (fewer than it started with)
+            if isinstance(ct, int) and not isinstance(ct, bool) and ct > 0:
+                tune_keys += f" cpu_threads={ct}"
         if isinstance(t, (int, float)) and not isinstance(t, bool) and float(t) <= 0.0:
             # temperature 0 is greedy: the engine reads temperature=0 as that whatever else the line says, and no other
             # sampler key goes (with only a config's top_p the engine took its sampled path: not deterministic)
