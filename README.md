@@ -16,7 +16,7 @@ Maya grew out of [Strata](https://github.com/Niko1221/Strata) (MIT): its engine 
 for GLM-5.3-Flash (the expert tiers across VRAM, RAM and SSD, the two-GPU split, MTP decoding), and its server and
 dashboard started from Strata's and were reworked for Maya (a new dashboard, images on demand, the thinking budget).
 
-**AMD (experimental):** Linux on RX 7900 XT / XTX and R9700 / RX 9070, one GPU or two, text only - see
+**AMD (experimental):** Linux on RX 7900 XT / XTX, R9700 / RX 9070 and Strix Halo (Radeon 8060S), one GPU or two (Strix Halo: one), text only - see
 [docs/AMD_MAYA.md](docs/AMD_MAYA.md).
 
 ## The models: Maya-S, Maya-S24, Maya-M and GSQ-RCO 3.5-bit
@@ -83,7 +83,7 @@ Measured with Maya-S. A token is about ¾ of a word. `./maya.sh --bench` measure
 
 | | |
 | --- | --- |
-| **GPU** | NVIDIA, compute capability 7.0 or newer (V100 and newer); one GPU, or up to 16 that share the model (two split the layers in the middle; with more, each takes a share sized to its free VRAM). The engine fills whatever VRAM you have with the most-used experts: more VRAM is faster. Measured: 1 and 2x V100 32 GB; by users: 2x TITAN RTX (above), 1x RTX 3090 and nine GPUs (8x RTX 5060 Ti 16 GB + the 3090; about 28 tokens/s decode with GSQ-RCO 3.5-bit). **AMD (experimental):** RX 7900 XT / XTX and Radeon AI PRO R9700 / RX 9070, one GPU or two, text only ([docs/AMD_MAYA.md](docs/AMD_MAYA.md)). |
+| **GPU** | NVIDIA, compute capability 7.0 or newer (V100 and newer); one GPU, or up to 16 that share the model (two split the layers in the middle; with more, each takes a share sized to its free VRAM). The engine fills whatever VRAM you have with the most-used experts: more VRAM is faster. Measured: 1 and 2x V100 32 GB; by users: 2x TITAN RTX (above), 1x RTX 3090 and nine GPUs (8x RTX 5060 Ti 16 GB + the 3090; about 28 tokens/s decode with GSQ-RCO 3.5-bit). **AMD (experimental):** RX 7900 XT / XTX, Radeon AI PRO R9700 / RX 9070 (one GPU or two) and Strix Halo / Radeon 8060S (one GPU), text only ([docs/AMD_MAYA.md](docs/AMD_MAYA.md)). |
 | **RAM** | It runs with **32 GB** (the machine in the table above has 30 GB). More RAM keeps more experts close and is faster; what does not fit is read from the SSD while it answers. |
 | **Disk** | **~100 GB free on a fast NVMe SSD** (Maya-S is 96.5 GB, its pictures encoder 1.1 GB, and the engine reads from the model while it answers; Maya-M needs ~120 GB, GSQ-RCO 3.5-bit ~140 GB). Not a hard disk. |
 | **System** | Linux (x86-64, CPU with AVX2), NVIDIA driver, CUDA toolkit 12.x (CUDA 13 can be used for Turing and newer, but it no longer compiles for Volta/V100), g++, Python 3.10+. Windows 10/11: experimental, with Visual Studio 2022 Build Tools instead of g++ ([Windows](#windows)). Not WSL2. AMD: Linux with ROCm 7 instead of the NVIDIA driver and CUDA. |
@@ -96,8 +96,8 @@ system-wide by itself.
 **You need:** an NVIDIA GPU (V100 / RTX 20 or newer) on Linux (Windows: [experimental](#windows)), ~100 GB free on
 an NVMe SSD, a current NVIDIA driver
 and the CUDA toolkit (12.x for a V100; the engine is compiled for your GPU). Everything else - Python, the engine, the
-model - is set up for you, the way Strata does it. On an AMD RX 7900 XT / XTX or R9700 / RX 9070 (experimental, Linux,
-ROCm 7): `./maya.sh --backend hip --gpu 0 --check` first (two cards: `--gpus 0,1`), then
+model - is set up for you, the way Strata does it. On an AMD RX 7900 XT / XTX, R9700 / RX 9070 or Strix Halo (experimental, Linux,
+ROCm 7): `./maya.sh --backend hip --gpu 0 --check` first (two cards: `--gpus 0,1`; Strix Halo stays one GPU), then
 [docs/AMD_MAYA.md](docs/AMD_MAYA.md).
 
 1. Get Project Maya:

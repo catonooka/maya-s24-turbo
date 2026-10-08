@@ -1,8 +1,8 @@
-# Experimental Maya on RX 7900 XT / XTX and R9700 / RX 9070
+# Experimental Maya on RX 7900 XT / XTX, R9700 / RX 9070 and Strix Halo
 
 This branch adds a Linux HIP build and installer path for Maya's GLM-5.3-Flash
-engine on `gfx1100` and `gfx1201`. It uses one GPU, or two that split the layers (see [Two GPUs](#two-gpus)),
-and serves text. Images are not enabled by this installer.
+engine on `gfx1100`, `gfx1201` and `gfx1151` (Strix Halo). It uses one GPU, or two discrete cards that split the
+layers (see [Two GPUs](#two-gpus)), and serves text. Images are not enabled by this installer.
 
 Use a system ROCm 7 installation with its HIP compiler and hipBLAS, Python
 3.10+, CMake 3.24+, and a C++20 compiler. `ROCM_PATH` selects an installation
@@ -20,9 +20,8 @@ The first setup downloads about 96.5 GB of weights and verifies the SHA-256
 hash of each shard. `--gguf-dir DIR` uses existing files instead. GPU numbers
 are the kernel KFD topology order shown by `--check`; on the test machine the
 7900 XT is GPU 0, an R9700 is GPU 1, and the integrated GPU is GPU 2. This
-installer accepts `gfx1100` and `gfx1201` and compiles one binary for
-`gfx1100;gfx1201;gfx1151`. The last target **builds, untested**: it is not
-enabled by setup until the separate unified-memory work is validated.
+installer accepts `gfx1100`, `gfx1201` and `gfx1151` and compiles one binary for
+`gfx1100;gfx1201;gfx1151`.
 Configs are named `maya-<quant>-hip.json` and
 select the AMD device through `HIP_VISIBLE_DEVICES`.
 
@@ -33,7 +32,7 @@ stopped. `./maya.sh --backend hip --report` includes AMD GPU details from
 and version, and the engine's speed lines. Add `--config /path/to/maya-hip.json`
 to either command to select a particular installed config.
 
-The HIP config starts with an 8K context when requested above, 3 GiB of GPU
+The discrete-GPU HIP config starts with an 8K context when requested above, 3 GiB of GPU
 headroom, and 16 GiB of system-RAM headroom. The engine sizes the prompt chunk
 from its prompt-memory budget. The example additionally caps the pinned expert
 cache at 60 GiB. Change those settings with `--env KEY=VALUE` during setup.
@@ -60,6 +59,36 @@ v1.0.11, greedy, 256-token answers (median of 10 requests):
 
 39 back-to-back requests (1.8-4K-token prompts) ran without an error. The default split (the midpoint + 2) measured
 best: moving two or four more layers to the first card did not speed up answers.
+
+## Strix Halo
+
+Ryzen AI Max+ 395 / Radeon 8060S (`gfx1151`) uses unified memory. Use the same
+HIP setup command above, selecting its GPU number and omitting the
+`--env STRATA_GLM_RAM_GB=60` override. Setup detects the APU even if sysfs
+reports only a small VRAM carve-out. It writes a 1 GiB reserve, 16 GiB of
+system headroom, `STRATA_GLM_PREFILL_SUB=1024`, and a 6144 MiB prompt budget
+when system RAM is at least 96 GiB (4096 MiB otherwise), plus the existing
+`gfx1151` hipBLASLt table. An APU stays single-GPU: `--gpus` with it is
+rejected (use `--gpu N`). It leaves `POOL_GB` and `RAM_GB` unset.
+
+For integrated HIP devices the engine sizes the pool from `/proc/meminfo`'s
+`MemAvailable` **after** dense weights, KV and prompt staging are allocated:
+`min(expert bytes, max(0, MemAvailable - RAM_HEADROOM_GB - RESERVE_MB))`.
+It does not treat HIP's reported GTT capacity (112 GiB on the 128 GB box) as
+free physical memory. For example, 110 GiB available leaves 93 GiB after the
+default headroom/reserve, capped at Maya-S's ~80.17 GiB expert pool. When every
+expert fits, warm-up fills every pool slot without reserving idle spares;
+the RAM tier keeps only its small per-class staging floor, and
+the prompt disk landing ring defaults to 12 slots. Prompt buffers borrow the
+pool's tail; they do not require a second 6 GiB allocation. Explicit `--env`
+settings still override defaults; pool/VRAM caps still limit the pool.
+Discrete HIP GPUs and CUDA keep their existing sizing behavior.
+
+Measured on a 128 GB Strix Halo box with ROCm 7.2.2 and manually tuned settings:
+~210 tok/s for 3-4K-token prompts and ~17.8 tok/s answers, with every expert
+in the GPU pool (288 slots/layer, 12,096 total, ~99.9% hits). These measurements
+precede the automatic sizing change; verify its startup log and repeated
+prompt/answer rounds on the real box. See [tracking issue #6](https://github.com/mw00/project-maya/issues/6).
 
 ## Prompt speed
 
