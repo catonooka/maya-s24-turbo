@@ -970,8 +970,8 @@ def start(cfg_path: Path, a) -> int:
 # ------------------------------------------------------------------------------------------------ the report
 # the engine log's lines that tell where the time goes: how the model was split across VRAM / RAM / the SSD, the
 # prompt path's chunks, and the per-token breakdown ("glm stat": VRAM hits, RAM fetches, disk reads, CPU lane)
-REPORT_LINES = re.compile(r"glm fast:|glm prefill: CUDA|glm split|glm stat|glm prefill: \d|ERR|error|failed|out of memory",
-                          re.I)
+REPORT_LINES = re.compile(r"glm fast:|glm prefill: CUDA|glm split|glm stat|glm slots|glm prefill: \d|ERR|error|failed|"
+                          r"out of memory", re.I)
 STAT_DECODE = re.compile(r"glm stat: decode ([\d.]+) ms/tok")
 
 
@@ -982,8 +982,8 @@ def speed_lines(text) -> list:
     for x in text:
         if not REPORT_LINES.search(x) or "warming the expert tiers" in x:
             continue
-        m = STAT_DECODE.search(x)
-        if m and float(m.group(1)) < 1.0 and "| prompt " in x:
+        m = STAT_DECODE.search(x)   # no decode: under 1 ms a token, or no expert touched (one prompt token out)
+        if m and (float(m.group(1)) < 1.0 or "vram hit 0.00%" in x) and "| prompt " in x:
             x = "glm stat (prompt only): prompt " + x.split("| prompt ", 1)[1]
         picked.append(x.strip())
     return picked

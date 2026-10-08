@@ -50,7 +50,15 @@ Measured with Maya-S. A token is about ¾ of a word. `./maya.sh --bench` measure
   conversation keeps answering fast.
 - The first answers after a start are the slowest: the expert caches fill with the experts your conversations use.
 - Every machine is different: the engine adapts to the GPUs, RAM and SSD it finds, so your speed depends on your
-  hardware. Single-GPU numbers are being measured; tell us what you get on yours.
+  hardware. A second GPU in a narrow slot (PCIe x4) still helps: the engine measures each card's link and lets the
+  CPU compute more of that card's RAM-tier experts instead of copying them over.
+
+**Measured by users** with `./maya.sh --bench` (Maya-S, 32K context). Send yours: `--bench`, then `--report`, in a
+[GitHub issue](https://github.com/mw00/project-maya/issues).
+
+| Machine | Decode (writing the answer) | Prefill (reading your prompt) | By |
+| --- | ---: | ---: | --- |
+| **2x NVIDIA TITAN RTX 24 GB** (Turing; the second card in a PCIe 3 x4 slot), Core i5-12490F, 48 GB RAM | 13.5 tokens/s (mean of 3 answers) | 238 tokens/s (8K-token prompt) | @dummerjindabin (v1.0.6 with the v1.0.7 fix) |
 
 ## What you need
 
@@ -152,6 +160,8 @@ RAM experts the CPU computes itself. These settings change that (put them in the
 | `STRATA_GLM_SPLIT` | middle (+2) with 2 GPUs | the first layer of the second GPU; `0` = one GPU |
 | `STRATA_GLM_CPU_LANE` | one thread per physical core | CPU threads for RAM-tier experts; `0` = off |
 | `STRATA_GLM_USAGE` | `<pack>/expert_usage.txt` | where your expert usage is kept between starts (the warm-up loads your experts first); `0` = off |
+| `STRATA_GLM_SLOTS` | 4 | conversations kept aside on the SSD, so switching back to one doesn't re-read its prompt; `0` = off |
+| `STRATA_GLM_SLOT_MIN`, `STRATA_GLM_SLOT_GB`, `STRATA_GLM_SLOT_DIR` | 1024, 16, `<pack>/slots` | the shortest conversation kept aside (tokens), their total size on disk (GB), and the folder |
 | `STRATA_GLM_TIMING`, `STRATA_GLM_POOL_STATS` | off | `1` = timing and cache statistics in the engine log |
 
 ## Something went wrong?

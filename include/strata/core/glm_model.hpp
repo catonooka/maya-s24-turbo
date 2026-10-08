@@ -124,6 +124,11 @@ public:
     std::string usage_path() const;
     bool snapshot_restore();
     int64_t snapshot_pos() const { return snap_pos_; }
+    /// Conversation slots: the snapshot (its KDA states) and every DSA cache's rows up to its position, every half,
+    /// written to a file; slot_load puts them back as the live state and the snapshot, so a conversation set aside
+    /// while others ran continues where it was.  The bytes written, or 0 + err.
+    uint64_t slot_save(const std::string& path, std::string& err);
+    bool slot_load(const std::string& path, int64_t n_pos, std::string& err);
     /// Runs the engine's sampler on the last forward's logits and returns the picked token id
     /// (-1 + err on failure).  Handles the device bookkeeping: with a split the logits (and the
     /// sampler buffer) live on the tail half's device, where peer reads are not available.

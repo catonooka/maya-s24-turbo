@@ -406,10 +406,11 @@ bool Glm5Model::prefill_setup(std::string& err) {
         return true;
     }
     if (has_moe) {
-        // the landing ring: ~2% of the free RAM per device (it is pinned before the RAM tier measures what is left,
-        // so it comes out of that tier), 12 to 64 slots; halved while the pinning fails
+        // the landing ring: ~3% of the free RAM per device (it is pinned before the RAM tier measures what is left,
+        // so it comes out of that tier), 12 to 96 slots; halved while the pinning fails.  96 slots let the second
+        // GPU of a split read ahead through a whole layer (2x V100, 30 GB RAM: its disk waits 31 s -> 3-6 s, +1%)
         constexpr int kMinLand = PrefillState::NG * PrefillState::GE;
-        int want = (int) std::min<int64_t>(64, std::max<int64_t>(kMinLand, (int64_t) (0.02 * (double) avail_ram_bytes() /
+        int want = (int) std::min<int64_t>(96, std::max<int64_t>(kMinLand, (int64_t) (0.03 * (double) avail_ram_bytes() /
                                                                                       (double) gstride)));
         if (const char* v = getenv("STRATA_GLM_PREFILL_LAND")) want = std::max(kMinLand, std::atoi(v));
         int n = want;

@@ -3,6 +3,26 @@
 Every release is on GitHub (Releases) with these notes; every published change moves the last number. Update: `git pull`, then `./setup.sh` (Windows:
 `START-MAYA.bat`) - it recompiles only what changed and starts.
 
+## v1.0.9 - 2026-10-08
+
+Switching between conversations no longer re-reads them: Maya keeps the last few on the SSD.
+
+- **Conversation slots:** when a request doesn't continue the conversation the engine holds - another chat, or an
+  agent tool's side request (a title, a sub-task) - that conversation is first set aside in a file on the SSD (its
+  attention caches and recurrent state, about 0.15 GB plus 21 KB a token: 0.2 GB at 3K tokens, 0.8 GB at 30K), and a
+  later request that continues it takes it back instead of reading its whole prompt again. On 1x Tesla V100 with
+  Maya-S, going back to a 3,500-token conversation after another one: prefill (reading the prompt) 10.2 s -> 2.2 s;
+  setting it aside 0.09 s, taking it back 0.06 s. A conversation taken back from its file continues token for token as
+  it would from memory, and each one still recalls its own details after others ran in between (one GPU, and the
+  two-GPU split with the MTP block). Requests still run one at a time. Up to 4 conversations of 1,024 tokens or more, 16 GB on disk, never
+  below 8 GB free; `STRATA_GLM_SLOTS=0` turns it off (README > Tuning).
+- **Prefill:** the disk read-ahead buffer grows to 3% of free RAM, up to 96 experts (was 2%, up to 64): on two GPUs
+  the second one no longer waits on the SSD between layers (2x Tesla V100 with 30 GB RAM: +1% prefill; with 64 GB RAM,
+  which reads the SSD less, unchanged).
+- README: a table of speeds measured by users (`--bench`), starting with 2x TITAN RTX.
+- `--bench` / `--report`: a prompt-only request's engine line no longer shows a decode speed in every case it has
+  none.
+
 ## v1.0.8 - 2026-10-08
 
 `--bench` warms up before it measures prefill, so speed reports compare fairly.

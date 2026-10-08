@@ -1014,6 +1014,120 @@ static int glm_pack_generate(const Options& o) {
         }
         return h;
     };
+    // CONVERSATION SLOTS (the fast path): a request that does not continue the conversation in the model first sets
+    // that conversation aside in a file (Glm5Model::slot_save: its snapshot and DSA caches), then takes back the slot
+    // it does continue (slot_load) - chats, and an agent's side requests, that interleave no longer re-read each
+    // other's prompts.  STRATA_GLM_SLOTS=<n> files (default 4, 0 off), for conversations of STRATA_GLM_SLOT_MIN tokens
+    // or more (1024), in STRATA_GLM_SLOT_DIR (default <pack>/slots, emptied at start), at most STRATA_GLM_SLOT_GB on
+    // disk (16) and never below 8 GB free.  Text only: a conversation with pictures is not set aside.
+    struct Slot {
+        std::vector<int32_t> tokens;
+        std::string path;
+        uint64_t bytes = 0, used = 0;
+    };
+    constexpr uint64_t kNoImages = 1469598103934665603ull;   // img_hash() of a prefix without pictures
+    std::vector<Slot> slots;
+    uint64_t slot_clock = 0, slot_seq = 0;
+    bool snap_in_slot = false;   // the model's snapshot is one of the slots, unchanged since
+    const auto env_num = [](const char* k, double d) { const char* v = getenv(k); return v ? std::atof(v) : d; };
+    int slot_max = model.fast() && getenv("STRATA_GLM_NO_REUSE") == nullptr ? (int) env_num("STRATA_GLM_SLOTS", 4) : 0;
+    const size_t slot_min = (size_t) std::max(64.0, env_num("STRATA_GLM_SLOT_MIN", 1024));
+    const uint64_t slot_budget = (uint64_t) (env_num("STRATA_GLM_SLOT_GB", 16) * 1073741824.0);
+    std::filesystem::path slot_dir;
+    if (slot_max > 0) {
+        slot_dir = getenv("STRATA_GLM_SLOT_DIR") ? std::filesystem::path(getenv("STRATA_GLM_SLOT_DIR"))
+                                                 : std::filesystem::path(o.glm_pack) / "slots";
+        std::error_code ec;
+        std::filesystem::create_directories(slot_dir, ec);
+        for (const auto& de : std::filesystem::directory_iterator(slot_dir, ec)) {   // a previous run's slots
+            const std::string fn = de.path().filename().string();
+            if (fn.rfind("slot-", 0) == 0 && fn.size() > 9 && fn.compare(fn.size() - 4, 4, ".bin") == 0)
+                std::filesystem::remove(de.path(), ec);
+        }
+        if (!std::filesystem::is_directory(slot_dir, ec)) {
+            std::fprintf(stderr, "glm slots: %s is not writable - conversations are not set aside\n",
+                         slot_dir.string().c_str());
+            slot_max = 0;
+        }
+    }
+    const auto slot_drop = [&](size_t i) {
+        std::error_code ec;
+        std::filesystem::remove(slots[i].path, ec);
+        slots.erase(slots.begin() + (long) i);
+    };
+    const auto slot_lru = [&](size_t keep) {   // the least recently used slot other than `keep`
+        size_t lru = SIZE_MAX;
+        for (size_t i = 0; i < slots.size(); ++i)
+            if (i != keep && (lru == SIZE_MAX || slots[i].used < slots[lru].used)) lru = i;
+        return lru;
+    };
+    // the conversation in the model (its snapshot, snap_tokens) into a slot
+    const auto slot_put = [&]() {
+        if (slot_max <= 0 || snap_in_slot || snap_tokens.size() < slot_min || snap_img_hash != kNoImages) return;
+        for (size_t i = slots.size(); i-- > 0;)   // an earlier state of this conversation is superseded
+            if (slots[i].tokens.size() <= snap_tokens.size() &&
+                std::equal(slots[i].tokens.begin(), slots[i].tokens.end(), snap_tokens.begin()))
+                slot_drop(i);
+        while (!slots.empty() && slots.size() >= (size_t) slot_max) slot_drop(slot_lru(SIZE_MAX));
+        std::error_code ec;
+        const auto space = std::filesystem::space(slot_dir, ec);
+        if (!ec && space.available < ((uint64_t) 8 << 30)) {
+            std::fprintf(stderr, "glm slots: under 8 GB free in %s - the conversation is not set aside\n",
+                         slot_dir.string().c_str());
+            return;
+        }
+        const std::string path = (slot_dir / ("slot-" + std::to_string(++slot_seq) + ".bin")).string();
+        const auto t0 = std::chrono::steady_clock::now();
+        std::string e;
+        const uint64_t bytes = model.slot_save(path, e);
+        if (bytes == 0) {
+            std::filesystem::remove(path, ec);
+            std::fprintf(stderr, "glm slots: setting the conversation aside failed (%s)\n", e.c_str());
+            return;
+        }
+        slots.push_back({snap_tokens, path, bytes, ++slot_clock});
+        snap_in_slot = true;
+        uint64_t total = 0;
+        for (const auto& s : slots) total += s.bytes;
+        while (slots.size() > 1 && total > slot_budget) {
+            const size_t i = slot_lru(slots.size() - 1);
+            total -= slots[i].bytes;
+            slot_drop(i);
+        }
+        std::fprintf(stderr, "glm slots: set aside a conversation of %zu tokens (%.2f GB, %.2f s); %zu kept, %.1f GB\n",
+                     snap_tokens.size(), (double) bytes / 1073741824.0,
+                     std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), slots.size(),
+                     (double) total / 1073741824.0);
+    };
+    // the longest slot this prompt continues, back in the model: the tokens it covers (0: none)
+    const auto slot_take = [&](const std::vector<int32_t>& prompt) -> size_t {
+        if (slot_max <= 0 || !cur_img_pos.empty()) return 0;
+        size_t best = SIZE_MAX, len = 0;
+        for (size_t i = 0; i < slots.size(); ++i) {
+            const auto& t = slots[i].tokens;
+            if (t.size() > len && t.size() < prompt.size() && std::equal(t.begin(), t.end(), prompt.begin())) {
+                best = i;
+                len = t.size();
+            }
+        }
+        if (best == SIZE_MAX) return 0;
+        const auto t0 = std::chrono::steady_clock::now();
+        std::string e;
+        if (!model.slot_load(slots[best].path, (int64_t) len, e)) {
+            std::fprintf(stderr, "glm slots: taking a conversation back failed (%s) - reading its prompt again\n",
+                         e.c_str());
+            slot_drop(best);
+            snap_tokens.clear();
+            return 0;
+        }
+        snap_tokens = slots[best].tokens;
+        snap_img_hash = kNoImages;
+        snap_in_slot = true;
+        slots[best].used = ++slot_clock;
+        std::fprintf(stderr, "glm slots: took back a conversation of %zu tokens (%.2f s)\n", len,
+                     std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+        return len;
+    };
     const auto run_request = [&](const std::vector<int64_t>& ids, int64_t max_new,
                                  const strata::kernels::SamplerParams& rq_in) -> int {
         strata::kernels::SamplerParams sp = rq_in;   // per request (the server sends sampling keys per GEN)
@@ -1041,6 +1155,19 @@ static int glm_pack_generate(const Options& o) {
             img_hash(snap_tokens.size()) == snap_img_hash &&
             getenv("STRATA_GLM_NO_REUSE") == nullptr && model.snapshot_restore())
             reuse = snap_tokens.size();
+        if (reuse == 0 && slot_max > 0) {
+            slot_put();                // the conversation in the model, before this prompt overwrites it
+            reuse = slot_take(prompt);
+        } else if (reuse > 0 && slot_max > 0 && getenv("STRATA_GLM_SLOT_ROUNDTRIP") != nullptr) {
+            // a test: the restored state goes through a slot file and back - the same tokens must follow
+            snap_in_slot = false;
+            slot_put();
+            const size_t back = slot_take(prompt);
+            if (back != reuse) {
+                std::fprintf(stderr, "glm slots: ROUNDTRIP took back %zu of %zu tokens\n", back, reuse);
+                reuse = back;
+            }
+        }
         if (reuse == 0) model.reset();
         std::vector<float> lg;
         const auto t0 = std::chrono::steady_clock::now();
@@ -1091,6 +1218,7 @@ static int glm_pack_generate(const Options& o) {
                 if (model.snapshot_save()) {
                     snap_tokens.assign(prompt.begin(), prompt.end() - 1);
                     snap_img_hash = img_hash(snap_tokens.size());
+                    snap_in_slot = false;
                 } else {
                     snap_tokens.clear();
                 }
