@@ -3,6 +3,20 @@
 Every release is on GitHub (Releases) with these notes; every published change moves the last number. Update: `git pull`, then `./setup.sh` (Windows:
 `START-MAYA.bat`) - it recompiles only what changed and starts.
 
+## v1.0.10 - 2026-10-08
+
+RTX 20-series cards now read prompts on their tensor cores too.
+
+- **Prefill on Turing (RTX 20-series, Titan RTX, Quadro RTX):** the tensor-core prompt attention now keeps its context
+  in registers on these cards, so it fits their 64 KB of shared memory. They had been using the slower F32 kernel.
+  2x TITAN RTX, an 18,476-token prompt: 62 s -> 58 s of prefill (reading the prompt). By @dummerjindabin (#10).
+  Other cards keep the kernel they had; that variant's arithmetic is only correct on Turing and newer (a V100 got the
+  attention wrong with it), so it is used only where the other one doesn't fit. A V100 gives the same tokens as
+  before.
+- **Prefill for 4-bit (Q4_K) weights:** they are converted for the tensor cores the fast way, as 5- and 6-bit ones
+  already were - the same values. A test quant with 4-bit attention, 1x V100: 224 / 291 / 285 ->
+  268 / 368 / 358 tokens/s at 2k / 8k / 16k, the same tokens. Maya-S and Maya-M are unchanged.
+
 ## v1.0.9 - 2026-10-08
 
 Switching between conversations no longer re-reads them: Maya keeps the last few on the SSD.
