@@ -198,6 +198,7 @@ These settings change what the engine chooses (put them in the config with `--en
 | --- | --- | --- |
 | `STRATA_GLM_RAM_HEADROOM_GB` | 6 | RAM left free for the system when the RAM tier is sized |
 | `STRATA_GLM_RAM_GB` | from free RAM | a fixed RAM-tier size in GB |
+| `STRATA_GLM_RAM_RESIDENT` | off | `1` (or `--glm-ram-resident`): the RAM tier holds every expert not in VRAM and nothing is evicted to disk. The start fails if it cannot. `STRATA_GLM_RAM_SLACK` is extra slots per MoE layer (default 16) |
 | `STRATA_GLM_SPLIT` | middle (+2) with 2 GPUs, by free VRAM with more | the first layer of each later GPU (`24`, or `7,12,17,22,27,32,37,41` for nine); `0` = one GPU. The config's `"layer_split"` sets the same |
 | `STRATA_GLM_CPU_LANE` | one thread per physical core (one GPU: at most one NUMA node's) | CPU threads for RAM-tier experts; `0` = off (the tuning sets it) |
 | `STRATA_GLM_CPU_SPLIT` | about 48 pieces in all | decode: each CPU-lane thread's share of a token's RAM-tier experts is cut into this many pieces (1-64), claimed in turn, so one thread held up by the disk readers doesn't hold up the token. Few threads take several pieces each (6 threads: 8 - one V100, Maya-S: 17.1 tok/s against 14.3 with one); 40 or more take one each, which streams the memory best |
