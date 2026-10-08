@@ -1299,6 +1299,11 @@ class Service:
         if self.default_effort and "reasoning_effort" not in kwargs and "enable_thinking" not in kwargs:
             kwargs = {**kwargs, **effort_kwargs(self.default_effort)}   # the run config's thinking level
         prompt = self.template.render(messages, tools=tools, **kwargs)
+        if kwargs.get("enable_thinking") is False and prompt.endswith("<think>"):
+            # GLM-5.3's template opens the thinking block whatever it is told (no enable_thinking, and an effort it
+            # does not know means 'max'): with thinking off the answer was written inside an open <think>.  Close
+            # it empty, the form the same template writes for a past turn that did not think.
+            prompt += "</think>"
         prefill = ""
         if force is not None and tools:
             # GLM's form opens with the tool's name, Qwen's with <function=NAME>

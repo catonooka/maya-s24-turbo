@@ -1278,10 +1278,13 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
         }
     } dq;
     // STRATA_GLM_DISK_QD=<n>: experts read at once (one batch across the workers) when they are queued and their
-    // slots free - an NVMe gives more with a few in flight (Uranus 1.87 -> 2.2 GB/s at 2, Mercury 2.65 -> 2.96)
+    // slots free - an NVMe gives more with a few in flight (Uranus 1.87 -> 2.2 GB/s at 2, Mercury 2.65 -> 2.96).
+    // Up to 32: on Windows each read has a fixed cost, so more in flight matter more (RX 7900 XTX, PCIe 4 NVMe,
+    // with STRATA_GLM_READ_CHUNKS=1: 1.66 GB/s at 2 -> 4.27 GB/s at 16)
+    static constexpr int kMaxDiskQd = 32;
     static const int disk_qd = [] {
         const char* v = getenv("STRATA_GLM_DISK_QD");
-        return std::max(1, std::min(4, v ? std::atoi(v) : 2));
+        return std::max(1, std::min(kMaxDiskQd, v ? std::atoi(v) : 2));
     }();
     std::thread reader([&] {
         cudaSetDevice(dev_);
@@ -1301,8 +1304,8 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
             while (nb < disk_qd && dq.n.load(std::memory_order_acquire) > k + nb &&
                    (k + nb < KL || dq.copied.load(std::memory_order_acquire) >= k + nb - KL + 1))
                 ++nb;
-            std::pair<int, int> it[4];
-            uint8_t* land[4];
+            std::pair<int, int> it[kMaxDiskQd];
+            uint8_t* land[kMaxDiskQd];
             for (int b = 0; b < nb; ++b) {
                 cudaEventSynchronize(S->ev_land[(k + b) % KL]);   // the slot's last copy (this chunk's or earlier)
                 std::lock_guard<std::mutex> lk(dq.mu);
