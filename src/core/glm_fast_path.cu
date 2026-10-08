@@ -61,6 +61,17 @@
 
 namespace gf = strata::kernels::glmf;
 
+// Keeps the GPU out of its idle P-state for ns nanoseconds.  A consumer card at P8 drops its PCIe link (Gen1 on an
+// RTX 4070 Ti SUPER / 5070 Ti), and copies alone do not wake it, so a link timed at idle reads 3-8x slower than it
+// runs during decode (Tesla cards keep the link up, so this never showed there).
+static __global__ void glm_link_wake(unsigned long long ns) {
+    unsigned long long t0, t;
+    asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t0));
+    do {
+        asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t));
+    } while (t - t0 < ns);
+}
+
 namespace strata::core {
 
 using glmfast::cpu_relax;
@@ -1075,14 +1086,16 @@ static int physical_cores() {
 }
 
 // The CPU LANE, on by default: one thread per physical core (split evenly across the parts of a layer split);
-// STRATA_GLM_CPU_LANE=<threads> sets the count, 0 turns it off.  Measures this machine once - one expert on the CPU
+// STRATA_GLM_CPU_LANE=<threads> sets the count, 0 turns it off; STRATA_GLM_CPU_LANE<n>=<threads> sets one GPU's own
+// (CUDA<n>: a slow link wants more threads than a fast one).  Measures this machine once - one expert on the CPU
 // pool vs one over PCIe - and derives the split: of f RAM-tier experts in a route, the k the host computes so that
 // the slower of the two lanes finishes first (STRATA_GLM_CPU_PLAN=<digits for f = 0..8> overrides).  A CPU slower
 // than the PCIe link at every f leaves the lane off.
 bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
     FastState* F = fast_;
     const Glm5Geometry& g = g_;
-    const char* lv = getenv("STRATA_GLM_CPU_LANE");
+    const char* lv = getenv(("STRATA_GLM_CPU_LANE" + std::to_string(dev_)).c_str());
+    if (lv == nullptr) lv = getenv("STRATA_GLM_CPU_LANE");
     int threads = 0;
     if (lv != nullptr) {
         threads = std::max(0, std::min(64, std::atoi(lv)));
@@ -1165,16 +1178,23 @@ bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
     cudaEventCreate(&e0);
     cudaEventCreate(&e1);
     double p_ms = 0.0;
-    for (int rep = 0; rep < 12; ++rep) {
+    // the link is timed with the GPU awake (see glm_link_wake): 400 ms for the clocks and the link to ramp up, then
+    // 1.1 s of the kernel left for both measurements below
+    cudaStream_t wake = nullptr;
+    if (cudaStreamCreateWithFlags(&wake, cudaStreamNonBlocking) == cudaSuccess) {
+        glm_link_wake<<<1, 1, 0, wake>>>(1500ull * 1000000ull);
+        std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    }
+    for (int rep = 0; rep < 24; ++rep) {
         cudaEventRecord(e0, F->cs);
         cudaMemcpyAsync(F->scratch, cal, blob, cudaMemcpyHostToDevice, F->cs);
         cudaEventRecord(e1, F->cs);
         cudaEventSynchronize(e1);
         float ms = 0.0f;
         cudaEventElapsedTime(&ms, e0, e1);
-        if (rep >= 4) p_ms += ms;
+        if (rep >= 8) p_ms += ms;
     }
-    p_ms /= 8.0;
+    p_ms /= 16.0;
     // ... and its streaming rate - copies back to back, the way the prompt path stages experts (a 3090 on PCIe 3.0 x8:
     // 2.09 ms for one copy, 1.57 a copy in a stream): the prompt's CPU / PCIe split plans with this one
     double ps_ms = p_ms;
@@ -1185,6 +1205,10 @@ bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
         cudaEventSynchronize(e1);
         float ms = 0.0f;
         if (cudaEventElapsedTime(&ms, e0, e1) == cudaSuccess && ms > 0.0f) ps_ms = std::min(p_ms, (double) ms / 8.0);
+    }
+    if (wake != nullptr) {
+        cudaStreamSynchronize(wake);
+        cudaStreamDestroy(wake);
     }
     cudaEventDestroy(e0);
     cudaEventDestroy(e1);
@@ -1975,6 +1999,24 @@ void Glm5Model::fast_service() {
                             R.st[(size_t) rs] = FastState::kRNew;
                         }
                         continue;
+                    }
+                    // Demoted at the last boundary: its RAM copy is still landing (kRDemote until the next boundary makes
+                    // it live), so the table has no entry for it - but its bytes are one PCIe copy away, not a disk read
+                    // away.  Wait for that drain's event and serve it from the slot.  (The boundary runs only once this
+                    // thread has caught up, so F->draining is not being edited here.)  A route that promotes it leaves
+                    // a duplicate that the tier clean-up frees.
+                    if (rs >= 0 && R.st[(size_t) rs] == FastState::kRDemote && R.key[(size_t) rs] == key) {
+                        bool draining = false;
+                        for (const auto& d : F->draining)
+                            if (d.rclass == cls && d.rslot == rs) {
+                                cudaEventSynchronize(d.ev);
+                                draining = true;
+                                break;
+                            }
+                        if (draining) {
+                            dst[m] = R.base + (size_t) rs * R.stride;
+                            continue;
+                        }
                     }
                     rd[nr++] = m;
                     rs = -1;
