@@ -529,17 +529,133 @@ __global__ void __launch_bounds__(256) mla_attn_kernel(const float* __restrict__
 // (two 16-cell tiles, the K = 512 split in four quarters across the warps and summed), the softmax is the online one
 // above in F32, and the context O (F32, in shared memory) is rescaled and O += P . L (32 column tiles, 4 a warp).
 // FP16 operands with F32 accumulation, as flash attention: the context is within ~1e-3 of the F32 kernel's.
-// The context O rides the accumulator registers (four tiles a warp), so a block needs 58368 bytes of shared
-// memory and Turing (64 KB) can run it too - 91136 bytes was the old layout with O in shared memory.
+// 91 KB of shared memory a block - more than Turing allows (64 KB): there the register variant below runs.
 constexpr int TC_HG = 16, TC_CH = 32;
-// The context O lives in accumulator registers while the cells are walked (see the kernel), so it costs no shared
-// memory: 58368 bytes a block, under Turing's 65536 ceiling.  Setting the old sO back would need 91136.
-constexpr size_t kTcSmem = (size_t) TC_HG * 512 * 2 + (size_t) TC_CH * 512 * 2 +
+constexpr size_t kTcSmem = (size_t) TC_HG * 512 * 4 + (size_t) TC_HG * 512 * 2 + (size_t) TC_CH * 512 * 2 +
                            (size_t) 4 * TC_HG * TC_CH * 4 + (size_t) TC_HG * TC_CH * 2;
 __global__ void __launch_bounds__(256) mla_attn_tc_kernel(const float* __restrict__ q_abs, const uint16_t* __restrict__ lat,
                                                           const int* __restrict__ cells_all,
                                                           const int* __restrict__ n_sel_arr, int n_sel_max, int n_head,
                                                           float scale, float* __restrict__ ctx) {
+    using namespace nvcuda;
+    constexpr int KV = 512;
+    extern __shared__ __align__(128) unsigned char tc_sm[];
+    float* sO = (float*) tc_sm;                          // TC_HG x KV, F32
+    __half* sQ = (__half*) (sO + TC_HG * KV);            // TC_HG x KV
+    __half* sL = sQ + TC_HG * KV;                        // TC_CH x KV
+    float* sPart = (float*) (sL + TC_CH * KV);           // 4 x TC_HG x TC_CH: the scores' K quarters
+    __half* sP = (__half*) (sPart + 4 * TC_HG * TC_CH);  // TC_HG x TC_CH: exp(s - m)
+    __shared__ float s_m[TC_HG], s_l[TC_HG], s_sc[TC_HG];
+    __shared__ int s_cell[TC_CH];
+    const int t = blockIdx.x, h0 = blockIdx.y * TC_HG, tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
+    const int ns = n_sel_arr[t];
+    const int* cl = cells_all + (size_t) t * n_sel_max;
+    const float* qa = q_abs + ((size_t) t * n_head + h0) * KV;
+    for (int i = tid; i < TC_HG * KV; i += blockDim.x) {
+        sQ[i] = __float2half(qa[i]);
+        sO[i] = 0.0f;
+    }
+    if (tid < TC_HG) {
+        s_m[tid] = -INFINITY;
+        s_l[tid] = 0.0f;
+    }
+    // a chunk's latent rows travel through registers (32 rows x 64 uint4 = 8 a thread): the next chunk's loads are
+    // issued before this chunk's arithmetic, so they arrive while it runs
+    constexpr int PRE = TC_CH * (KV / 8) / 256;
+    uint4 pre[PRE];
+    const auto issue = [&](int c0) {
+#pragma unroll
+        for (int k = 0; k < PRE; ++k) {
+            const int i = tid + k * 256, s = i / (KV / 8), c8 = i - s * (KV / 8);
+            const int cell = c0 + s < ns ? cl[c0 + s] : -1;
+            pre[k] = cell >= 0 ? ((const uint4*) (lat + (size_t) KV * cell))[c8] : make_uint4(0u, 0u, 0u, 0u);
+        }
+    };
+    issue(0);
+    for (int s0 = 0; s0 < ns; s0 += TC_CH) {
+        __syncthreads();   // the previous chunk's product has read sL and sP
+        if (tid < TC_CH) s_cell[tid] = s0 + tid < ns ? cl[s0 + tid] : -1;
+#pragma unroll
+        for (int k = 0; k < PRE; ++k) {
+            const int i = tid + k * 256, s = i / (KV / 8), c8 = i - s * (KV / 8);
+            ((uint4*) (sL + s * KV))[c8] = pre[k];
+        }
+        if (s0 + TC_CH < ns) issue(s0 + TC_CH);
+        __syncthreads();
+        {
+            const int n0 = (warp & 1) * 16, kq = (warp >> 1) * (KV / 4);
+            wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc;
+            wmma::fill_fragment(acc, 0.0f);
+#pragma unroll
+            for (int k = 0; k < KV / 4; k += 16) {
+                wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> a;
+                wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::col_major> b;
+                wmma::load_matrix_sync(a, sQ + kq + k, KV);
+                wmma::load_matrix_sync(b, sL + (size_t) n0 * KV + kq + k, KV);
+                wmma::mma_sync(acc, a, b, acc);
+            }
+            wmma::store_matrix_sync(sPart + (warp >> 1) * TC_HG * TC_CH + n0, acc, TC_CH, wmma::mem_row_major);
+        }
+        __syncthreads();
+#pragma unroll
+        for (int hh = 0; hh < 2; ++hh) {
+            const int h = 2 * warp + hh;
+            float v = 0.0f;
+#pragma unroll
+            for (int q = 0; q < 4; ++q) v += sPart[q * TC_HG * TC_CH + h * TC_CH + lane];
+            v = s_cell[lane] >= 0 ? v * scale : -INFINITY;
+            const float m_old = s_m[h];
+            const float m_new = fmaxf(m_old, warp_max(v));
+            const float e = (v == -INFINITY) ? 0.0f : expf(v - m_new);
+            const float l = warp_sum(e);
+            sP[h * TC_CH + lane] = __float2half(e);
+            if (lane == 0) {
+                const float sc = (m_old == -INFINITY) ? 0.0f : expf(m_old - m_new);
+                s_sc[h] = sc;
+                s_l[h] = s_l[h] * sc + l;
+                s_m[h] = m_new;
+            }
+        }
+        __syncthreads();
+        for (int i = tid; i < TC_HG * KV; i += blockDim.x) sO[i] *= s_sc[i / KV];
+        __syncthreads();
+        {
+            wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> a0, a1;
+            wmma::load_matrix_sync(a0, sP, TC_CH);
+            wmma::load_matrix_sync(a1, sP + 16, TC_CH);
+#pragma unroll
+            for (int j = 0; j < KV / 16 / 8; ++j) {
+                const int c0 = (warp * (KV / 16 / 8) + j) * 16;
+                wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc;
+                wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::row_major> b0, b1;
+                wmma::load_matrix_sync(acc, sO + c0, KV, wmma::mem_row_major);
+                wmma::load_matrix_sync(b0, sL + c0, KV);
+                wmma::load_matrix_sync(b1, sL + 16 * KV + c0, KV);
+                wmma::mma_sync(acc, a0, b0, acc);
+                wmma::mma_sync(acc, a1, b1, acc);
+                wmma::store_matrix_sync(sO + c0, acc, KV, wmma::mem_row_major);
+            }
+        }
+    }
+    __syncthreads();
+    float* o = ctx + ((size_t) t * n_head + h0) * KV;
+    for (int i = tid; i < TC_HG * KV; i += blockDim.x) {
+        const float L = s_l[i / KV];
+        o[i] = L > 0.0f ? sO[i] / L : 0.0f;
+    }
+}
+
+// The same tensor-core attention with the context O in the wmma accumulator registers (four 16-wide column tiles a
+// warp) instead of shared memory: 58368 bytes a block, so Turing (64 KB) runs it - by @dummerjindabin (#10).  The
+// per-chunk rescale multiplies the fragments' elements by their rows, which assumes the sm_75+ accumulator layout
+// (lane l holds rows l/4 and l/4 + 8); Volta's differs (a V100 measured rel L2 0.8-7.9 against the F32 kernel), so
+// mla_attn picks it only where the shared-memory kernel does not fit, or with STRATA_GLM_PREFILL_ATTN=tcreg.
+constexpr size_t kTcRegSmem = (size_t) TC_HG * 512 * 2 + (size_t) TC_CH * 512 * 2 +
+                              (size_t) 4 * TC_HG * TC_CH * 4 + (size_t) TC_HG * TC_CH * 2;
+__global__ void __launch_bounds__(256) mla_attn_tc_reg_kernel(const float* __restrict__ q_abs, const uint16_t* __restrict__ lat,
+                                                              const int* __restrict__ cells_all,
+                                                              const int* __restrict__ n_sel_arr, int n_sel_max, int n_head,
+                                                              float scale, float* __restrict__ ctx) {
     using namespace nvcuda;
     constexpr int KV = 512;
     extern __shared__ __align__(128) unsigned char tc_sm[];
@@ -983,29 +1099,46 @@ void mla_attn(const float* q_abs, const uint16_t* lat, const int* cells, const i
         std::fprintf(stderr, "glm_batch mla_attn: kv_lora %d / n_head %d unsupported\n", kv_lora, n_head);
         return;
     }
-    // per device, the tensor-core kernel's smem opt-in: 0 untried, 1 ok, -1 refused (Turing); the F32 kernel needs none
+    // per device, the prompt attention kernel: 0 not chosen yet, 1 tensor cores with O in shared memory (91 KB: every
+    // card from Volta on except Turing), 2 tensor cores with O in registers (58 KB: Turing, sm_75 - its rescale assumes
+    // the sm_75+ fragment layout), -1 the F32 kernel
     static int tc_ok[16] = {};
     int dev = 0;
     cudaGetDevice(&dev);
     if (dev < 0 || dev >= 16) dev = 0;
-    // STRATA_GLM_PREFILL_ATTN=f32: the F32 kernel (A/B); STRATA_GLM_PREFILL_ATTN_CHECK=1 (debug): both, compared
-    static const bool f32_only = [] {
-        const char* v = getenv("STRATA_GLM_PREFILL_ATTN");
-        return v != nullptr && std::strcmp(v, "f32") == 0;
-    }();
+    // STRATA_GLM_PREFILL_ATTN=f32: the F32 kernel; =tcreg: the register kernel on sm_75+ (A/B, e.g. on Ampere);
+    // STRATA_GLM_PREFILL_ATTN_CHECK=1 (debug): the chosen tensor-core kernel and the F32 one, compared
+    static const char* attn_mode = getenv("STRATA_GLM_PREFILL_ATTN");
+    static const bool f32_only = attn_mode != nullptr && std::strcmp(attn_mode, "f32") == 0;
+    static const bool want_reg = attn_mode != nullptr && std::strcmp(attn_mode, "tcreg") == 0;
     static const bool check_tc = getenv("STRATA_GLM_PREFILL_ATTN_CHECK") != nullptr;
     if (tc_ok[dev] == 0) {
-        int major = 0;
+        int major = 0, minor = 0;
         cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev);
-        tc_ok[dev] = major >= 7 && cudaFuncSetAttribute(mla_attn_tc_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                                        (int) kTcSmem) == cudaSuccess ? 1 : -1;
-        cudaGetLastError();
+        cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, dev);
+        const bool reg_layout = major * 10 + minor >= 75;   // the register kernel's fragment layout
+        const auto fits = [](const void* k, size_t bytes) {
+            const bool ok = cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int) bytes) ==
+                            cudaSuccess;
+            cudaGetLastError();
+            return ok;
+        };
+        tc_ok[dev] = -1;
+        if (major >= 7 && !(want_reg && reg_layout) && fits((const void*) mla_attn_tc_kernel, kTcSmem))
+            tc_ok[dev] = 1;
+        else if (reg_layout && fits((const void*) mla_attn_tc_reg_kernel, kTcRegSmem))
+            tc_ok[dev] = 2;
         std::fprintf(stderr, "glm_batch: CUDA%d prompt attention on the %s\n", dev,
-                     tc_ok[dev] > 0 && !f32_only ? "tensor cores" : "F32 cores");
+                     f32_only || tc_ok[dev] < 0 ? "F32 cores"
+                     : tc_ok[dev] == 2          ? "tensor cores (context in registers)"
+                                                : "tensor cores");
     }
     const dim3 grid((unsigned) T, (unsigned) (n_head / MB_HG));
     if (tc_ok[dev] > 0 && !f32_only) {
-        mla_attn_tc_kernel<<<grid, 256, kTcSmem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx);
+        if (tc_ok[dev] == 2)
+            mla_attn_tc_reg_kernel<<<grid, 256, kTcRegSmem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx);
+        else
+            mla_attn_tc_kernel<<<grid, 256, kTcSmem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx);
         check("mla_attn_tc");
         if (check_tc) {
             const size_t n = (size_t) T * n_head * 512;
