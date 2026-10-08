@@ -239,11 +239,25 @@ def check_hip_pc(a) -> dict:
     if not usable:
         fail("no supported AMD GPU found", "this port targets RX 7900 XT / XTX (gfx1100) and RX 9070 / AI PRO R9700 (gfx1201)")
     if a.gpus:
-        fail("Maya's HIP port currently uses one GPU", "select it with --gpu N")
-    chosen = next((g for g in usable if g["index"] == a.gpu), None) if a.gpu is not None else max(
-        usable, key=lambda g: g["vram_gb"])
-    if chosen is None:
-        fail(f"GPU {a.gpu} is not a supported AMD card")
+        # two cards split the layers (each caches the experts of its own half); the larger card goes first, as it
+        # takes the bigger first half - the order measured on an R9700 + RX 7900 XT
+        try:
+            want = [int(x) for x in str(a.gpus).split(",") if x.strip()]
+        except ValueError:
+            fail(f"--gpus takes two GPU numbers as --check shows them, e.g. --gpus 0,1, not {a.gpus!r}")
+        if len(want) != 2 or want[0] == want[1]:
+            fail("Maya's HIP port runs on one GPU or splits the model across two: --gpu 0, or --gpus 0,1")
+        picked = [next((g for g in usable if g["index"] == i), None) for i in want]
+        for i, g in zip(want, picked):
+            if g is None:
+                fail(f"GPU {i} is not a supported AMD card")
+        chosen = sorted(picked, key=lambda g: -g["vram_gb"])
+    else:
+        one = next((g for g in usable if g["index"] == a.gpu), None) if a.gpu is not None else max(
+            usable, key=lambda g: g["vram_gb"])
+        if one is None:
+            fail(f"GPU {a.gpu} is not a supported AMD card")
+        chosen = [one]
     root = Path(os.environ.get("ROCM_PATH") or "/opt/rocm").resolve()
     if not (root / "llvm/bin/clang++").exists() or not list((root / "lib").glob("libhipblas.so*")):
         fail("ROCm's HIP compiler and hipBLAS are required", "install ROCm 7, or set ROCM_PATH to its root")
@@ -255,11 +269,12 @@ def check_hip_pc(a) -> dict:
     if not avx2:
         fail(f"the CPU ({cpu}) needs AVX2 for the expert lane")
     total, avail = mem_gb()
-    ok(f"using {gpu_label(chosen)}; experimental HIP, one GPU, text only")
+    ok(f"using {' + '.join(gpu_label(g) for g in chosen)}; experimental HIP, "
+       f"{'two GPUs (layer split)' if len(chosen) == 2 else 'one GPU'}, text only")
     ok(f"ROCm: {root}; CPU: {cpu} ({'AVX-512' if avx512 else 'AVX2'})")
     ok(f"RAM: {total:.0f} GB, {avail:.0f} GB available now")
     select_build_backend("hip")
-    return {"backend": "hip", "gpus": [chosen], "archs": ["gfx1100", "gfx1201", "gfx1151"], "rocm": str(root)}
+    return {"backend": "hip", "gpus": chosen, "archs": ["gfx1100", "gfx1201", "gfx1151"], "rocm": str(root)}
 
 
 def nvcc_range(archs) -> tuple:
@@ -1176,17 +1191,24 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vi
         cfg["backend"] = "hip"
         # Leave space for the Linux desktop. The engine sizes its prompt chunk from
         # the available prompt-memory budget; forcing 256 here severely slows HIP.
-        hip_env = {"STRATA_GLM_SPLIT": "0", "STRATA_GLM_RESERVE_MB": "3072", "STRATA_GLM_RAM_HEADROOM_GB": "16"}
-        g = pc["gpus"][0]
+        hip_env = {"STRATA_GLM_RESERVE_MB": "3072", "STRATA_GLM_RAM_HEADROOM_GB": "16"}
+        gpus = pc["gpus"]
+        if len(gpus) == 1:
+            hip_env["STRATA_GLM_SPLIT"] = "0"   # two cards: the engine picks the split (and drafts with MTP)
         # Larger prompt sub-batches feed the matrix cores much better (7900 XT: ~250 -> ~410 tok/s); they need
         # a bigger prompt budget, borrowed from the expert pool only while a prompt runs.
-        if g.get("vram_gb", 0) >= 20:
+        if min(g.get("vram_gb", 0) for g in gpus) >= 20:
             hip_env.update({"STRATA_GLM_PREFILL_SUB": "1024", "STRATA_GLM_PREFILL_MB": "4096"})
-        # The prompt projections' hipBLASLt solutions measured on this architecture (tools/hip). The engine
-        # refuses a table made for another hipBLASLt version and keeps plain hipBLAS.
-        tables = sorted((ROOT / "tools" / "hip").glob(f"{g.get('arch', '')}-glm-hipblaslt-*.txt"))
+        # The prompt projections' hipBLASLt solutions measured per architecture (tools/hip), one table per card's
+        # architecture (':'-separated: each card takes its own). The engine refuses a table made for another
+        # hipBLASLt version and keeps plain hipBLAS.
+        tables = []
+        for arch in dict.fromkeys(g.get("arch", "") for g in gpus):
+            found = sorted((ROOT / "tools" / "hip").glob(f"{arch}-glm-hipblaslt-*.txt"))
+            if found:
+                tables.append(str(found[-1]))
         if tables:
-            hip_env["STRATA_HIPBLASLT_TUNING"] = str(tables[-1])
+            hip_env["STRATA_HIPBLASLT_TUNING"] = ":".join(tables)
         env = {**hip_env, **env}
     if env:
         cfg["env"] = env
@@ -1656,7 +1678,9 @@ def main() -> int:
     if a.check:
         say()
         if a.backend == "hip":
-            say(f"HIP prerequisites found. Run {ME} --backend hip --gpu {pc['gpus'][0]['index']} to try the experimental port.")
+            pick = (f"--gpus {','.join(str(g['index']) for g in pc['gpus'])}" if len(pc["gpus"]) == 2
+                    else f"--gpu {pc['gpus'][0]['index']}")
+            say(f"HIP prerequisites found. Run {ME} --backend hip {pick} to try the experimental port.")
         else:
             say(f"This PC can run Maya. Run {ME} without --check to set it up.")
         return 0
