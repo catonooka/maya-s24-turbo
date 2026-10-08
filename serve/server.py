@@ -1199,6 +1199,9 @@ class Service:
         self.stopping = False            # the server is ending: a request still queued is refused, not started
         self.embeddings = threading.local()           # the current request's image embeddings file (GENI)
         self.api_key = ""                              # when set, /v1/* needs it (Bearer or x-api-key)
+        # pages on OTHER origins allowed to call /v1/* from a browser (CORS; the config's "cors_origins", as in Strata
+        # #321): exact origins like "http://127.0.0.1:8090", or "*" for every page.  Empty = no CORS headers at all.
+        self.cors_origins: list[str] = []
         self.status = {"busy": False, "queued": 0}      # GET /status: what the model is doing right now
         self.active = 0                                 # requests with the engine now (several: READY multi=<n>)
         self.rate = collections.deque(maxlen=32)        # (time, generated) samples for the live tok/s window
@@ -2415,6 +2418,16 @@ def key_list(value) -> list[str]:
     return [k.strip() for k in str(value).split(",") if k.strip()]
 
 
+def parse_cors_origins(value) -> list[str]:
+    """The config's "cors_origins": a list of page origins such as "http://127.0.0.1:8090" (or ["*"]) -> the list
+    without trailing slashes; missing or empty = none (no CORS headers at all).  A ValueError says what is wrong."""
+    if value is None or value == "":
+        return []
+    if not isinstance(value, list) or not all(isinstance(o, str) and o.strip() for o in value):
+        raise ValueError('"cors_origins" must be a list of origins like "http://127.0.0.1:8090" (or ["*"])')
+    return [o.strip().rstrip("/") for o in value]
+
+
 def make_handler(svc: Service):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.0"                       # SSE ends by closing the connection
@@ -2475,6 +2488,37 @@ def make_handler(svc: Service):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _cors_allow(self):
+            """The Access-Control-Allow-Origin value for this request, or None: only /v1/* paths and only an origin the
+            config's cors_origins lists (or "*")."""
+            if not svc.cors_origins or not self.path.split("?")[0].startswith("/v1/"):
+                return None
+            if "*" in svc.cors_origins:
+                return "*"
+            origin = (self.headers.get("Origin") or "").rstrip("/")
+            return origin if origin and origin in svc.cors_origins else None
+
+        def end_headers(self):
+            # every answer (JSON, a stream, an error) to an allowed page carries the CORS header - one place for all
+            allow = self._cors_allow()
+            if allow:
+                self.send_header("Access-Control-Allow-Origin", allow)
+                if allow != "*":
+                    self.send_header("Vary", "Origin")
+            super().end_headers()
+
+        def do_OPTIONS(self):
+            # a CORS preflight: no credentials come with it, so no API key; granted only for cors_origins
+            allow = self._cors_allow()
+            self.send_response(204 if allow else 403)
+            if allow:
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                asked = self.headers.get("Access-Control-Request-Headers")
+                self.send_header("Access-Control-Allow-Headers", asked or "Content-Type, Authorization, x-api-key")
+                self.send_header("Access-Control-Max-Age", "600")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
         def _authorized(self) -> bool:
             if not svc.api_key:
@@ -2694,7 +2738,8 @@ def make_handler(svc: Service):
 
         def _own_page(self, what) -> bool:
             """Only JSON (a form or a "simple" cross-site request can't send it without a CORS preflight, which this
-            server never grants) and no foreign Origin: a web page elsewhere must not change settings or run tools."""
+            server grants only to the config's cors_origins and only on /v1/*) and no foreign Origin: a web page
+            elsewhere must not change settings or run tools."""
             if not self.headers.get("Content-Type", "").startswith("application/json"):
                 self._json(415, {"error": {"message": "send application/json"}})
                 return False
@@ -3185,6 +3230,12 @@ def main() -> int:
     if svc.think_budget:
         print(f"[maya] thinking budget: {svc.think_budget} tokens (then the answer)", flush=True)
     svc.api_key = a.api_key or cfg.get("api_key", "")
+    try:
+        svc.cors_origins = parse_cors_origins(cfg.get("cors_origins"))
+    except ValueError as e:
+        raise SystemExit(f"config: {e}")
+    if svc.cors_origins:
+        print("[maya] browser pages allowed to call /v1/* (CORS): " + ", ".join(svc.cors_origins), flush=True)
     svc.gpu_index = (gpu_list(cfg) or [0])[0]           # the Monitor reads the card the engine runs on (issue #51)
     svc.gpu_indices = gpu_list(cfg)                     # ... or every card of a layer split (issue #112)
     if a.config:
