@@ -182,9 +182,9 @@ __global__ void dequant_q8_0_f16_kernel(const uint8_t* __restrict__ blocks, int6
     out[i] = make_uint4(h[0], h[1], h[2], h[3]);
 }
 
-// Q5_K / Q6_K -> f16 the same way: 8 values (a quarter of one 32-value group) a thread, one 16-byte store; the
+// Q4_K / Q5_K / Q6_K -> f16 the same way: 8 values (a quarter of one 32-value group) a thread, one 16-byte store; the
 // expressions are group32's, value for value.  (The prompt path's KDA/DSA projections are Q5_K: ~2 s of a 2.6k prompt
-// per GPU went to the generic kernel.)
+// per GPU went to the generic kernel; a Q4_K attention cost 13-19% of prefill there.)
 template <int TYPE>
 __global__ void dequant_k_f16_kernel(const uint8_t* __restrict__ blocks, int64_t row_bytes, int64_t row0, int64_t rows,
                                      int64_t runs_per_row, uint4* __restrict__ out) {
@@ -193,7 +193,20 @@ __global__ void dequant_k_f16_kernel(const uint8_t* __restrict__ blocks, int64_t
     const int64_t r = i / runs_per_row, c8 = i % runs_per_row;
     const int k = (int) (c8 % 32), gi = k / 4, l0 = (k % 4) * 8;
     __half v[8];
-    if constexpr (TYPE == 13) {
+    if constexpr (TYPE == 12) {
+        const uint8_t* b = blocks + (row0 + r) * row_bytes + (c8 / 32) * 144;
+        const int j64 = gi / 2, hi = gi % 2;
+        const float d = h2f(b), dmin = h2f(b + 2);
+        int sc, m;
+        scale_min_k4(gi, b + 4, sc, m);
+        const float d1 = d * (float) sc, m1 = dmin * (float) m;
+        const uint8_t* q = b + 16 + 32 * j64;
+#pragma unroll
+        for (int t = 0; t < 8; ++t) {
+            const int l = l0 + t;
+            v[t] = __float2half_rn(d1 * (float) (hi ? (q[l] >> 4) : (q[l] & 0xF)) - m1);
+        }
+    } else if constexpr (TYPE == 13) {
         const uint8_t* b = blocks + (row0 + r) * row_bytes + (c8 / 32) * 176;
         const int j64 = gi / 2, hi = gi % 2;
         const float d = h2f(b), dmin = h2f(b + 2);
@@ -313,10 +326,15 @@ void dequant_f16(int ggml_type, const void* blocks, int64_t row0, int64_t rows, 
         if (e != cudaSuccess) { std::fprintf(stderr, "dequant launch: %s\n", cudaGetErrorString(e)); std::exit(1); }
         return;
     }
-    if ((ggml_type == 13 || ggml_type == 14) && cols % 256 == 0 && rows > 0 && ((uintptr_t) out & 15u) == 0) {
-        const int64_t runs = cols / 8, total = rows * runs, rb = cols / 256 * (ggml_type == 13 ? 176 : 210);
+    if ((ggml_type == 12 || ggml_type == 13 || ggml_type == 14) && cols % 256 == 0 && rows > 0 &&
+        ((uintptr_t) out & 15u) == 0) {
+        const int64_t runs = cols / 8, total = rows * runs,
+                      rb = cols / 256 * (ggml_type == 12 ? 144 : ggml_type == 13 ? 176 : 210);
         const unsigned grid = (unsigned) ((total + 255) / 256);
-        if (ggml_type == 13)
+        if (ggml_type == 12)
+            dequant_k_f16_kernel<12><<<grid, 256, 0, (cudaStream_t) stream>>>((const uint8_t*) blocks, rb, row0, rows,
+                                                                            runs, reinterpret_cast<uint4*>(out));
+        else if (ggml_type == 13)
             dequant_k_f16_kernel<13><<<grid, 256, 0, (cudaStream_t) stream>>>((const uint8_t*) blocks, rb, row0, rows,
                                                                             runs, reinterpret_cast<uint4*>(out));
         else
