@@ -1380,7 +1380,7 @@ def start(cfg_path: Path, a) -> int:
 # ------------------------------------------------------------------------------------------------ the report
 # the engine log's lines that tell where the time goes: how the model was split across VRAM / RAM / the SSD, the
 # prompt path's chunks, and the per-token breakdown ("glm stat": VRAM hits, RAM fetches, disk reads, CPU lane)
-REPORT_LINES = re.compile(r"glm fast:|glm prefill: CUDA|glm split|glm stat|glm slots|glm prefill: \d|ERR|error|failed|"
+REPORT_LINES = re.compile(r"glm fast:|glm prefill: (?:CUDA|HIP)|glm split|glm stat|glm slots|glm prefill: \d|ERR|error|failed|"
                           r"out of memory", re.I)
 STAT_DECODE = re.compile(r"glm stat: decode ([\d.]+) ms/tok")
 
@@ -1399,11 +1399,74 @@ def speed_lines(text) -> list:
     return picked
 
 
-def report(version: str) -> int:
+def hip_gpu_report(rocm: Path) -> str:
+    """Static AMD details, with KFD's HIP indices/architectures even when no SMI tool is installed.
+
+    Keep the SMI JSON in its own device order: its DRM indices need not match KFD's HIP indices.
+    This also retains driver/VRAM fields across the different versions of the two tools.
+    """
+    import platform
+    gpus = S.amd_gpus()
+    lines = ["KFD topology (HIP GPU indices):"]
+    lines += [f"{gpu_label(g)}; driver {g.get('driver', 'amdgpu')}" for g in gpus]
+    if not gpus:
+        lines.append("no AMD GPUs found in KFD topology")
+    try:
+        driver = Path("/sys/module/amdgpu/version").read_text().strip()
+    except OSError:
+        driver = ""
+    lines.append(f"amdgpu driver: {driver or 'in-tree'}, kernel {platform.release()}")
+    for name, args in (("rocm-smi", ["--showproductname", "--showmeminfo", "vram", "--showdriverversion", "--json"]),
+                       ("amd-smi", ["static", "--json"])):
+        exe = shutil.which(name)
+        if not exe and (rocm / "bin" / name).is_file():
+            exe = str(rocm / "bin" / name)
+        if not exe:
+            continue
+        try:
+            data = json.loads(S.out([exe, *args]))
+        except ValueError:
+            continue
+        if isinstance(data, (dict, list)) and data:
+            lines += [f"\n{name} (tool GPU indices):", json.dumps(data, indent=2)]
+            break
+    else:
+        lines.append("rocm-smi / amd-smi unavailable or did not answer; using KFD topology")
+    return "\n".join(lines)
+
+
+def rocm_report(rocm: Path) -> str:
+    """ROCm's install version file first, then hipcc; reporting never requires the compiler."""
+    version = ""
+    for name in ("version", "version-dev"):
+        try:
+            version = (rocm / ".info" / name).read_text().strip()
+        except OSError:
+            continue
+        if version:
+            break
+    if not version:
+        hipcc = rocm / "bin/hipcc"
+        if hipcc.is_file():
+            version = S.out([str(hipcc), "--version"]).strip()
+    return f"path {rocm}\nversion {version or 'unknown (ROCm version file / hipcc unavailable)'}"
+
+
+def report(version: str, backend: str | None = None, cfg_path: Path | None = None) -> int:
     """--report: maya-report.txt in the Maya folder - this PC, the installed setup and the engine log's speed lines,
     for a bug or speed report.  Nothing is sent anywhere; the home folder is written as ~ and API keys are left out."""
     home = str(Path.home())
     lines = []
+    have = [cfg_path] if cfg_path is not None else configs()
+    cfg = {}
+    for p in have:
+        candidate = read_json(p)
+        if backend is None or candidate.get("backend", "cuda") == backend:
+            cfg = candidate
+            break
+    backend = backend or cfg.get("backend", "cuda")
+    select_build_backend(backend)
+    stamp = read_json(STAMP)
 
     def add(title, text=""):
         lines.append(f"## {title}")
@@ -1415,9 +1478,15 @@ def report(version: str) -> int:
                 f"{sys.platform}{' (WSL)' if S.is_wsl() else ''}")
     import platform
     add("System", f"{platform.platform()}")
-    add("GPUs", S.out(["nvidia-smi", "--query-gpu=index,name,memory.total,memory.used,driver_version,"
-                                     "pcie.link.gen.max,pcie.link.width.current,pcie.link.width.max,power.limit,"
-                                     "temperature.gpu", "--format=csv"]) or "nvidia-smi did not answer")
+    if backend == "hip":
+        rocm = Path((cfg.get("env") or {}).get("ROCM_PATH") or os.environ.get("ROCM_PATH")
+                    or stamp.get("rocm") or "/opt/rocm").expanduser().resolve()
+        add("GPUs", hip_gpu_report(rocm))
+        add("ROCm", rocm_report(rocm))
+    else:
+        add("GPUs", S.out(["nvidia-smi", "--query-gpu=index,name,memory.total,memory.used,driver_version,"
+                                         "pcie.link.gen.max,pcie.link.width.current,pcie.link.width.max,power.limit,"
+                                         "temperature.gpu", "--format=csv"]) or "nvidia-smi did not answer")
     cpu, avx2, avx512 = S.cpu_info()
     total, avail = mem_gb()
     pf = S.page_file_gb()
@@ -1430,10 +1499,9 @@ def report(version: str) -> int:
     else:
         disks = S.out(["lsblk", "-d", "-o", "NAME,MODEL,ROTA,TRAN,SIZE"])
     add("Disks", disks)
-    stamp = read_json(STAMP)
-    add("Engine build", json.dumps({k: stamp.get(k) for k in ("archs", "nvcc", "host_compiler", "date")})
+    keys = ("backend", "archs", "rocm", "date") if backend == "hip" else ("archs", "nvcc", "host_compiler", "date")
+    add("Engine build", json.dumps({k: stamp.get(k) for k in keys})
         if stamp else "not compiled yet")
-    have = configs()
     if not have:
         add("Setup", f"no maya-*.json yet: {ME} has not finished a setup here")
     for c in have:
@@ -1486,6 +1554,9 @@ def bench(cfg_path: Path, version: str) -> int:
     way the dashboard starts it.  Writes maya-bench.txt (--report includes it).  A few minutes."""
     import urllib.request
     cfg = read_json(cfg_path)
+    select_build_backend(cfg.get("backend", "cuda"))
+    if cfg.get("backend") == "hip":
+        cfg["exe"] = str(EXE)
     port = cfg.get("port") or 8080
     try:
         urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2)
@@ -1561,7 +1632,11 @@ def bench(cfg_path: Path, version: str) -> int:
             p.kill()
     stats = speed_lines(log_path.read_text(encoding="utf-8", errors="replace").splitlines())
     dec = [r[2] for r in results if r[0] == "decode"]
-    gpus = ", ".join(f"{g['name']} {g['vram_gb']:.0f} GB" for g in S.gpus()) or "?"
+    found = S.amd_gpus() if cfg.get("backend") == "hip" else S.gpus()
+    if cfg.get("backend") == "hip" and SV.gpu_list(cfg):
+        by_index = {g["index"]: g for g in found}
+        found = [by_index[i] for i in SV.gpu_list(cfg) if i in by_index]
+    gpus = ", ".join(f"{g['name']} {g['vram_gb']:.0f} GB" for g in found) or "?"
     total, _ = mem_gb()
     lines = [f"Project Maya v{version} benchmark, {time.strftime('%Y-%m-%d %H:%M')}",
              f"GPUs: {gpus}; RAM {total:.0f} GB; CPU {S.cpu_info()[0]}",
@@ -1627,7 +1702,16 @@ def main() -> int:
     ap.add_argument("--calibrate", action="store_true",
                     help="tune the engine's CPU lane for this PC (the PCIe share and the CPU threads, ~10-15 minutes), "
                          "then start the model (with --no-start: only tune)")
+    ap.add_argument("--config", type=Path, help="installed JSON config for --bench or --report "
+                                              "(default: most recently used)")
     a = ap.parse_args()
+    if a.config is not None:
+        if not (a.bench or a.report):
+            ap.error("--config is used with --bench or --report")
+        if not a.config.is_file():
+            ap.error(f"config not found: {a.config}")
+        if a.backend and read_json(a.config).get("backend", "cuda") != a.backend:
+            ap.error(f"{a.config}: config backend does not match --backend {a.backend}")
     if not WIN and sys.prefix == sys.base_prefix and not os.environ.get("MAYA_SH"):
         # started as `python3 maya.py`: a system Python takes no pip installs (PEP 668, "externally-managed-
         # environment") - maya.sh makes the private .venv and runs this file with its Python
@@ -1638,9 +1722,11 @@ def main() -> int:
     say(f"Project Maya v{version} - GLM-5.3-Flash on your own GPU(s). Built on Strata (MIT) and ggml/llama.cpp "
         "(MIT).")
     if a.report:
-        return report(version)
+        return report(version, a.backend, a.config)
     if a.bench:
-        have = configs()
+        have = [a.config] if a.config is not None else configs()
+        if a.backend:
+            have = [p for p in have if read_json(p).get("backend", "cuda") == a.backend]
         if not have:
             fail("Maya is not set up here yet", f"run {ME} first")
         return bench(have[0], version)
