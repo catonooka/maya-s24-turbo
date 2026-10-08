@@ -952,8 +952,18 @@ void Glm5Model::fast_cpu_experts(int il, int ne, const uint8_t* const* blob, con
     // one job per pool thread: a contiguous run of the call's rows, the experts' gate/up rows end to end (then the
     // down rows likewise), the weighted sum after.  Each thread streams its share in one piece - 2-socket Xeon, 5
     // Q3_K experts from DRAM, 40 threads: 0.154 ms an expert vs 0.201 with 32/64-row jobs claimed in turn (the short
-    // streams held the memory system to ~55 of the ~92 GB/s one socket reads; a pure read of the same jobs did too)
-    const int T = F->cpu_pool->active();
+    // streams held the memory system to ~55 of the ~92 GB/s one socket reads; a pure read of the same jobs did too).
+    // The run is cut in contiguous pieces claimed in turn, about 48 in all (STRATA_GLM_CPU_SPLIT=<pieces a thread>
+    // overrides): with few threads a thread the disk readers or the service thread delay no longer holds up the whole
+    // call, with many each still streams its share in one piece.  1x V100, 6-core i5, Maya-S decode: one piece a thread
+    // 14.3 tok/s (the lane 34 ms a token), 2: 15.7, 4: 16.8, 8: 17.1 (21 ms; v1.0.11's 64-row jobs 16.8); the 2-socket
+    // Xeon above, 40 threads: one piece each
+    static const int kSplit = [] {
+        const char* v = getenv("STRATA_GLM_CPU_SPLIT");
+        return v ? std::max(1, std::min(64, std::atoi(v))) : 0;
+    }();
+    const int threads = F->cpu_pool->active();
+    const int T = threads * (kSplit > 0 ? kSplit : std::max(1, std::min(8, 48 / std::max(1, threads))));
     kc::native_quant_act(nf, x, F->cpu_act.data());
     const int gu_tot = ne * n_ff;
     F->cpu_pool->run(T, [&](int job) {
