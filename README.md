@@ -211,6 +211,8 @@ These settings change what the engine chooses (put them in the config with `--en
 | `STRATA_GLM_SLOT_MIN`, `STRATA_GLM_SLOT_GB`, `STRATA_GLM_SLOT_DIR` | 1024, 16, `<pack>/slots` | the shortest conversation kept aside (tokens), their total size on disk (GB), and the folder |
 | `STRATA_GLM_PROMOTE` | 8 | when the CPU computes every RAM-tier expert (it beats the PCIe link), experts moved between VRAM and RAM in the background per token, so VRAM follows what you use; `0` = off |
 | `STRATA_GLM_PROMOTE_FILL` | 24 | while VRAM has free expert slots (after a prompt gives back what it borrowed), up to this many of the hottest RAM-tier experts are copied into them per token (several per layer) instead of `STRATA_GLM_PROMOTE`; `0` = the same pace as the moves |
+| `STRATA_GLM_RAM_SHADOW` | off | `1`: an expert moved up to VRAM keeps its RAM copy while the RAM tier has room, so leaving VRAM needs no copy back or SSD read (helps when the RAM tier holds most of the model; [docs/AMD_MAYA.md](docs/AMD_MAYA.md) has measurements) |
+| `STRATA_GLM_SERVICE_IDLE_MS` | 200 | the engine's tier threads (one per GPU) spin while a decode routes experts and sleep after this long without one, so an idle engine uses ~1% of a core instead of one core per GPU; `0` = spin always |
 | `STRATA_GLM_PREFILL_CPU` | on | prompts: the least routed RAM-tier experts are computed on the CPU while the GPU loads the rest over PCIe, the split balanced each layer so both finish together; `0` = off. `STRATA_GLM_PREFILL_CPU_ROW_MS` fixes the CPU cost of a row it plans with (default: learned) |
 | `STRATA_GLM_PRESTAGE` | 160 on one GPU, 0 on more | prompts: experts copied to the GPU while a layer's attention runs (the PCIe link is idle then), into a buffer of this many experts borrowed from the pool's tail - the next layer's most routed RAM-tier ones; `0` = off. `STRATA_GLM_PRESTAGE_ADAPT=1` (experimental, not yet measured) learns each layer's count from how long its attention takes |
 | `STRATA_GLM_PREFILL_TRACE` | off | `1`: per layer of every prompt chunk, the attention time and when the prestage copies, the copy lane and the CPU lane ended (debug) |
@@ -237,7 +239,8 @@ RAM and disks, your Maya setup and the engine's speed lines - where the time goe
 can be tuned for your machine. Nothing is sent anywhere; your home folder shows as `~` and no API key is included.
 For a speed report, also run **`./maya.sh --bench`** with Maya stopped (Windows: `START-MAYA.bat --bench`): a
 standard test of a few minutes - decode on three questions, prefill at 2k and 8k tokens - that writes
-`maya-bench.txt`, which the report then includes.
+`maya-bench.txt`, which the report then includes. Both work on AMD too (`--backend hip`), and `--config FILE` picks
+one installed setup when you have several.
 
 - **"nvcc ... cannot build for these GPUs"** - Volta needs CUDA 12.x; Blackwell needs 12.8 or newer. Several toolkits
   can be installed side by side; the installer takes the newest that fits.
