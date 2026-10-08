@@ -171,9 +171,13 @@ def openai_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dict]:
                     args = json.loads(args) if args.strip() else {}
                 calls.append({"function": {"name": fn.get("name"), "arguments": args or {}}})
             out["tool_calls"] = calls
+        if role == "assistant" and not out["content"] and not out.get("tool_calls") and not out.get("reasoning_content"):
+            continue   # an empty turn is not rendered: a history of them teaches the model to answer with nothing
         messages.append(out)
     tools = [t.get("function", t) if isinstance(t, dict) and t.get("type") == "function" else t
              for t in req.get("tools") or []] or None
+    if req.get("tool_choice") == "none":   # the tools stay declared to the client, but none is offered to the model
+        tools = None
     kwargs = {}
     # OpenAI Chat Completions: "reasoning_effort"; Responses style: "reasoning": {"effort": ...}
     reasoning = req.get("reasoning") if isinstance(req.get("reasoning"), dict) else {}
@@ -222,6 +226,8 @@ def anthropic_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dic
             messages.append(out)
     tools = [{"name": t["name"], "description": t.get("description", ""), "parameters": t.get("input_schema", {})}
              for t in req.get("tools") or []] or None
+    if isinstance(req.get("tool_choice"), dict) and req["tool_choice"].get("type") == "none":
+        tools = None
     kwargs = {}
     # Anthropic: "thinking": {"type": "disabled"} or {"type": "enabled", "budget_tokens": N};
     # "output_config": {"effort": "low" | "medium" | "high"}

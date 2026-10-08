@@ -97,6 +97,17 @@ class EngineDied(RuntimeError):
     """The engine process ended in the middle of a request (issue #27: on Linux, the out-of-memory killer)."""
 
 
+def client_stop_strings(req: dict | None) -> list[str]:
+    """A request's own stop strings: OpenAI's "stop" (a string or a list) or Anthropic's "stop_sequences" (from
+    Strata #454 - they were ignored, so a client that relied on them got text past its marker)."""
+    s = (req or {}).get("stop")
+    if s is None:
+        s = (req or {}).get("stop_sequences")
+    if isinstance(s, str):
+        s = [s]
+    return [x for x in s if isinstance(x, str) and x][:16] if isinstance(s, list) else []
+
+
 # A FROZEN engine (Strata #1317).  Silence alone proves nothing: on a slow PC the engine reads a long prompt chunk for
 # minutes without a line.  But one that prints nothing for ENGINE_STALL_S and in that time uses no CPU, reads or writes
 # no disk and leaves its GPUs idle is not slow, it is stuck (a deadlock, a driver stall), and waiting cannot help: it is
@@ -167,6 +178,8 @@ def narrate_start(log_path: str, offset: int, args: list, done: threading.Event,
                     say("cache", f"[strata] filling the GPU's expert cache ({n}) ...")
                 elif "session is up" in line:
                     say("up", "[strata] almost ready ...")
+                elif "WARNING - " in line:   # the engine's own (e.g. Windows' commit limit capping the RAM tier)
+                    print("[strata] WARNING: " + line.split("WARNING - ", 1)[1].strip(), flush=True)
         if time.time() - last > heartbeat:
             last = time.time()
             print(f"[strata] still starting ({time.time() - t0:.0f} s) - please wait ...", flush=True)
@@ -1094,6 +1107,10 @@ class Service:
         parser = OutputParser(thinking=thinking, tools=tools, stream_tools=True)
         detok, n, finish = Detokenizer(self.tok), 0, "length"
         held = ""                                       # text that may be the start of a stop marker (stop_texts)
+        # the client's own stop strings (OpenAI "stop", Anthropic "stop_sequences"): the answer ends before one.  They
+        # apply to the answer, not inside the reasoning; the model's own end-of-turn markers apply everywhere
+        client_stops = client_stop_strings(sampling)
+        matched = None                                  # the client stop string that ended the answer
         timings, before = None, None                    # this request's timings; the engine's `last` before it
         raw_ids = []                                    # every generated id (STRATA_DEBUG: dump raw model text)
         emb = getattr(self.embeddings, "path", None)
@@ -1147,13 +1164,16 @@ class Service:
                             break
                         raw_ids.append(t)
                         text, stopped = detok.push(t), False
-                        if self.stop_texts:
+                        stops = self.stop_texts + (client_stops if parser.state != "reasoning" else [])
+                        if stops:
                             held += text
-                            cut = min((i for i in (held.find(s) for s in self.stop_texts) if i >= 0), default=-1)
-                            if cut >= 0:
+                            hits = [(i, s) for s, i in ((s, held.find(s)) for s in stops) if i >= 0]
+                            if hits:
+                                cut, s = min(hits)
                                 text, held, stopped = held[:cut], "", True
+                                matched = s if s in client_stops and s not in self.stop_texts else None
                             else:               # keep back the longest tail that could still grow into a marker
-                                k = max((j for s in self.stop_texts for j in range(1, len(s))
+                                k = max((j for s in stops for j in range(1, len(s))
                                          if held.endswith(s[:j])), default=0)
                                 text, held = held[:len(held) - k], held[len(held) - k:]
                         evs = parser.feed(text)
@@ -1234,7 +1254,7 @@ class Service:
         for ev in parser.finish():
             yield "event", ev
         yield "done", {"finish": finish, "completion_tokens": n, "reused": (timings or {}).get("cache_n", 0),
-                       "timings": timings}
+                       "timings": timings, "stop_sequence": matched if finish == "stop" else None}
 
 
 def request_timings(prompt_tokens: int, generated: int, last: dict) -> dict | None:
@@ -1582,11 +1602,13 @@ def anthropic_events(svc: Service, req: dict, ids, thinking, tools, max_new, can
             if open_kind is not None:
                 yield close()
             stop = "tool_use" if used_tool and x["finish"] == "stop" else \
+                "stop_sequence" if x.get("stop_sequence") else \
                 {"stop": "end_turn", "length": "max_tokens", "cancel": "end_turn"}[x["finish"]]
             # the final counts, Anthropic's way: input_tokens leaves out what the conversation cache already held,
             # which is cache_read_input_tokens (message_start could only say the whole prompt)
             reused = min(x.get("reused") or 0, len(ids))
-            yield "message_delta", {"type": "message_delta", "delta": {"stop_reason": stop, "stop_sequence": None},
+            yield "message_delta", {"type": "message_delta", "delta": {"stop_reason": stop,
+                                                                       "stop_sequence": x.get("stop_sequence")},
                                     "usage": {"input_tokens": len(ids) - reused, "cache_read_input_tokens": reused,
                                               "output_tokens": x["completion_tokens"]}}
             yield "message_stop", {"type": "message_stop"}
@@ -1615,6 +1637,7 @@ def anthropic_collect(events) -> dict:
             b["input"] = json.loads(b.pop("_json") or "{}")
         elif name == "message_delta":
             msg["stop_reason"] = e["delta"]["stop_reason"]
+            msg["stop_sequence"] = e["delta"].get("stop_sequence")
             msg["usage"].update(e["usage"])
     msg["content"] = blocks
     return msg

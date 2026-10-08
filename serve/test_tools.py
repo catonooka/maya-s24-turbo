@@ -169,5 +169,71 @@ class HttpToolCalls(unittest.TestCase):
         self.assertEqual(b["stop_reason"], "tool_use")
 
 
+class ClientStops(unittest.TestCase):
+    """The client's stop strings (OpenAI "stop", Anthropic "stop_sequences") end the answer - not the reasoning - and
+    tool_choice "none" offers no tools; an empty assistant turn is not rendered (from Strata 0.1.40)."""
+
+    @classmethod
+    def setUpClass(cls):
+        tok = ByteTokenizer()
+        cls.engine = MockEngine(tok, "Thinking: END is a word.</think>\n\nHello there END and more", max_context=8192)
+        cls.svc = Service(cls.engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        cls.httpd = serve(cls.svc, port=0)
+        cls.base = f"http://127.0.0.1:{cls.httpd.server_address[1]}"
+        cls.tok = tok
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+
+    post = HttpToolCalls.post
+
+    def test_openai_stop(self):
+        msgs = [{"role": "user", "content": "hi"}]
+        for stop in ("END", ["nope", "END"]):
+            code, b = self.post("/v1/chat/completions", {"model": "m", "messages": msgs, "stop": stop})
+            self.assertEqual(code, 200, b)
+            self.assertEqual(b["choices"][0]["message"]["content"].strip(), "Hello there")
+            self.assertEqual(b["choices"][0]["finish_reason"], "stop")
+            self.assertIn("END is a word", b["choices"][0]["message"].get("reasoning_content", ""))  # not cut there
+
+    def test_openai_stop_streamed(self):
+        r = urllib.request.Request(self.base + "/v1/chat/completions", data=json.dumps(
+            {"model": "m", "stream": True, "stop": ["END"], "messages": [{"role": "user", "content": "hi"}]}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(r, timeout=30) as resp:
+            body = resp.read().decode()
+        text = "".join((json.loads(line[6:])["choices"][0]["delta"].get("content") or "")
+                       for line in body.splitlines() if line.startswith("data: {"))
+        self.assertEqual(text.strip(), "Hello there")
+        self.assertNotIn("EN", text.replace("Hello there", ""))
+
+    def test_anthropic_stop_sequence(self):
+        code, b = self.post("/v1/messages", {"model": "m", "max_tokens": 200, "stop_sequences": ["END"],
+                                             "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(code, 200, b)
+        self.assertEqual((b["stop_reason"], b["stop_sequence"]), ("stop_sequence", "END"))
+        self.assertEqual("".join(c.get("text", "") for c in b["content"] if c["type"] == "text").strip(), "Hello there")
+        code, b = self.post("/v1/messages", {"model": "m", "max_tokens": 200,
+                                             "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual((b["stop_reason"], b["stop_sequence"]), ("end_turn", None))
+
+    def test_tool_choice_none(self):
+        tools = [{"type": "function", "function": TOOLS[0]}]
+        self.post("/v1/chat/completions", {"model": "m", "tools": tools, "tool_choice": "none",
+                                           "messages": [{"role": "user", "content": "hi"}]})
+        self.assertNotIn("get_weather", self.tok.decode(self.engine.last_prompt))
+        self.post("/v1/chat/completions", {"model": "m", "tools": tools, "messages": [{"role": "user", "content": "hi"}]})
+        self.assertIn("get_weather", self.tok.decode(self.engine.last_prompt))
+
+    def test_empty_assistant_turns_are_dropped(self):
+        from serve.frontend import openai_to_messages
+        msgs, _, _ = openai_to_messages({"messages": [{"role": "user", "content": "a"},
+                                                      {"role": "assistant", "content": ""},
+                                                      {"role": "user", "content": "b"}]})
+        self.assertEqual([m["role"] for m in msgs], ["user", "user"])
+
+
 if __name__ == "__main__":
     unittest.main()
