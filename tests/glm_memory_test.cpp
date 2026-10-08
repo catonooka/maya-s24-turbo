@@ -1,6 +1,7 @@
 // CPU-only policy checks: no HIP/CUDA headers, device queries or allocations.
 #include "../src/core/glm_memory.hpp"
 
+#undef NDEBUG   // the checks are asserts: keep them in Release builds
 #include <cassert>
 #include <cstdio>
 
