@@ -594,6 +594,11 @@ int Glm5Model::sample_token(strata::kernels::SamplerParams& sp, std::string& err
         err = "glm5_model: no sampler buffer";
         return -1;
     }
+    if (tail->fast_ != nullptr) {
+        const int tok = tail->fast_sample(sp, err);
+        cudaSetDevice(dev_);
+        return tok;
+    }
     cudaSetDevice(tail->dev_);
     strata::kernels::sample_tokens(tail->sc_ + tail->sc_logits, 1, (int) g_.n_vocab, nullptr, 0, sp,
                                    tail->d_tok_, nullptr);

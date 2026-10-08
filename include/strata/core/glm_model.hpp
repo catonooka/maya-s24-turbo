@@ -346,6 +346,7 @@ public:
     void fast_ahead_route(int il, const int* ids, unsigned int miss, const short (*ahead)[8]);   // LOOKAHEAD
     void fast_ahead_reader();
     void fast_boundary();                                  // between tokens: apply finished promotions
+    int fast_sample(strata::kernels::SamplerParams& sp, std::string& err);   // this half's logits, sampled on its stream
     int64_t ram_budget_ = -1;                              // bytes of pinned RAM tier for this half (-1: derive)
     float* snap_ = nullptr;                                // the saved KDA states + conv histories (this half)
     int64_t snap_pos_ = -1;

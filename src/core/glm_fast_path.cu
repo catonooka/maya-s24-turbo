@@ -3107,6 +3107,23 @@ bool Glm5Model::fast_mtp(int64_t p, int32_t next_tok, std::string& err) {
     return true;
 }
 
+// A sampled (not greedy) token from this half's logits, drawn on its own stream and read back through the pinned
+// token word.  On the default stream the draw ended in a device-wide sync, which also waited for the tier copies in
+// flight on the copy stream every sampled token - and on Windows / HIP lost the prompt after the first token (#6,
+// found by jerem91150).  The stream holds this position's forward and nothing after it (the split's tail drains
+// before it takes its next position), so the logits read are the ones just computed.
+int Glm5Model::fast_sample(strata::kernels::SamplerParams& sp, std::string& err) {
+    FastState* F = fast_;
+    cudaSetDevice(dev_);
+    strata::kernels::sample_tokens(sc_ + sc_logits, 1, (int) g_.n_vocab, nullptr, 0, sp, d_tok_, F->cs);
+    cudaMemcpyAsync(F->tok_h, d_tok_, sizeof(int), cudaMemcpyDeviceToHost, F->cs);
+    if (cudaStreamSynchronize(F->cs) != cudaSuccess) {
+        err = std::string("glm sampler: ") + cudaGetErrorString(cudaGetLastError());
+        return -1;
+    }
+    return F->tok_h[0];
+}
+
 bool Glm5Model::has_mtp() const {
     for (const Glm5Model* m = this; m != nullptr; m = m->split_next_.get())
         if (m->fast_ != nullptr && m->mtp_il_ >= 0) return true;
@@ -3309,13 +3326,8 @@ bool Glm5Model::decode_spec(strata::kernels::SamplerParams& sp, int64_t max_new,
             while (cudaEventQuery(B->fast_->ev_done) == cudaErrorNotReady) std::this_thread::yield();
             y = B->fast_->tok_h[0];
         } else {
-            cudaSetDevice(B->dev_);
-            cudaEventSynchronize(B->fast_->ev_done);
-            strata::kernels::sample_tokens(B->sc_ + B->sc_logits, 1, (int) g.n_vocab, nullptr, 0, sp, B->d_tok_, nullptr);
-            if (cudaMemcpy(&y, B->d_tok_, sizeof(int), cudaMemcpyDeviceToHost) != cudaSuccess) {
-                err = "glm spec: sampler copy";
-                return false;
-            }
+            y = B->fast_sample(sp, err);
+            if (y < 0) return false;
         }
         y = forced(y);
         sp.counter += 1;
