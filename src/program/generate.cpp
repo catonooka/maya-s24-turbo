@@ -1255,12 +1255,15 @@ static int glm_pack_generate(const Options& o) {
         // one emitted token: the T line, the live tier counters every 8 tokens, the stop conditions (false: stop)
         // LOOP GUARD: a heavily quantized model can fall into repeating a short pattern ("0 0 0 ...") until the
         // thinking budget or max_tokens ends it - minutes of nothing.  When the last W tokens are one pattern of at most
-        // 32 tokens repeated exactly, thinking is closed at once (as the budget does) and an answer is ended.
+        // 32 tokens repeated exactly, thinking is closed at once (as the budget does); in the answer, what the model is in the
+        // middle of is closed (a tool call's argument, else the turn), and a second loop ends it.
         // W: STRATA_GLM_LOOP_THINK (256) while thinking, STRATA_GLM_LOOP_ANSWER (1024) in the answer - long enough
         // for legitimately repetitive output (a zero-filled array); 0 turns that check off.
         static const int loop_w_think = (int) env_num("STRATA_GLM_LOOP_THINK", 256);
         static const int loop_w_answer = (int) env_num("STRATA_GLM_LOOP_ANSWER", 1024);
         std::vector<int> gen_hist;
+        bool in_arg = false;     // inside a tool call's <arg_value> (the answer's position, for the loop guard)
+        int guard_fired = 0;     // soft landings in this answer: a second loop ends it
         const auto looping = [&](int w) -> int {   // the pattern's period, 0 when the tail is not one
             const int n = (int) gen_hist.size();
             if (w <= 0 || n < w) return 0;
@@ -1287,14 +1290,32 @@ static int glm_pack_generate(const Options& o) {
                     gen_hist.clear();
                 }
             } else if (!in_think) {
+                // where the answer stands: inside a tool call's argument value, the place a loop must be closed for
+                // an agent to go on (GLM's single-token tags)
+                constexpr int kArgValue = 154849, kArgValueEnd = 154850, kUser = 154827;
+                if (tok == kArgValue) in_arg = true;
+                if (tok == kArgValueEnd) in_arg = false;
                 if (const int per = looping(loop_w_answer)) {
-                    char m[200];
-                    std::snprintf(m, sizeof m, "the answer was repeating a %d-token pattern (%d tokens in): ended",
-                                  per, (int) produced);
+                    char m[240];
+                    if (guard_fired == 0) {
+                        // a soft landing: close what the model is in the middle of instead of cutting the response -
+                        // a tool call's argument ends (the call completes with what was written, the agent runs it
+                        // and sees the result), plain text ends the turn (finish "stop")
+                        model.force_next(in_arg ? kArgValueEnd : kUser);
+                        std::snprintf(m, sizeof m, "the answer was repeating a %d-token pattern (%d tokens in): %s",
+                                      per, (int) produced, in_arg ? "the tool call's argument was closed there"
+                                                                  : "the turn was ended there");
+                    } else {
+                        std::snprintf(m, sizeof m, "the answer kept repeating a %d-token pattern (%d tokens in): "
+                                      "ended", per, (int) produced);
+                    }
                     std::fprintf(stderr, "glm loop guard: %s\n", m);
                     if (o.serve) std::printf("NOTE %s\n", m);
-                    finish = "length";
-                    return false;
+                    gen_hist.clear();
+                    if (guard_fired++ > 0) {   // it did not stop: the hard way
+                        finish = "length";
+                        return false;
+                    }
                 }
             }
             if (in_think && (tok == req_think_end || produced >= req_think_budget)) {
