@@ -3,6 +3,23 @@
 Every release is on GitHub (Releases) with these notes; every published change moves the last number. Update: `git pull`, then `./setup.sh` (Windows:
 `START-MAYA.bat`) - it recompiles only what changed and starts.
 
+## v1.0.11 - 2026-10-08
+
+Maya runs on AMD GPUs (experimental): RX 7900 XT / XTX and Radeon AI PRO R9700 / RX 9070 on Linux, contributed by
+@boxwrench.
+
+- **AMD (experimental, #7 by @boxwrench):** `./maya.sh --backend hip` builds Maya's engine with ROCm 7 for RX 7900
+  XT / XTX (gfx1100) and Radeon AI PRO R9700 / RX 9070 (gfx1201) - Linux, one GPU, text only. Measured by
+  @boxwrench with Maya-S: on the R9700, decode (writing the answer) about 20 tokens/s and prefill (reading the
+  prompt) up to 490-560 tokens/s; on the RX 7900 XT, prefill up to about 410 tokens/s. Setup and measurements:
+  docs/AMD_MAYA.md.
+- **Prefill on AMD:** the prompt projections go through hipBLASLt with tuning tables for each card, and the prompt
+  runs in bigger sub-batches on cards with room (`STRATA_GLM_PREFILL_SUB`; NVIDIA keeps 256).
+- The groundwork, the GPU-to-CPU signal fix, came in v1.0.7 (#2).
+- NVIDIA: unchanged - the same tokens as v1.0.10 on 2x Tesla V100, every target builds.
+- We have no AMD hardware ourselves; these results are the contributor's. Tell us how it runs on yours (`--bench`
+  and `--report` learn AMD in a follow-up).
+
 ## v1.0.10 - 2026-10-08
 
 RTX 20-series cards now read prompts on their tensor cores too.
