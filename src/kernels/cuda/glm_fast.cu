@@ -1633,14 +1633,15 @@ __global__ void __launch_bounds__(256) mla_attn_kernel(const float* __restrict__
 // selected cells this reads the latents once per layer instead of once per head (64x less).
 // The grid is (chunks, head groups of MLA_HPB): ~20 chunks at 600 cells would leave most SMs idle with every head in
 // one block (208 us a call on a V100); a group re-reads its chunk's latents, which is cheap next to the arithmetic.
+// The latents stay FP16 in shared memory, as in the cache (34 KB at kv_lora 512; F32 rows were over Turing's 64 KB).
 constexpr int MLA_CHUNK = 32;
 constexpr int MLA_HPB = 16;
 __global__ void __launch_bounds__(256) mla_split_kernel(const float* __restrict__ q_abs, const uint16_t* __restrict__ lat,
                                                         const int* __restrict__ cells, int n_sel, int n_head, int qk_nope,
                                                         int kv_lora, float* __restrict__ part) {
     extern __shared__ float smem[];
-    float* sL = smem;                                  // MLA_CHUNK x kv_lora
-    float* sS = sL + MLA_CHUNK * kv_lora;              // MLA_HPB x MLA_CHUNK scores -> weights
+    uint16_t* sL = (uint16_t*) smem;                   // MLA_CHUNK x kv_lora, FP16
+    float* sS = smem + MLA_CHUNK * kv_lora / 2;        // MLA_HPB x MLA_CHUNK scores -> weights
     __shared__ int s_cell[MLA_CHUNK];
     const int b = blockIdx.x, tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, nw = blockDim.x >> 5;
     const int h0 = blockIdx.y * MLA_HPB, nh = min(MLA_HPB, n_head - h0);
@@ -1651,7 +1652,7 @@ __global__ void __launch_bounds__(256) mla_split_kernel(const float* __restrict_
     for (int i = tid; i < MLA_CHUNK * kv_lora; i += blockDim.x) {
         const int s = i / kv_lora, c = i - s * kv_lora;
         const int cell = s_cell[s];
-        sL[i] = cell >= 0 ? lat_f(lat[(size_t) kv_lora * cell + c]) : 0.0f;
+        sL[i] = cell >= 0 ? lat[(size_t) kv_lora * cell + c] : (uint16_t) 0;
     }
     __syncthreads();
     const float scale = rsqrtf((float) qk_nope);
@@ -1665,7 +1666,7 @@ __global__ void __launch_bounds__(256) mla_split_kernel(const float* __restrict_
             float acc = 0.0f;
 #pragma unroll
             for (int j = 0; j < 16; ++j)
-                if (lane + 32 * j < kv_lora) acc += q[j] * sL[s * kv_lora + lane + 32 * j];
+                if (lane + 32 * j < kv_lora) acc += q[j] * lat_f(sL[s * kv_lora + lane + 32 * j]);
             acc = warp_sum(acc);
             if (lane == 0) sS[hh * MLA_CHUNK + s] = s_cell[s] >= 0 ? acc * scale : -INFINITY;
         }
@@ -1690,7 +1691,7 @@ __global__ void __launch_bounds__(256) mla_split_kernel(const float* __restrict_
         const int hh = i / kv_lora, c = i - hh * kv_lora;
         float acc = 0.0f;
 #pragma unroll 8
-        for (int s = 0; s < MLA_CHUNK; ++s) acc += sS[hh * MLA_CHUNK + s] * sL[s * kv_lora + c];
+        for (int s = 0; s < MLA_CHUNK; ++s) acc += sS[hh * MLA_CHUNK + s] * lat_f(sL[s * kv_lora + c]);
         pm[(size_t) hh * (kv_lora + 2) + c] = acc;
     }
 }
@@ -2840,7 +2841,7 @@ void mla(const float* q, const uint16_t* wk_b, const uint16_t* wv_b, const uint1
     static float* part[16] = {};
     static int part_chunks[16] = {};
     const int n_chunks = (n_sel + MLA_CHUNK - 1) / MLA_CHUNK;
-    const size_t smem = ((size_t) MLA_CHUNK * kv_lora + (size_t) MLA_HPB * MLA_CHUNK) * sizeof(float);
+    const size_t smem = (size_t) MLA_CHUNK * kv_lora * sizeof(uint16_t) + (size_t) MLA_HPB * MLA_CHUNK * sizeof(float);
     // the opt-in must be EXACTLY what the launch needs (or at most the device's opt-in minus the kernel's static
     // shared memory): asking for the whole 96 KB fails on a V100 (s_cell is static), and every launch then failed
     // with "invalid argument" - the attention silently contributed nothing (fixed 2026-10-06)

@@ -418,15 +418,19 @@ __global__ void __launch_bounds__(1024) dsa_select_kernel(const float* __restric
 
 // MLA attention for a chunk: block = (token, 16 heads).  The token's cells are walked in chunks of 32 latent rows
 // (loaded into shared memory once for the 16 heads), with an online softmax per head; thread c owns the context
-// columns c and c + 256 of all 16 heads.
+// columns c and c + 256 of all 16 heads.  The rows stay FP16 in shared memory, as in the cache (read as F32, the
+// same values): 34 KB, under the 48 KB every card gives without an opt-in - F32 rows (66 KB) were over Turing's
+// 64 KB, and every launch failed there (issue #8).
 constexpr int MB_HG = 16, MB_CH = 32;
+constexpr size_t kF32Smem = (size_t) MB_CH * 512 * sizeof(uint16_t) + (size_t) MB_HG * MB_CH * sizeof(float);
+static_assert(kF32Smem <= 48 * 1024, "the F32 prompt attention must fit the default 48 KB of shared memory");
 __global__ void __launch_bounds__(256) mla_attn_kernel(const float* __restrict__ q_abs, const uint16_t* __restrict__ lat,
                                                        const int* __restrict__ cells_all, const int* __restrict__ n_sel_arr,
                                                        int n_sel_max, int n_head, float scale, float* __restrict__ ctx) {
     constexpr int KV = 512;
     extern __shared__ float sm[];
-    float* sL = sm;                  // MB_CH x KV
-    float* sP = sL + MB_CH * KV;     // MB_HG x MB_CH
+    uint16_t* sL = (uint16_t*) sm;   // MB_CH x KV, FP16
+    float* sP = sm + MB_CH * KV / 2; // MB_HG x MB_CH
     __shared__ float s_m[MB_HG], s_l[MB_HG], s_scale[MB_HG];
     __shared__ int s_cell[MB_CH];
     const int t = blockIdx.x, h0 = blockIdx.y * MB_HG, tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
@@ -455,20 +459,14 @@ __global__ void __launch_bounds__(256) mla_attn_kernel(const float* __restrict__
         for (int i = tid; i < MB_CH * KV / 4; i += blockDim.x) {
             const int s = i / (KV / 4), c4 = i - s * (KV / 4);
             const int cell = s_cell[s];
-            float4 v = make_float4(0.f, 0.f, 0.f, 0.f);
-            if (cell >= 0) {
-                const uint2 h = ((const uint2*) (lat + (size_t) KV * cell))[c4];
-                v = make_float4(lat_f((uint16_t) h.x), lat_f((uint16_t) (h.x >> 16)), lat_f((uint16_t) h.y),
-                                lat_f((uint16_t) (h.y >> 16)));
-            }
-            ((float4*) sL)[i] = v;
+            ((uint2*) sL)[i] = cell >= 0 ? ((const uint2*) (lat + (size_t) KV * cell))[c4] : make_uint2(0u, 0u);
         }
         __syncthreads();
         for (int s = 0; s < MB_CH; ++s) {
             float a0 = 0.0f, a1 = 0.0f;
 #pragma unroll
             for (int j = 0; j < 16; ++j) {
-                const float l = sL[s * KV + lane + 32 * j];
+                const float l = lat_f(sL[s * KV + lane + 32 * j]);
                 a0 += q0[j] * l;
                 a1 += q1[j] * l;
             }
@@ -506,7 +504,7 @@ __global__ void __launch_bounds__(256) mla_attn_kernel(const float* __restrict__
             acc1[hh] *= sc;
         }
         for (int s = 0; s < MB_CH; ++s) {
-            const float l0 = sL[s * KV + tid], l1 = sL[s * KV + tid + 256];
+            const float l0 = lat_f(sL[s * KV + tid]), l1 = lat_f(sL[s * KV + tid + 256]);
 #pragma unroll
             for (int hh = 0; hh < MB_HG; ++hh) {
                 const float p = sP[hh * MB_CH + s];
@@ -970,17 +968,11 @@ void mla_attn(const float* q_abs, const uint16_t* lat, const int* cells, const i
         std::fprintf(stderr, "glm_batch mla_attn: kv_lora %d / n_head %d unsupported\n", kv_lora, n_head);
         return;
     }
-    const size_t smem = ((size_t) MB_CH * 512 + (size_t) MB_HG * MB_CH) * sizeof(float);
-    // per device: the F32 kernel's smem opt-in done; the tensor-core kernel's: 0 untried, 1 ok, -1 refused (Turing)
-    static bool attr[16] = {};
+    // per device, the tensor-core kernel's smem opt-in: 0 untried, 1 ok, -1 refused (Turing); the F32 kernel needs none
     static int tc_ok[16] = {};
     int dev = 0;
     cudaGetDevice(&dev);
     if (dev < 0 || dev >= 16) dev = 0;
-    if (!attr[dev]) {
-        cudaFuncSetAttribute(mla_attn_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, (int) smem);
-        attr[dev] = true;
-    }
     // STRATA_GLM_PREFILL_ATTN=f32: the F32 kernel (A/B); STRATA_GLM_PREFILL_ATTN_CHECK=1 (debug): both, compared
     static const bool f32_only = [] {
         const char* v = getenv("STRATA_GLM_PREFILL_ATTN");
@@ -1004,7 +996,7 @@ void mla_attn(const float* q_abs, const uint16_t* lat, const int* cells, const i
             const size_t n = (size_t) T * n_head * 512;
             float* ref = nullptr;
             if (cudaMalloc(&ref, n * sizeof(float)) == cudaSuccess) {
-                mla_attn_kernel<<<grid, 256, smem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ref);
+                mla_attn_kernel<<<grid, 256, kF32Smem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ref);
                 std::vector<float> A(n), B(n);
                 cudaStreamSynchronize(s);
                 cudaMemcpy(A.data(), ctx, n * sizeof(float), cudaMemcpyDeviceToHost);
@@ -1029,7 +1021,7 @@ void mla_attn(const float* q_abs, const uint16_t* lat, const int* cells, const i
         }
         return;
     }
-    mla_attn_kernel<<<grid, 256, smem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx);
+    mla_attn_kernel<<<grid, 256, kF32Smem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx);
     check("mla_attn");
 }
 

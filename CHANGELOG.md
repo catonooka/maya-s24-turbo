@@ -3,6 +3,21 @@
 Every release is on GitHub (Releases) with these notes; every published change moves the last number. Update: `git pull`, then `./setup.sh` (Windows:
 `START-MAYA.bat`) - it recompiles only what changed and starts.
 
+## v1.0.7 - 2026-10-08
+
+RTX 20-series cards (Turing) no longer crash on long prompts.
+
+- **Fix (RTX 20-series, Titan RTX, Quadro RTX):** any prompt longer than about a thousand tokens stopped the engine, and
+  the server restarted it with the conversation lost. The prefill attention asked for 66 KB of shared memory, more
+  than the 64 KB Turing GPUs have, and the failure went unnoticed until the engine crashed. Both attention kernels
+  now keep the cached rows in shared memory in their 16-bit form - the same values and arithmetic in half the space
+  (34 KB, which every NVIDIA card gives without asking). On Turing, decode at long context also gets the faster
+  attention it was silently skipping. Other cards: the same answers token for token, the same speed. Found and
+  diagnosed by @dummerjindabin (#8).
+- **AMD groundwork (#2, by @boxwrench):** the signals the GPU sends the CPU (the expert requests the CPU lane answers,
+  the doorbells) are published past AMD's GPU cache, as in Strata #697, and a new HIP test replays the real routing
+  handoff. The Linux AMD setup itself is in review (#7). NVIDIA: unchanged.
+
 ## v1.0.6 - 2026-10-08
 
 A standard speed test: `./maya.sh --bench` (Windows: `START-MAYA.bat --bench`).
