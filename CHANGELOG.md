@@ -3,6 +3,84 @@
 Every release is on GitHub (Releases) with these notes; every published change moves the last number. Update: `git pull`, then `./setup.sh` (Windows:
 `START-MAYA.bat`) - it recompiles only what changed and starts.
 
+## v1.0.15 - 2026-10-08
+
+Numbers in long prompts are read correctly, and Maya is faster on consumer GPUs: it measures the PCIe link the way
+decode uses it and stops re-reading experts from the SSD that are already on their way to RAM; Maya-S24 for 24 GB
+cards; Strix Halo; an idle engine no longer holds a CPU core per GPU.
+
+- **Numbers in prompts are read the way GLM reads them (#27, found by @mab776):** the server split every number in a
+  prompt into single digits (Qwen's pre-tokenizer) where GLM groups up to three (`504` is `50|4`, not `5|0|4`), so
+  in long prompts numbers came back wrong (`504` -> `5504` from ~12K tokens on, every quant). The server now uses the
+  pre-tokenizer the model's tokenizer names; numbers in a 32K and a 128K prompt came back exact (6 of 6, measured by
+  @mab776). Nothing to redo: the setup already stored it.
+- **Maya-S24 (94.7 GB), for cards of 24 GB or less:** Maya-S with its attention and shared experts in 4-bit (Q4_K)
+  instead of 6-bit, so about 1.5 GB more of the card holds experts. One Tesla V100 limited to 24 GB: decode (writing
+  the answer) 11.8 -> 13.5 tokens/s (+14%); on the full 32 GB 17.2 -> 19.1 (+11%); prefill the same. It keeps 97.7%
+  of the FP8 model's zero-shot accuracy (Maya-S: 97.9%). The setup recommends it when every card has 24 GB or less;
+  `--model Maya-S24` picks it anywhere. Details: bench/results/MAYA-S24.md.
+
+- **The CPU / PCIe split on consumer GPUs (#24 by @tanutanu56, found in #13):** at start the engine times expert
+  copies over PCIe to decide how many RAM-tier experts the CPU computes. It timed them on an idle GPU, and GeForce
+  cards hold the link at Gen1 when idle, so the copies measured a link 3-8x slower than decode sees and the CPU took
+  experts PCIe moves faster. The timing now runs with the GPU kept busy. (Tesla cards like the V100 keep the link up:
+  unchanged there.)
+- **Experts leaving VRAM are no longer read again from the SSD (#24):** an expert moved down to RAM at the end of one
+  token, and needed again before its copy had landed, was read from the SSD; it now waits for the copy and reads RAM.
+  2x Tesla V100 with Maya-S: decode (writing the answer) 28.4 / 28.9 -> 29.8 / 29.7 tokens/s, SSD reads per token
+  3.0 -> 2.2.
+- **CPU-lane threads per GPU (#24):** `STRATA_GLM_CPU_LANE<n>` sets GPU n's own (a card in a narrow slot wants more
+  than one on a wide link). @tanutanu56's RTX 4070 Ti SUPER (PCIe 3.0 x4) + 5070 Ti, Maya-S: decode 8.1 -> 9.1
+  tokens/s with the defaults, 14.6 with the threads and the split tuned for that pair.
+- **An idle engine no longer holds a CPU core per GPU:** its tier threads spun waiting for work; they now sleep when
+  nothing runs (2x V100: 200% -> 2% of a core idle, one V100: 100% -> 1%). Decode and prefill (reading the prompt)
+  are unchanged (`STRATA_GLM_SERVICE_IDLE_MS`; 0 = spin always).
+- **Sampled answers (temperature > 0)** draw their token on the engine's own GPU stream instead of syncing the whole
+  GPU every token (which also waited for the tier copies in flight): 2x V100, temperature 1.0: 26.7 / 26.6 ->
+  26.8 / 27.6 tokens/s. On Windows with an AMD GPU this also fixes answers that lost the prompt after their first
+  token (#6, found by jerem91150).
+- **The MTP draft block from a file:** `STRATA_GLM_MTP_GGUF=<file>` now also replaces a model's own draft block, and
+  `tools/maya_quant/mtp_gguf.py` writes a model's draft block alone as a small GGUF - for quants published without
+  one (GSQ-RCO 3.5-bit) on two GPUs.
+- **RAM-resident tier (#25 by @handmade0octopus, opt-in):** `STRATA_GLM_RAM_RESIDENT=1` sizes the pinned RAM tier to
+  hold every expert that isn't in VRAM, so nothing is ever evicted to the SSD (the start refuses if RAM can't hold
+  them). On an RTX 4090 D with 128 GB RAM, Maya-S at 256K context, a 38K-token prompt: decode 11.8 -> 22.1 tokens/s
+  (with #26's `STRATA_GLM_PROMOTE_MIN=6`), no SSD reads.
+- **Fewer one-off promotions (#26 by @handmade0octopus, opt-in):** `STRATA_GLM_PROMOTE_MIN=N` keeps a fetched expert
+  in VRAM only when it has been routed at least N times lately, so an expert used once no longer evicts a resident
+  one. 4090 D: 49.8 -> 40.9 ms a token warm with N=6. On one AMD R9700 (measured by @boxwrench): decode 23.4 ->
+  24.5 tokens/s with N=6, 25.1 with the RAM-resident tier too (no SSD reads), 25.55 with #24 as well (+9%).
+- **AMD (experimental, by @boxwrench):** faster decode expert kernels on RDNA3 / RDNA3.5 (#19: RX 7900 XT +8.6%, the
+  same tokens), the attention's prompt products in FP16 with a matrix-core attention kernel (#16: Strix Halo +16%
+  prefill, RX 7900 XT +4% on 4K-token prompts), and `--bench` / `--report` on AMD (#18; `--config FILE` picks one
+  installed setup). #24's PCIe timing runs with the GPU awake on AMD too.
+- **Strix Halo (#17 by @boxwrench, experimental):** the Ryzen AI Max+ 395's GPU (gfx1151) shares the PC's memory, so
+  the engine sizes its expert pool from the free RAM (MemAvailable less 16 GB) instead of the GPU's reported share.
+  When the pool holds every expert it keeps them all and the RAM tier only stages reads, instead of holding a second
+  copy. The setup finds a versioned ROCm (`/opt/rocm-X.Y.Z`); an APU runs as one GPU. Measured on a Strix Halo with
+  Maya-S: prefill (reading the prompt) ~221 tokens/s on 3.5K-token prompts, decode (writing the answer) 17.4
+  tokens/s. A HIP build configured by hand without `-DSTRATA_PREFILL_MMQ=ON` now stops at configure and says so,
+  instead of failing to link.
+- **Windows: the page file the RAM tier needs (#20, reported by @anbow1):** under Windows the card's memory and the
+  pinned RAM tier are both charged to RAM + page file, so a small page file capped the RAM tier while RAM sat free
+  (an RTX 5090 with 128 GB RAM: 2.4-4.1 tokens/s with an 8 GB page file, 8.4-11 with a 64 GB one). `--check` now
+  asks for at least your VRAM + 8 GB and says what a smaller one costs, and the engine warns at start when the
+  commit limit, not the free RAM, caps its RAM tier. (Built and run on Linux here; the Windows part is not compiled
+  on Windows yet.)
+- **API (from Strata 0.1.40):** the client's stop strings end the answer (OpenAI `stop`, Anthropic `stop_sequences`
+  with `stop_reason: stop_sequence`; not inside the reasoning); `tool_choice` works - `none` offers no tools, and
+  `required` or a named function (Anthropic `any` / `tool`) starts the answer with the call; `response_format:
+  json_object` returns the JSON alone; an empty assistant turn is no longer put back into the prompt. The engine's
+  start-up warnings show in the server window.
+- **Activations can't turn into NaN in the quantizers (from Strata #1448):** the FP16 scale of an activation block
+  overflowed to infinity past ~8.3 million; it is clamped at all four places it is written. Below that the output
+  is bit-identical.
+- **CONTRIBUTING.md:** what makes a useful speed report, bug report or pull request (#21). The README's table of
+  speeds measured by users has 2x CMP 170HX with Maya-M at 61.3 tokens/s (#22, @ZackO2o).
+- Checked on 2x Tesla V100: the engine's parity tests pass, the prompt attention matches F32 (1.5e-4), the server's
+  102 tests and the 40 setup / tokenizer tests pass, tool calls work end to end; decode and prefill unchanged or faster. NVIDIA code is unchanged by the
+  AMD pull requests.
+
 ## v1.0.14 - 2026-10-08
 
 Maya runs on two AMD GPUs (experimental), with MTP drafting on the second card, contributed by @boxwrench.
