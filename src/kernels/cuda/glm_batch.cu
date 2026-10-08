@@ -529,9 +529,12 @@ __global__ void __launch_bounds__(256) mla_attn_kernel(const float* __restrict__
 // (two 16-cell tiles, the K = 512 split in four quarters across the warps and summed), the softmax is the online one
 // above in F32, and the context O (F32, in shared memory) is rescaled and O += P . L (32 column tiles, 4 a warp).
 // FP16 operands with F32 accumulation, as flash attention: the context is within ~1e-3 of the F32 kernel's.
-// 91 KB of shared memory a block - more than Turing allows (64 KB): there the F32 kernel runs.
+// The context O rides the accumulator registers (four tiles a warp), so a block needs 58368 bytes of shared
+// memory and Turing (64 KB) can run it too - 91136 bytes was the old layout with O in shared memory.
 constexpr int TC_HG = 16, TC_CH = 32;
-constexpr size_t kTcSmem = (size_t) TC_HG * 512 * 4 + (size_t) TC_HG * 512 * 2 + (size_t) TC_CH * 512 * 2 +
+// The context O lives in accumulator registers while the cells are walked (see the kernel), so it costs no shared
+// memory: 58368 bytes a block, under Turing's 65536 ceiling.  Setting the old sO back would need 91136.
+constexpr size_t kTcSmem = (size_t) TC_HG * 512 * 2 + (size_t) TC_CH * 512 * 2 +
                            (size_t) 4 * TC_HG * TC_CH * 4 + (size_t) TC_HG * TC_CH * 2;
 __global__ void __launch_bounds__(256) mla_attn_tc_kernel(const float* __restrict__ q_abs, const uint16_t* __restrict__ lat,
                                                           const int* __restrict__ cells_all,
@@ -540,8 +543,7 @@ __global__ void __launch_bounds__(256) mla_attn_tc_kernel(const float* __restric
     using namespace nvcuda;
     constexpr int KV = 512;
     extern __shared__ __align__(128) unsigned char tc_sm[];
-    float* sO = (float*) tc_sm;                          // TC_HG x KV, F32
-    __half* sQ = (__half*) (sO + TC_HG * KV);            // TC_HG x KV
+    __half* sQ = (__half*) tc_sm;                        // TC_HG x KV
     __half* sL = sQ + TC_HG * KV;                        // TC_CH x KV
     float* sPart = (float*) (sL + TC_CH * KV);           // 4 x TC_HG x TC_CH: the scores' K quarters
     __half* sP = (__half*) (sPart + 4 * TC_HG * TC_CH);  // TC_HG x TC_CH: exp(s - m)
@@ -551,10 +553,12 @@ __global__ void __launch_bounds__(256) mla_attn_tc_kernel(const float* __restric
     const int ns = n_sel_arr[t];
     const int* cl = cells_all + (size_t) t * n_sel_max;
     const float* qa = q_abs + ((size_t) t * n_head + h0) * KV;
-    for (int i = tid; i < TC_HG * KV; i += blockDim.x) {
-        sQ[i] = __float2half(qa[i]);
-        sO[i] = 0.0f;
-    }
+    for (int i = tid; i < TC_HG * KV; i += blockDim.x) sQ[i] = __float2half(qa[i]);
+    // the context O: four 16-wide column tiles a warp, held in registers for the whole cell walk
+    constexpr int TC_OT = KV / 16 / 8;
+    wmma::fragment<wmma::accumulator, 16, 16, 16, float> accO[TC_OT];
+#pragma unroll
+    for (int j = 0; j < TC_OT; ++j) wmma::fill_fragment(accO[j], 0.0f);
     if (tid < TC_HG) {
         s_m[tid] = -INFINITY;
         s_l[tid] = 0.0f;
@@ -617,31 +621,42 @@ __global__ void __launch_bounds__(256) mla_attn_tc_kernel(const float* __restric
             }
         }
         __syncthreads();
-        for (int i = tid; i < TC_HG * KV; i += blockDim.x) sO[i] *= s_sc[i / KV];
-        __syncthreads();
+        // rescale the register context by this chunk's factor: lane l holds rows (l>>2) and (l>>2)+8
+        {
+            const int grp = lane >> 2;
+            const float lo = s_sc[grp], hi = s_sc[grp + 8];
+#pragma unroll
+            for (int j = 0; j < TC_OT; ++j) {
+                float* x = accO[j].x;
+                x[0] *= lo; x[1] *= lo; x[4] *= lo; x[5] *= lo;
+                x[2] *= hi; x[3] *= hi; x[6] *= hi; x[7] *= hi;
+            }
+        }
         {
             wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> a0, a1;
             wmma::load_matrix_sync(a0, sP, TC_CH);
             wmma::load_matrix_sync(a1, sP + 16, TC_CH);
 #pragma unroll
-            for (int j = 0; j < KV / 16 / 8; ++j) {
-                const int c0 = (warp * (KV / 16 / 8) + j) * 16;
-                wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc;
+            for (int j = 0; j < TC_OT; ++j) {
+                const int c0 = (warp * TC_OT + j) * 16;
                 wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::row_major> b0, b1;
-                wmma::load_matrix_sync(acc, sO + c0, KV, wmma::mem_row_major);
                 wmma::load_matrix_sync(b0, sL + c0, KV);
                 wmma::load_matrix_sync(b1, sL + 16 * KV + c0, KV);
-                wmma::mma_sync(acc, a0, b0, acc);
-                wmma::mma_sync(acc, a1, b1, acc);
-                wmma::store_matrix_sync(sO + c0, acc, KV, wmma::mem_row_major);
+                wmma::mma_sync(accO[j], a0, b0, accO[j]);
+                wmma::mma_sync(accO[j], a1, b1, accO[j]);
             }
         }
     }
-    __syncthreads();
     float* o = ctx + ((size_t) t * n_head + h0) * KV;
+#pragma unroll
+    for (int j = 0; j < TC_OT; ++j) {
+        const int c0 = (warp * TC_OT + j) * 16;
+        wmma::store_matrix_sync(o + c0, accO[j], KV, wmma::mem_row_major);
+    }
+    __syncthreads();   // every warp's tiles must be in ctx before the row normalization reads them
     for (int i = tid; i < TC_HG * KV; i += blockDim.x) {
         const float L = s_l[i / KV];
-        o[i] = L > 0.0f ? sO[i] / L : 0.0f;
+        o[i] = L > 0.0f ? o[i] / L : 0.0f;
     }
 }
 
