@@ -9,7 +9,9 @@
 
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#if !defined(STRATA_USE_HIP)
 #include <mma.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -524,6 +526,7 @@ __global__ void __launch_bounds__(256) mla_attn_kernel(const float* __restrict__
     }
 }
 
+#if !defined(STRATA_USE_HIP)
 // The same attention on the tensor cores (sm_70+): block = (token, 16 heads), 8 warps.  The token's cells are walked
 // in chunks of 32: their latent rows go to FP16 in shared memory, the scores S = Q16 . L^T come from the tensor cores
 // (two 16-cell tiles, the K = 512 split in four quarters across the warps and summed), the softmax is the online one
@@ -775,6 +778,7 @@ __global__ void __launch_bounds__(256) mla_attn_tc_reg_kernel(const float* __res
         o[i] = L > 0.0f ? o[i] / L : 0.0f;
     }
 }
+#endif
 
 // ---------------------------------------------------------------- the NextN block's caches over a prompt
 // h[t] = rms(mean_s R[t][s]) * w (the final hidden state the draft block reads; head_prep's arithmetic)
@@ -1099,6 +1103,8 @@ void mla_attn(const float* q_abs, const uint16_t* lat, const int* cells, const i
         std::fprintf(stderr, "glm_batch mla_attn: kv_lora %d / n_head %d unsupported\n", kv_lora, n_head);
         return;
     }
+    const dim3 grid((unsigned) T, (unsigned) (n_head / MB_HG));
+#if !defined(STRATA_USE_HIP)
     // per device, the prompt attention kernel: 0 not chosen yet, 1 tensor cores with O in shared memory (91 KB: every
     // card from Volta on except Turing), 2 tensor cores with O in registers (58 KB: Turing, sm_75 - its rescale assumes
     // the sm_75+ fragment layout), -1 the F32 kernel
@@ -1133,7 +1139,6 @@ void mla_attn(const float* q_abs, const uint16_t* lat, const int* cells, const i
                      : tc_ok[dev] == 2          ? "tensor cores (context in registers)"
                                                 : "tensor cores");
     }
-    const dim3 grid((unsigned) T, (unsigned) (n_head / MB_HG));
     if (tc_ok[dev] > 0 && !f32_only) {
         if (tc_ok[dev] == 2)
             mla_attn_tc_reg_kernel<<<grid, 256, kTcRegSmem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx);
@@ -1169,6 +1174,7 @@ void mla_attn(const float* q_abs, const uint16_t* lat, const int* cells, const i
         }
         return;
     }
+#endif
     mla_attn_kernel<<<grid, 256, kF32Smem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx);
     check("mla_attn");
 }

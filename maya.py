@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
-"""Project Maya - set up and start GLM-5.3-Flash on your own NVIDIA GPU(s).  Linux; Windows (experimental).
+"""Project Maya - set up and start GLM-5.3-Flash on your own GPU(s).
+CUDA: Linux; Windows (experimental). HIP: experimental Linux gfx1100/gfx1201, text only.
 
     ./maya.sh                 the first run sets everything up and starts the dashboard; later runs just start it
     ./maya.sh --setup         set up again (other GPUs, another context length, another model folder)
     ./maya.sh --check         only check this PC
+    ./maya.sh --backend hip --gpu 0 --check    check an RX 7900 XT / XTX with system ROCm 7
 
 On Windows START-MAYA.bat takes the same options.  Both make the private Python environment (.venv, the way Strata's
-setup.sh does) and run this file.  It reuses Strata's installer (setup.py, imported unchanged) for the PC checks,
+setup.sh does) and run this file.  It reuses Strata's installer (setup.py) for the PC checks,
 pip, llama.cpp's source and resumable downloads.
 
 What the first run does (each step is skipped when it is already done):
 
   1. checks the PC: NVIDIA GPU(s) of compute capability 7.0+, driver, CUDA toolkit (nvcc), the C++ compiler (g++;
-     on Windows Visual Studio 2022's Build Tools), CMake, RAM, CPU
+     on Windows Visual Studio 2022's Build Tools), CMake, RAM, CPU; HIP checks AMD gfx1100/gfx1201 and ROCm 7 instead
   2. asks: which GPUs (one, or two that split the layers), how much context
   3. Python packages into .venv, llama.cpp's source at the pinned commit (it lists them and asks first)
-  4. compiles the engine (`build/strata`) for your GPU(s): 10-30 minutes, once
+  4. compiles the engine (`build/strata`, or `build-hip/strata`) for your GPU(s): 10-30 minutes, once
   5. the model: GGUF files you already have (--gguf-dir), or a download it shows you first - the exact commands
      and the size - and starts only after you answer y (or pass --download-model)
   6. builds the pack (the engine's index of the GGUF files) inside the model folder
   7. images: compiles the vision encoder (`build-vision/bin/strata-vision`) and fetches the model's vision files
-     (1.1 GB, shown and asked first like the model; --no-vision skips it)
+     (1.1 GB, shown and asked first like the model; --no-vision and HIP skip it)
   8. writes maya-<model>.json and run-maya-<model>.sh (.bat on Windows), and starts the dashboard on
      http://127.0.0.1:8080
 
@@ -179,7 +181,50 @@ def pick_cmake():
 
 
 def gpu_label(g) -> str:
+    if g.get("vendor") == "amd":
+        return f"GPU {g['index']} ({g['name']}, {g['vram_gb']:.0f} GB, {g['arch']})"
     return f"GPU {g['index']} ({g['name']}, {g['vram_gb']:.0f} GB, compute capability {S.cc(g)})"
+
+
+def select_build_backend(backend: str) -> None:
+    """Separate build folders and stamps prevent reusing a binary from the other backend."""
+    global BUILD, EXE, STAMP
+    BUILD = ROOT / ("build-hip" if backend == "hip" else "build")
+    EXE = BUILD / ("strata.exe" if WIN else "strata")
+    STAMP = BUILD / "MAYA-BUILD.json"
+
+
+def check_hip_pc(a) -> dict:
+    if WIN or not sys.platform.startswith("linux") or S.is_wsl():
+        fail("Maya's experimental HIP backend requires native Linux")
+    found = S.amd_gpus()
+    usable = [g for g in found if g["arch"] in S.AMD_ARCHS]
+    for g in found:
+        say(f"    {gpu_label(g)} - " + ("can be used" if g in usable else "not supported by Maya's HIP build"))
+    if not usable:
+        fail("no supported AMD GPU found", "this port targets RX 7900 XT / XTX (gfx1100) and RX 9070 / AI PRO R9700 (gfx1201)")
+    if a.gpus:
+        fail("Maya's HIP port currently uses one GPU", "select it with --gpu N")
+    chosen = next((g for g in usable if g["index"] == a.gpu), None) if a.gpu is not None else max(
+        usable, key=lambda g: g["vram_gb"])
+    if chosen is None:
+        fail(f"GPU {a.gpu} is not a supported AMD card")
+    root = Path(os.environ.get("ROCM_PATH") or "/opt/rocm").resolve()
+    if not (root / "llvm/bin/clang++").exists() or not list((root / "lib").glob("libhipblas.so*")):
+        fail("ROCm's HIP compiler and hipBLAS are required", "install ROCm 7, or set ROCM_PATH to its root")
+    if tool_version(str(root / "bin/hipcc")) < (7, 0):
+        fail("Maya's HIP port requires ROCm 7 or newer")
+    if not shutil.which("c++"):
+        fail("a C++ compiler is needed", "Ubuntu/Debian: sudo apt install build-essential")
+    cpu, avx2, avx512 = S.cpu_info()
+    if not avx2:
+        fail(f"the CPU ({cpu}) needs AVX2 for the expert lane")
+    total, avail = mem_gb()
+    ok(f"using {gpu_label(chosen)}; experimental HIP, one GPU, text only")
+    ok(f"ROCm: {root}; CPU: {cpu} ({'AVX-512' if avx512 else 'AVX2'})")
+    ok(f"RAM: {total:.0f} GB, {avail:.0f} GB available now")
+    select_build_backend("hip")
+    return {"backend": "hip", "gpus": [chosen], "archs": ["gfx1100", "gfx1201", "gfx1151"], "rocm": str(root)}
 
 
 def nvcc_range(archs) -> tuple:
@@ -282,6 +327,8 @@ def choose_gpus(a, found) -> list:
 
 def check_pc(a) -> dict:
     step(1, "checking this PC")
+    if a.backend == "hip":
+        return check_hip_pc(a)
     if not (WIN or sys.platform.startswith("linux")):
         fail("Project Maya runs on Linux and Windows", "the engine needs an NVIDIA GPU and CUDA")
     if WIN:
@@ -381,7 +428,9 @@ def check_pc(a) -> dict:
             say(f"       {how}")
         fail("something Maya needs is missing (above)",
              f"install it and run {ME} again - this script installs nothing system-wide")
-    return {"gpus": chosen, "archs": archs, "nvcc": nvcc, "vcvars": str(S.find_vcvars()) if WIN else None}
+    select_build_backend("cuda")
+    return {"backend": "cuda", "gpus": chosen, "archs": archs, "nvcc": nvcc,
+            "vcvars": str(S.find_vcvars()) if WIN else None}
 
 
 # ------------------------------------------------------------------------------------------------ 2. choices
@@ -589,10 +638,48 @@ def toolchain_for(archs, nvcc_given: str | None, hc_given: str | None) -> tuple:
     return (nvccs[0] if nvccs else nvcc_given), hc_given
 
 
+def compile_engine_hip(pc: dict, llama: Path, src: str, soft=False) -> dict | None:
+    root = Path(pc["rocm"])
+    cmake = pick_cmake()
+    if not cmake:
+        fail("CMake 3.24 or newer is needed")
+    env = dict(os.environ, HIP_PLATFORM="amd", HIP_COMPILER="clang", HIP_RUNTIME="rocclr",
+               ROCM_PATH=str(root), HIP_PATH=str(root))
+    env["PATH"] = os.pathsep.join([str(root / "bin"), str(root / "llvm/bin"), env.get("PATH", "")])
+    env["LD_LIBRARY_PATH"] = os.pathsep.join([str(root / "lib"), env.get("LD_LIBRARY_PATH", "")]).rstrip(os.pathsep)
+    # Keep compiler-cache writes inside this project, including when run in a workspace sandbox.
+    env.setdefault("CCACHE_DIR", str(BUILD / ".ccache"))
+    conf = [cmake, "-S", str(ROOT), "-B", str(BUILD), "-DCMAKE_BUILD_TYPE=Release",
+            "-DSTRATA_ENABLE_HIP=ON", "-DSTRATA_ENABLE_CUDA=OFF", "-DSTRATA_PREFILL_MMQ=ON",
+            "-DSTRATA_NATIVE_EXPERTS=ON", "-DSTRATA_BUILD_TESTS=OFF",
+            f"-DCMAKE_HIP_ARCHITECTURES={';'.join(pc['archs'])}",
+            f"-DCMAKE_HIP_COMPILER={root / 'llvm/bin/clang++'}", f"-DCMAKE_PREFIX_PATH={root}",
+            f"-DSTRATA_GGML_DIR={llama}"]
+    jobs = max(1, min(4, (os.cpu_count() or 4) // 2))
+    say("  Compiling Maya for AMD " + ", ".join(pc["archs"]) + " ...")
+    if cmake_steps(conf, [cmake, "--build", str(BUILD), "--target", "strata", "-j", str(jobs)], env, ""):
+        if soft:
+            warn("HIP rebuild failed; starting the previous engine")
+            return None
+        fail("the HIP engine build failed", "see the compiler output above")
+    meta = {"backend": "hip", "src": src, "archs": pc["archs"], "rocm": str(root),
+            "gpu_ids": [g["index"] for g in pc["gpus"]], "llama": str(llama),
+            "lib_dirs": [str(root / "lib")], "date": time.strftime("%Y-%m-%d %H:%M")}
+    STAMP.write_text(json.dumps(meta, indent=1), encoding="utf-8")
+    ok(f"engine compiled: {EXE}")
+    return meta
+
+
 def build_step(a, pc, llama: Path) -> dict:
     step(4, "the engine")
     src = S.source_hash(S.ENGINE_SOURCES)              # src/, include/, third_party/ggml, CMakeLists.txt
     meta = read_json(STAMP)
+    if pc.get("backend") == "hip":
+        if (EXE.exists() and not a.rebuild and meta.get("backend") == "hip" and meta.get("src") == src
+                and meta.get("archs") == pc["archs"] and meta.get("rocm") == pc["rocm"]):
+            ok(f"HIP engine already compiled: {EXE}")
+            return meta
+        return compile_engine_hip(pc, llama, src)
     if (EXE.exists() and not a.rebuild and meta.get("src") == src and set(pc["archs"]) <= set(meta.get("archs", []))
             and (not a.nvcc or a.nvcc == meta.get("nvcc"))
             and (not a.host_compiler or a.host_compiler == meta.get("host_compiler"))):
@@ -610,6 +697,16 @@ def refresh_engine(cfg: dict) -> None:
         return
     src = S.source_hash(S.ENGINE_SOURCES)
     if meta.get("src") == src:
+        return
+    if cfg.get("backend") == "hip":
+        root = Path(meta.get("rocm") or "/opt/rocm")
+        llama = Path(meta.get("llama") or ROOT / "third_party/llama.cpp")
+        if not (root / "llvm/bin/clang++").exists() or not (llama / "ggml/CMakeLists.txt").exists():
+            warn("HIP compiler or llama.cpp source is missing; starting the previous engine")
+            return
+        pc = {"rocm": str(root), "archs": meta["archs"],
+              "gpus": [{"index": i} for i in cfg.get("gpu", [0])]}
+        compile_engine_hip(pc, llama, src, soft=True)
         return
     say("  The engine's source changed since it was compiled (an update): compiling what changed ...")
     nvcc, llama = meta.get("nvcc"), Path(meta.get("llama") or ROOT / "third_party" / "llama.cpp")
@@ -837,6 +934,9 @@ def vision_step(a, pc, meta, llama: Path, d: Path, quant: str) -> dict | None:
     encoder only while a request's new pictures are encoded, in GPU memory the model lends it, and measures on the
     first start how much that is on this GPU (serve/server.py, vision_footprint)."""
     step(7, "images (the vision encoder)")
+    if pc.get("backend") == "hip":
+        ok("HIP port: text only; vision is not enabled")
+        return None
     m = (MODELS.get(quant) or {}).get("vision")
     if a.no_vision:
         ok("skipped (--no-vision): the model reads text only")
@@ -907,6 +1007,22 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, data: Path, visi
            "sampling": dict(SAMPLING), "reasoning_effort": EFFORT, "lib_dirs": meta.get("lib_dirs") or [],
            "port": port}
     env = parse_env(a.env)
+    if pc.get("backend") == "hip":
+        cfg["backend"] = "hip"
+        # Leave space for the Linux desktop. The engine sizes its prompt chunk from
+        # the available prompt-memory budget; forcing 256 here severely slows HIP.
+        hip_env = {"STRATA_GLM_SPLIT": "0", "STRATA_GLM_RESERVE_MB": "3072", "STRATA_GLM_RAM_HEADROOM_GB": "16"}
+        g = pc["gpus"][0]
+        # Larger prompt sub-batches feed the matrix cores much better (7900 XT: ~250 -> ~410 tok/s); they need
+        # a bigger prompt budget, borrowed from the expert pool only while a prompt runs.
+        if g.get("vram_gb", 0) >= 20:
+            hip_env.update({"STRATA_GLM_PREFILL_SUB": "1024", "STRATA_GLM_PREFILL_MB": "4096"})
+        # The prompt projections' hipBLASLt solutions measured on this architecture (tools/hip). The engine
+        # refuses a table made for another hipBLASLt version and keeps plain hipBLAS.
+        tables = sorted((ROOT / "tools" / "hip").glob(f"{g.get('arch', '')}-glm-hipblaslt-*.txt"))
+        if tables:
+            hip_env["STRATA_HIPBLASLT_TUNING"] = str(tables[-1])
+        env = {**hip_env, **env}
     if env:
         cfg["env"] = env
     if a.host:
@@ -915,7 +1031,8 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, data: Path, visi
         cfg["api_key"] = a.api_key
     if vision:
         cfg["vision"] = vision
-    cfg_path = ROOT / f"maya-{quant.lower()}.json"
+    suffix = "-hip" if pc.get("backend") == "hip" else ""
+    cfg_path = ROOT / f"maya-{quant.lower()}{suffix}.json"
     cfg["log"] = str(cfg_path.with_suffix(".log"))
     cfg["installer"] = {"data_dir": str(data), "quant": quant,
                         "gguf_dir": str(Path(a.gguf_dir).expanduser().resolve()) if a.gguf_dir else None,
@@ -928,6 +1045,7 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, data: Path, visi
 
 def start(cfg_path: Path, a) -> int:
     cfg = read_json(cfg_path)
+    select_build_backend(cfg.get("backend", "cuda"))
     args = cfg.get("args") or []
     pack = Path(args[args.index("--glm-pack") + 1]) if "--glm-pack" in args[:-1] else None
     for p, what in ((Path(cfg.get("exe", "")), "the engine"), (pack, "the pack"),
@@ -1173,6 +1291,7 @@ def bench(cfg_path: Path, version: str) -> int:
 # ------------------------------------------------------------------------------------------------ main
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--backend", choices=["cuda", "hip"], help="GPU backend (HIP: experimental gfx1100/gfx1201 on Linux)")
     ap.add_argument("--setup", action="store_true", help="set up again instead of starting the installed model")
     ap.add_argument("--check", action="store_true", help="only check this PC and exit")
     ap.add_argument("--no-start", action="store_true", help="set up, but do not start the dashboard")
@@ -1187,7 +1306,7 @@ def main() -> int:
                                        "(it must be writable - the pack is written inside it)")
     ap.add_argument("--data-dir", help="where a downloaded model goes (default: Maya-data next to this folder); use a "
                                        "fast NVMe SSD with ~100 GB free")
-    ap.add_argument("--gpu", type=int, help="run on this one GPU (as nvidia-smi numbers them)")
+    ap.add_argument("--gpu", type=int, help="run on this one GPU (CUDA: nvidia-smi; HIP: KFD topology order)")
     ap.add_argument("--gpus", help="split the model across these two GPUs, e.g. 0,1")
     ap.add_argument("--context", type=int, help=f"context length in tokens (default {DEFAULT_CONTEXT})")
     ap.add_argument("--port", type=int, help="the dashboard's and the API's port (default 8080)")
@@ -1210,7 +1329,7 @@ def main() -> int:
                                                          "prefill at 2k / 8k tokens; writes maya-bench.txt")
     a = ap.parse_args()
     version = (HERE / "VERSION").read_text(encoding="utf-8").strip() if (HERE / "VERSION").exists() else "?"
-    say(f"Project Maya v{version} - GLM-5.3-Flash on your own NVIDIA GPU(s). Built on Strata (MIT) and ggml/llama.cpp "
+    say(f"Project Maya v{version} - GLM-5.3-Flash on your own GPU(s). Built on Strata (MIT) and ggml/llama.cpp "
         "(MIT).")
     if a.report:
         return report(version)
@@ -1221,6 +1340,10 @@ def main() -> int:
         return bench(have[0], version)
 
     have = configs()
+    if a.backend:
+        have = [p for p in have if read_json(p).get("backend", "cuda") == a.backend]
+    else:
+        a.backend = "hip" if have and read_json(have[0]).get("backend") == "hip" else "cuda"
     setting_up = a.setup or a.check or a.no_start or a.gguf_dir or a.model or a.rebuild or a.repack or a.download_model
     if have and not setting_up:
         pick = have[0]
@@ -1240,7 +1363,10 @@ def main() -> int:
     pc = check_pc(a)                                   # 1
     if a.check:
         say()
-        say(f"This PC can run Maya. Run {ME} without --check to set it up.")
+        if a.backend == "hip":
+            say(f"HIP prerequisites found. Run {ME} --backend hip --gpu {pc['gpus'][0]['index']} to try the experimental port.")
+        else:
+            say(f"This PC can run Maya. Run {ME} without --check to set it up.")
         return 0
     step(2, "your choices")                            # 2
     ctx = choose_context(a, prev_ctx)

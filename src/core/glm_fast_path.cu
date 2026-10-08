@@ -25,7 +25,9 @@
 
 #include <cuda_profiler_api.h>
 #include <cuda_runtime.h>
+#if !defined(STRATA_USE_HIP)
 #include <nvtx3/nvToolsExt.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -2860,13 +2862,17 @@ bool Glm5Model::decode_spec(strata::kernels::SamplerParams& sp, int64_t max_new,
         const auto t = std::chrono::steady_clock::now();
         tp[i] += std::chrono::duration<double, std::milli>(t - tnow).count();
         tnow = t;
+#if !defined(STRATA_USE_HIP)
         nvtxRangePop();
         nvtxRangePushA(lap_names[(i + 1) % 6]);
+#endif
     };
     // STRATA_GLM_NSYS=<from>,<to>: a profiler capture window over those steps (nsys --capture-range=cudaProfilerApi)
     int64_t nsys_from = -1, nsys_to = -1;
     if (const char* ns = getenv("STRATA_GLM_NSYS")) std::sscanf(ns, "%lld,%lld", (long long*) &nsys_from, (long long*) &nsys_to);
+#if !defined(STRATA_USE_HIP)
     if (sprof) nvtxRangePushA("emit");
+#endif
     for (;;) {
         if (np == nsys_from) cudaProfilerStart();
         if (np == nsys_to) cudaProfilerStop();

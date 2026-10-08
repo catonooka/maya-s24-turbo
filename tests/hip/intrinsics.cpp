@@ -19,6 +19,24 @@ namespace {
 
 constexpr int kLanes = 32;
 constexpr int kIntegerResults = 7;
+constexpr int kPackedCases = 65536;
+
+// Cover every pair of byte values in the low lane and vary the other lanes to
+// catch cross-byte carry/borrow. Permutation selectors include ignored high bits.
+__host__ __device__ uint32_t packed_a(unsigned i) { return 0x01010101u * (i & 255u) ^ (i * 0x9e3779b9u); }
+__host__ __device__ uint32_t packed_b(unsigned i) { return 0x01010101u * (i >> 8) ^ (i * 0x85ebca6bu); }
+__host__ __device__ uint32_t selector(unsigned i) { return i * 0x632be59bu; }
+
+__global__ void packed_probe(uint32_t* results) {
+    const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= kPackedCases) return;
+    const uint32_t a = (packed_a(i) & 0xffffff00u) | (i & 255u);
+    const uint32_t b = (packed_b(i) & 0xffffff00u) | (i >> 8);
+    results[i * 4] = __vsub4(a, b);
+    results[i * 4 + 1] = __vsubss4(a, b);
+    results[i * 4 + 2] = __vcmpne4(a, b);
+    results[i * 4 + 3] = __byte_perm(a, b, selector(i));
+}
 
 __global__ void intrinsic_probe(int* integer_results, float* float_shuffle, double* double_shuffle,
                                 unsigned* ballot, const uint32_t* dot_inputs) {
@@ -93,6 +111,7 @@ int main() {
     CHECK(hipGetDevice(&device));
     hipDeviceProp_t properties{};
     CHECK(hipGetDeviceProperties(&properties, device));
+    std::printf("HIP intrinsic device: %s (%s)\n", properties.name, properties.gcnArchName);
     if (properties.warpSize != kLanes) {
         std::fprintf(stderr, "expected wave32, got wave%d\n", properties.warpSize);
         return 1;
@@ -158,10 +177,34 @@ int main() {
     CHECK(hipFree(device_double_shuffle));
     CHECK(hipFree(device_float_shuffle));
     CHECK(hipFree(device_integers));
+    uint32_t* packed = nullptr;
+    CHECK(hipMalloc(reinterpret_cast<void**>(&packed), kPackedCases * 4 * sizeof(uint32_t)));
+    hipLaunchKernelGGL(packed_probe, dim3(kPackedCases / 256), dim3(256), 0, 0, packed);
+    CHECK(hipDeviceSynchronize());
+    auto* host = new uint32_t[kPackedCases * 4];
+    CHECK(hipMemcpy(host, packed, kPackedCases * 4 * sizeof(uint32_t), hipMemcpyDeviceToHost));
+    CHECK(hipFree(packed));
+    for (unsigned i = 0; i < kPackedCases; ++i) {
+        const uint32_t a = (packed_a(i) & 0xffffff00u) | (i & 255u);
+        const uint32_t b = (packed_b(i) & 0xffffff00u) | (i >> 8);
+        uint32_t perm = 0;
+        for (int lane = 0; lane < 4; ++lane) {
+            const unsigned pick = (selector(i) >> (4 * lane)) & 7u;
+            perm |= (((pick < 4 ? a : b) >> ((pick & 3u) * 8)) & 255u) << (lane * 8);
+        }
+        if (host[i * 4] != byte_sub_reference(a, b) ||
+            host[i * 4 + 1] != signed_saturating_sub_reference(a, b) ||
+            host[i * 4 + 2] != not_equal_reference(a, b) || host[i * 4 + 3] != perm) {
+            std::fprintf(stderr, "HIP packed-byte parity failed at pair %u\n", i);
+            ok = false;
+            break;
+        }
+    }
+    delete[] host;
     if (!ok) {
         std::fprintf(stderr, "HIP intrinsic parity failed (ballot 0x%08x)\n", ballot);
         return 1;
     }
-    std::puts("HIP intrinsics parity OK: dynamic signed dot4/overflow, packed integer boundaries, wave32 shuffles, ballot and sleep");
+    std::puts("HIP intrinsics parity OK: signed dot4/overflow, 65536 packed-byte pairs/permutations, wave32 shuffles, ballot and sleep");
     return 0;
 }

@@ -1,5 +1,10 @@
 # Experimental AMD HIP backend (gfx1100)
 
+**Project Maya:** this page describes the inherited Strata backend and its
+Qwen/Orca validation. For Maya's GLM installer and current test evidence, use
+[AMD_MAYA.md](AMD_MAYA.md). Maya's `setup.sh` invokes `maya.py`, not Strata's
+`setup.py`.
+
 This is a manual Linux source build for the RX 7900 XTX. It is opt-in; the
 NVIDIA installer and CUDA build remain the default. Other AMD architectures,
 wave64, Windows HIP, and mixed AMD/NVIDIA execution are outside this contribution.

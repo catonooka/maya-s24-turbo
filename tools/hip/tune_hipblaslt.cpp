@@ -67,8 +67,14 @@ constexpr int WARMUPS = 2;
 constexpr int REPS = 3;
 constexpr int MAX_ALGOS = 16;
 constexpr double REL_L2_TOL = 1e-4;
-constexpr double MAX_ABS_TOL = 1e-2;
+constexpr double MAX_ABS_TOL_4K = 1e-2;
 constexpr float PADDING_CANARY = 123456.25f;
+
+double max_abs_tolerance(int k) {
+    // FP16 dot-product absolute error grows with the reduction length. Keep the
+    // existing 4K gate and scale it sublinearly for larger GLM projections.
+    return MAX_ABS_TOL_4K * std::sqrt(std::max(1.0, (double) k / 4096.0));
+}
 
 const char *dtype(bool bf16) { return bf16 ? "bf16" : "f16"; }
 const char *status_name(hipblasStatus_t s) {
@@ -142,9 +148,9 @@ size_t padding_writes(const std::vector<float> &got, int n, int t, int ld) {
         if (got[(size_t)col * ld + row] != PADDING_CANARY) ++writes;
     return writes;
 }
-bool accuracy_ok(const Err &e) {
+bool accuracy_ok(const Err &e, int k) {
     return e.finite && e.padding_writes == 0 &&
-           e.rel_l2 <= REL_L2_TOL && e.max_abs <= MAX_ABS_TOL;
+           e.rel_l2 <= REL_L2_TOL && e.max_abs <= max_abs_tolerance(k);
 }
 std::vector<std::string> csv(const std::string &s) {
     std::vector<std::string> out; size_t b = 0;
@@ -246,7 +252,7 @@ void emit_candidate(const Shape &s,size_t workspace,int h,int id,size_t req,size
       <<",\"required_workspace_bytes\":"<<req<<",\"algo_max_workspace_bytes\":"<<algows
       <<",\"finite\":"<<(error.finite?"true":"false")<<",\"padding_writes\":"<<error.padding_writes
       <<",\"relative_l2\":"<<std::setprecision(12)<<error.rel_l2<<",\"max_abs\":"<<error.max_abs
-      <<",\"relative_l2_tolerance\":"<<REL_L2_TOL<<",\"max_abs_tolerance\":"<<MAX_ABS_TOL
+      <<",\"relative_l2_tolerance\":"<<REL_L2_TOL<<",\"max_abs_tolerance\":"<<max_abs_tolerance(s.k)
       <<",\"mean_ms\":"<<std::setprecision(9)<<ms<<",\"solution_name\":"<<json(sol)
       <<",\"kernel_name\":"<<json(kernel)<<",\"algo_config_hex\":"<<json(config)<<"}\n";
 }
@@ -260,7 +266,7 @@ void emit_best(const Best &b,size_t workspace,const std::string &arch,int versio
       <<",\"algo_max_workspace_bytes\":"<<b.algo_workspace<<",\"mean_ms\":"<<std::setprecision(9)<<b.mean_ms
       <<",\"finite\":"<<(b.error.finite?"true":"false")<<",\"padding_writes\":"<<b.error.padding_writes
       <<",\"relative_l2\":"<<std::setprecision(12)<<b.error.rel_l2<<",\"max_abs\":"<<b.error.max_abs
-      <<",\"relative_l2_tolerance\":"<<REL_L2_TOL<<",\"max_abs_tolerance\":"<<MAX_ABS_TOL
+      <<",\"relative_l2_tolerance\":"<<REL_L2_TOL<<",\"max_abs_tolerance\":"<<max_abs_tolerance(s.k)
       <<",\"solution_name\":"<<json(b.solution)<<",\"kernel_name\":"<<json(b.kernel)
       <<",\"algo_config_hex\":"<<json(b.config)<<"}\n";
 }
@@ -345,10 +351,10 @@ void run_case(hipblasHandle_t blas,hipblasLtHandle_t lt,const Shape&s,int case_i
             HIP_CHECK(hipStreamSynchronize(stream));
             Err error=compare(ref,checked_y,s.n,s.t,s.ldy);
             error.padding_writes=padding_writes(checked_y,s.n,s.t,s.ldy);
-            if(!accuracy_ok(error)){
+            if(!accuracy_ok(error,s.k)){
                 std::printf("lt_reject dtype=%s T=%d N=%d K=%d ldy=%d heuristic_index=%d solution_id=%d finite=%s relative_l2=%.12g relative_l2_tolerance=%.3g max_abs=%.12g max_abs_tolerance=%.3g padding_writes=%zu reason=accuracy_gate\n",
                   dtype(s.bf16),s.t,s.n,s.k,s.ldy,h,id,error.finite?"true":"false",
-                  error.rel_l2,REL_L2_TOL,error.max_abs,MAX_ABS_TOL,error.padding_writes);continue;
+                  error.rel_l2,REL_L2_TOL,error.max_abs,max_abs_tolerance(s.k),error.padding_writes);continue;
             }
 
             bool failed=false;

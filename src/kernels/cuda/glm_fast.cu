@@ -7,7 +7,9 @@
 // glm_pack_test pins on the real model.
 #include "strata/kernels/glm_fast.hpp"
 
+#if !defined(STRATA_USE_HIP)
 #include <cuda_bf16.h>
+#endif
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
@@ -20,6 +22,15 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+
+#if defined(STRATA_USE_HIP)
+// The HC grid exchanges FP32 partials between workgroups. An agent-scope
+// acquire load preserves visibility after their publication fences; HIP only
+// supplies CUDA's __ldcg spelling for half types.
+__device__ __forceinline__ float __ldcg(const float* p) {
+    return __hip_atomic_load(p, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_AGENT);
+}
+#endif
 
 namespace strata::kernels::glmf {
 namespace {

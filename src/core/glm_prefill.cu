@@ -21,6 +21,9 @@
 #include "strata/kernels/dequant_bf16.hpp"
 #include "strata/kernels/glm_batch.hpp"
 #include "strata/kernels/iq_kernels.hpp"
+#if defined(STRATA_USE_HIP)
+#include "strata/prefill/gemm.hpp"
+#endif
 #include "strata/prefill/moe_mmq.hpp"
 
 #include "ggml.h"
@@ -82,7 +85,7 @@ struct Carve {
     }
 };
 
-constexpr int kSub = 256;   // the mixers and the dense FFN run the chunk in sub-batches of this many tokens
+constexpr int kSubDefault = 256;   // mixer and dense-FFN rows per sub-batch; STRATA_GLM_PREFILL_SUB overrides
 // resident experts routed by at most kLightRows rows of a chunk take the light kernels (gf::rows_experts) instead of
 // MMQ (STRATA_GLM_PREFILL_LIGHT overrides, 0 = MMQ only); their {slot, r0, nr} ride the bounds array from kLightOff
 constexpr int kLightRows = 32, kLightOff = 6144, kLightMax = (8192 - kLightOff) / 3;
@@ -155,7 +158,7 @@ struct MoeBufs {
     int *ids, *rank, *counts, *base, *row_tok, *pos, *bounds;
     uint8_t *Xq, *Hq;
 };
-MoeBufs carve_moe(Carve& c, size_t T, const Glm5Geometry& g) {
+MoeBufs carve_moe(Carve& c, size_t T, size_t sub, const Glm5Geometry& g) {
     MoeBufs b{};
     const size_t rows = T * (size_t) g.n_exp_used;
     const size_t FF = (size_t) g.n_ff_exp * g.n_shared;
@@ -172,7 +175,7 @@ MoeBufs carve_moe(Carve& c, size_t T, const Glm5Geometry& g) {
     b.H = c.take<float>(rows * g.n_ff_exp);
     b.Hq = c.take<uint8_t>(mmq::q8_bytes((int64_t) rows, g.n_ff_exp));
     b.OUTP = c.take<float>(rows * g.n_embd);   // each set's gate/up rows live in its own OUTP rows until the down product
-    const size_t ts = std::min<size_t>(T, kSub);
+    const size_t ts = std::min(T, sub);
     b.sh_g = c.take<float>(ts * FF);
     b.sh_u = c.take<float>(ts * FF);
     b.sh16 = c.take<uint16_t>(ts * FF);
@@ -187,9 +190,14 @@ void blas_ck(cublasStatus_t st, const char* what) {
 
 struct Glm5Model::PrefillState {
     int T = 0;                       // tokens per chunk
+    int sub = kSubDefault;            // tokens per mixer/dense-FFN sub-batch
     int max_pools = 0;
     cublasHandle_t blas = nullptr;
     void* ws = nullptr;
+#if defined(STRATA_USE_HIP)
+    std::unique_ptr<strata::prefill::Gemm> lt;   // hipBLASLt with a tuning table (STRATA_HIPBLASLT_TUNING)
+    bool lt_tried = false;
+#endif
     std::unique_ptr<mmq::Context> mq;
     uint8_t* arena = nullptr;
     size_t arena_bytes = 0;
@@ -330,6 +338,8 @@ bool Glm5Model::prefill_setup(std::string& err) {
     S->has_dense = has_dense;
     S->has_moe = has_moe;
     S->max_pools = (int) std::max<int64_t>(1, max_ctx_ / g.idx_kpool);
+    if (const char* v = getenv("STRATA_GLM_PREFILL_SUB"))
+        S->sub = std::clamp(std::atoi(v), 16, 8192);
     S->prof = getenv("STRATA_GLM_PREFILL_PROF") != nullptr;
     S->gstride = gstride;
 
@@ -357,11 +367,11 @@ bool Glm5Model::prefill_setup(std::string& err) {
         c.take<float>(T * 24);
         c.take<int>(T * (size_t) g.n_exp_used);      // iota
         size_t uni = 0;
-        const size_t ts = std::min<size_t>(T, kSub);
+        const size_t ts = std::min<size_t>(T, (size_t) S->sub);
         if (has_kda) { Carve k; carve_kda(k, ts, g); uni = std::max(uni, k.off); }
         if (has_dsa) { Carve d; carve_dsa(d, ts, g, S->max_pools); uni = std::max(uni, d.off); }
         if (has_dense) { Carve d; carve_dense(d, ts, g); uni = std::max(uni, d.off); }
-        if (has_moe) { Carve m; carve_moe(m, T, g); uni = std::max(uni, m.off); }
+        if (has_moe) { Carve m; carve_moe(m, T, S->sub, g); uni = std::max(uni, m.off); }
         return std::make_pair(c.off, uni);
     };
     // the budget: ~6% of the card, 1-2 GB.  A bigger chunk re-stages the non-resident experts fewer times per prompt
@@ -442,10 +452,10 @@ bool Glm5Model::prefill_setup(std::string& err) {
     }
     for (auto& e : S->ev_land) cudaEventCreateWithFlags(&e, cudaEventDisableTiming);
     cudaEventCreateWithFlags(&S->ev_hop, cudaEventDisableTiming);
-    std::fprintf(stderr, "glm prefill: CUDA%d chunks of %d tokens, borrowing %.0f MB of the expert pool while a prompt "
+    std::fprintf(stderr, "glm prefill: CUDA%d chunks of %d tokens (sub-batches %d), borrowing %.0f MB of the expert pool while a prompt "
                          "runs (activations %.0f, weight scratch %.0f, expert staging %.0f); disk landing ring %d "
                          "experts (%.0f MB pinned)\n",
-                 dev_, T, (double) S->borrow_bytes / 1048576.0, (double) S->arena_bytes / 1048576.0,
+                 dev_, T, S->sub, (double) S->borrow_bytes / 1048576.0, (double) S->arena_bytes / 1048576.0,
                  (double) (w16_elems * 2 + w32_elems * 4) / 1048576.0, (double) S->gbuf_bytes / 1048576.0, S->nland,
                  (double) S->nland * (double) gstride / 1048576.0);
     (void) fixed;
@@ -476,11 +486,11 @@ size_t Glm5Model::prefill_carve(int Tn) {
     const size_t T = (size_t) Tn, E = (size_t) g.n_embd;
     size_t uni = 0;
     {
-        const size_t ts = std::min<size_t>(T, kSub);
+        const size_t ts = std::min<size_t>(T, (size_t) S->sub);
         if (S->has_kda) { Carve k; carve_kda(k, ts, g); uni = std::max(uni, k.off); }
         if (S->has_dsa) { Carve d; carve_dsa(d, ts, g, S->max_pools); uni = std::max(uni, d.off); }
         if (S->has_dense) { Carve d; carve_dense(d, ts, g); uni = std::max(uni, d.off); }
-        if (S->has_moe) { Carve m; carve_moe(m, T, g); uni = std::max(uni, m.off); }
+        if (S->has_moe) { Carve m; carve_moe(m, T, S->sub, g); uni = std::max(uni, m.off); }
         // the NextN block's cache fill (the last half) carves 4 n_embd + 1.5 n_embd rows of its own
         if (mtp_il_ >= 0) uni = std::max(uni, T * (size_t) (6 * g.n_embd + g.kv_lora + 2 * g.idx_key) * 4 + 8 * 256);
     }
@@ -769,10 +779,30 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
     // Y[t][N] = X16[t][K] . deq(W)[N][K]^T (tensor cores, F32 accumulate); beta = 1 adds to Y
     const auto hgemm_q = [&](const WSlot& w, int N, int Kd, const uint16_t* X16, int ldx, float* Y, int ldy, int Tn,
                              float beta) {
+#if defined(STRATA_USE_HIP)
+        if (!S->lt_tried) {
+            S->lt_tried = true;
+            if (getenv("STRATA_HIPBLASLT_TUNING")) {
+                auto lt = std::make_unique<strata::prefill::Gemm>();
+                std::string lt_err;
+                if (lt->init_external(F->cs, S->w16, S->w16_elems, S->ws, S->ws_bytes, lt_err))
+                    S->lt = std::move(lt);
+                else
+                    std::fprintf(stderr, "glm prefill: hipBLASLt GEMM unavailable (%s)\n", lt_err.c_str());
+            }
+        }
+        if (S->lt) S->lt->rebind(S->w16, S->w16_elems, S->ws, S->ws_bytes);
+#endif
         const int rows = (int) std::max<int64_t>(1, std::min<int64_t>(N, S->w16_elems / Kd));
         for (int r0 = 0; r0 < N; r0 += rows) {
             const int n = std::min(rows, N - r0);
             strata::kernels::dequant_f16(w.type, w.q, r0, n, Kd, S->w16, s);
+#if defined(STRATA_USE_HIP)
+            if (S->lt && ldx == Kd) {
+                S->lt->f16(X16, S->w16, Y + r0, Tn, n, Kd, ldy, beta);
+                continue;
+            }
+#endif
             blas_ck(cublasGemmEx(S->blas, CUBLAS_OP_T, CUBLAS_OP_N, n, Tn, Kd, &one, S->w16, CUDA_R_16F, Kd, X16,
                                  CUDA_R_16F, ldx, &beta, Y + r0, CUDA_R_32F, ldy, CUBLAS_COMPUTE_32F,
                                  CUBLAS_GEMM_DEFAULT_TENSOR_OP),
@@ -922,9 +952,9 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
         S->mark("hc", s);
         dump_row("attn_norm-" + std::to_string(il), S->x, E);
 
-        // ---- the mixer, in sub-batches of kSub tokens (the recurrences carry their state across)
-        for (int t0 = 0; t0 < T; t0 += kSub) {
-            const int tn = std::min(kSub, T - t0);
+        // ---- the mixer in sub-batches (the recurrences carry their state across)
+        for (int t0 = 0; t0 < T; t0 += S->sub) {
+            const int tn = std::min(S->sub, T - t0);
             const float* xs = S->x + (size_t) t0 * E;
             const uint16_t* x16 = S->x16 + (size_t) t0 * E;
             float* mixer = S->mixer + (size_t) t0 * E;
@@ -1036,8 +1066,8 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
         dump_row("ffn_norm-" + std::to_string(il), S->x, E);
 
         if (!Ly.moe) {
-            for (int t0 = 0; t0 < T; t0 += kSub) {
-                const int tn = std::min(kSub, T - t0);
+            for (int t0 = 0; t0 < T; t0 += S->sub) {
+                const int tn = std::min(S->sub, T - t0);
                 Carve c{S->uni};
                 DenseBufs B = carve_dense(c, (size_t) tn, g);
                 const uint16_t* x16 = S->x16 + (size_t) t0 * E;
@@ -1053,10 +1083,10 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
 
         // ---- MoE: the shared expert (sub-batches, straight into ffn), the routes, the expert groups
         Carve c{S->uni};
-        MoeBufs M = carve_moe(c, (size_t) T, g);
+        MoeBufs M = carve_moe(c, (size_t) T, (size_t) S->sub, g);
         const int FF = g.n_ff_exp * g.n_shared, NE = g.n_expert, nff = g.n_ff_exp;
-        for (int t0 = 0; t0 < T; t0 += kSub) {
-            const int tn = std::min(kSub, T - t0);
+        for (int t0 = 0; t0 < T; t0 += S->sub) {
+            const int tn = std::min(S->sub, T - t0);
             const uint16_t* x16 = S->x16 + (size_t) t0 * E;
             hgemm_q(Ly.sh_gate, FF, E, x16, E, M.sh_g, FF, tn, 0.0f);
             hgemm_q(Ly.sh_up, FF, E, x16, E, M.sh_u, FF, tn, 0.0f);

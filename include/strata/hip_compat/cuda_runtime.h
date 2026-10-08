@@ -1,6 +1,11 @@
 #pragma once
 // Included only by STRATA_ENABLE_HIP builds. CUDA builds use NVIDIA headers.
 #include <hip/hip_runtime.h>
+// CUDA's annotation avoids per-thread copies of const kernel parameters. HIP
+// passes the same const values without this CUDA-only optimization annotation.
+#ifndef __grid_constant__
+#define __grid_constant__
+#endif
 // Do not let HIP's legacy macro corrupt libstdc++ attribute names.
 #ifdef __noinline__
 #undef __noinline__
@@ -10,10 +15,14 @@
 #define cudaDevAttrClockRate hipDeviceAttributeClockRate
 #define cudaDevAttrComputeCapabilityMajor hipDeviceAttributeComputeCapabilityMajor
 #define cudaDeviceGetAttribute hipDeviceGetAttribute
+#define cudaOccupancyMaxActiveBlocksPerMultiprocessor hipOccupancyMaxActiveBlocksPerMultiprocessor
 #define cudaDeviceProp hipDeviceProp_t
 #define cudaDeviceSynchronize hipDeviceSynchronize
 #define cudaDriverGetVersion hipDriverGetVersion
 #define cudaErrorNotReady hipErrorNotReady
+#define cudaErrorUnknown hipErrorUnknown
+#define cudaErrorInvalidConfiguration hipErrorInvalidConfiguration
+#define cudaErrorMemoryAllocation hipErrorOutOfMemory
 #define cudaErrorStreamCaptureUnsupported hipErrorStreamCaptureUnsupported
 #define cudaError_t hipError_t
 #define cudaEventCreate hipEventCreate
@@ -72,6 +81,7 @@
 #define cudaStreamDestroy hipStreamDestroy
 #define cudaStreamEndCapture hipStreamEndCapture
 #define cudaStreamNonBlocking hipStreamNonBlocking
+#define cudaStreamLegacy hipStreamLegacy
 #define cudaStreamQuery hipStreamQuery
 #define cudaStreamSynchronize hipStreamSynchronize
 #define cudaStreamWaitEvent hipStreamWaitEvent

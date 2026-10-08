@@ -21,6 +21,7 @@ namespace strata::core {
 struct DeviceInfo {
     int ordinal = -1;
     std::string name;
+    std::string arch;             // HIP base architecture; empty on CUDA
     int cc_major = 0, cc_minor = 0;
     uint64_t total_bytes = 0;      // as reported by cudaMemGetInfo at query time
     uint64_t free_bytes = 0;
@@ -32,6 +33,8 @@ struct DeviceInfo {
 // run slowly on something else: `CMakeLists.txt` already refuses to COMPILE for another architecture, and
 // this is the matching check at run time (a binary can be carried to a different machine).
 DeviceInfo device_info(int ordinal = 0);
+// Comma-separated HIP architectures compiled into the binary; empty on CUDA.
+const char* compiled_gpu_archs();
 
 class CudaError : public std::runtime_error {
 public:

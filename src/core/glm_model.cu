@@ -1993,7 +1993,7 @@ bool strata::core::Glm5Model::load_pack(const std::string& pack_dir, int64_t max
         pool_tick_.assign(pool_key_of_.size(), 0);
         pool_count_.assign(pool_key_of_.size(), 0);
         if (cudaHostAlloc(&plan_host_, sizeof(DevPlan), cudaHostAllocMapped) != cudaSuccess ||
-            cudaHostGetDevicePointer(&plan_dev_, plan_host_, 0) != cudaSuccess ||
+            cudaHostGetDevicePointer((void**) &plan_dev_, plan_host_, 0) != cudaSuccess ||
             cudaMalloc(&dev_xq_, (size_t) g_.n_embd / 32 * 36) != cudaSuccess ||
             cudaMalloc(&dev_scratch_, strata::kernels::native_expert_scratch_bytes(g_.n_exp_used, g_.n_ff_exp)) !=
                 cudaSuccess ||
