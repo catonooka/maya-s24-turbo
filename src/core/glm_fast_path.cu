@@ -63,17 +63,23 @@ namespace gf = strata::kernels::glmf;
 
 // Keeps the GPU out of its idle P-state for ns nanoseconds.  A consumer card at P8 drops its PCIe link (Gen1 on an
 // RTX 4070 Ti SUPER / 5070 Ti), and copies alone do not wake it, so a link timed at idle reads 3-8x slower than it
-// runs during decode (Tesla cards keep the link up, so this never showed there).  (NVIDIA only: %globaltimer is
-// PTX, and the HIP build keeps timing the link as before.)
-#if !defined(STRATA_USE_HIP)
+// runs during decode (Tesla cards keep the link up, so this never showed there).
 static __global__ void glm_link_wake(unsigned long long ns) {
+#if defined(STRATA_USE_HIP)
+    // no PTX %globaltimer on AMD: wall_clock64() is the constant 100 MHz counter (10 ns a tick) on gfx11 / gfx12, and
+    // a wake-up spin needs no exact timing (from @boxwrench, #24)
+    const long long t0 = wall_clock64();
+    const long long ticks = (long long) (ns / 10ull);
+    while (wall_clock64() - t0 < ticks) {
+    }
+#else
     unsigned long long t0, t;
     asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t0));
     do {
         asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t));
     } while (t - t0 < ns);
-}
 #endif
+}
 
 namespace strata::core {
 
@@ -1230,12 +1236,10 @@ bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
     // the link is timed with the GPU awake (see glm_link_wake): 400 ms for the clocks and the link to ramp up, then
     // 1.1 s of the kernel left for both measurements below
     cudaStream_t wake = nullptr;
-#if !defined(STRATA_USE_HIP)
     if (cudaStreamCreateWithFlags(&wake, cudaStreamNonBlocking) == cudaSuccess) {
         glm_link_wake<<<1, 1, 0, wake>>>(1500ull * 1000000ull);
         std::this_thread::sleep_for(std::chrono::milliseconds(400));
     }
-#endif
     for (int rep = 0; rep < 24; ++rep) {
         cudaEventRecord(e0, F->cs);
         cudaMemcpyAsync(F->scratch, cal, blob, cudaMemcpyHostToDevice, F->cs);
