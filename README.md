@@ -19,7 +19,7 @@ dashboard started from Strata's and were reworked for Maya (a new dashboard, ima
 **AMD (experimental):** Linux on RX 7900 XT / XTX and R9700 / RX 9070, one GPU or two, text only - see
 [docs/AMD_MAYA.md](docs/AMD_MAYA.md).
 
-## The models: Maya-S, Maya-M and GSQ-RCO 3.5-bit
+## The models: Maya-S, Maya-S24, Maya-M and GSQ-RCO 3.5-bit
 
 Maya installs **Maya-S**, Project Maya's own compact quant of GLM-5.3-Flash (96.5 GB,
 [on Hugging Face](https://huggingface.co/peasantsmith/GLM-5.3-Flash-Maya-GGUF)), made for PCs with a smaller memory
@@ -31,6 +31,14 @@ experts, and it keeps the model's MTP block, which drafts tokens ahead (speculat
 WinoGrande, PIQA; 400 questions each, the same for both models). On held-out text it picks the same next token as the
 FP8 model 83% of the time, and it writes long answers (6,000-14,000 tokens) without looping.
 Details: [bench/results/MAYA-S.md](bench/results/MAYA-S.md).
+
+**Maya-S24** (94.7 GB) is Maya-S with its attention and shared experts in 4-bit (Q4_K) instead of 6-bit: about 1.5 GB
+less that has to stay on the GPU, so a 24 GB card holds more experts. On one Tesla V100 limited to 24 GB it decodes
+**14% faster** than Maya-S (13.5 vs 11.8 tokens/s), and 11% faster on the full 32 GB (19.1 vs 17.2); prefill is the
+same. It keeps 97.7% of the FP8 model's zero-shot accuracy (Maya-S: 97.9%) and picks the same next token as the
+FP8 model 83% of the time, like Maya-S. On cards of 24 GB or less the setup recommends it; else
+`./setup.sh --setup --model Maya-S24` (Windows: `START-MAYA.bat --setup --model Maya-S24`).
+Details: [bench/results/MAYA-S24.md](bench/results/MAYA-S24.md).
 
 **Maya-M** (116 GB) is the larger quant, made for PCs with a bigger memory pool across RAM and VRAM: more bits where
 they count - IQ2_S gate/up experts, IQ3_XXS down projections and IQ3_S in the most sensitive layers - with the same
@@ -99,7 +107,7 @@ ROCm 7): `./maya.sh --backend hip --gpu 0 --check` first (two cards: `--gpus 0,1
    (or [download it](https://github.com/mw00/project-maya/archive/refs/heads/main.zip) and unzip it).
 2. Run **`./setup.sh`** (the same as `./maya.sh`).
 3. Answer a few questions - or just press Enter each time for the recommended choice: which GPUs, how much context,
-   which model (Maya-S, Maya-M or GSQ-RCO 3.5-bit), pictures. Then it downloads and builds everything (it shows each
+   which model (Maya-S, Maya-S24, Maya-M or GSQ-RCO 3.5-bit), pictures. Then it downloads and builds everything (it shows each
    download first; you can stop and it picks up where it left off) and **starts the model**. Open the dashboard at
    `http://127.0.0.1:8080`.
 
@@ -113,7 +121,7 @@ It takes 20-40 minutes plus the download:
 
 1. checks the PC (GPUs, driver, CUDA toolkit, compiler, RAM, CPU);
 2. asks which GPUs to use (all of them by default, up to 16), how much context (32K recommended) and which model to
-   download: Maya-S (recommended), Maya-M or GSQ-RCO 3.5-bit;
+   download: Maya-S (recommended; Maya-S24 on cards of 24 GB or less), Maya-M or GSQ-RCO 3.5-bit;
 3. installs its Python packages into `.venv` and gets llama.cpp's source at a pinned commit (it lists both and asks);
 4. compiles the engine for your GPU(s) (10-30 minutes, once);
 5. **the model**: it shows the source, the size (Maya-S: 96.5 GB) and the exact `curl` commands, and downloads only

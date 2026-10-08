@@ -100,6 +100,26 @@ MODELS = {
                            "3627575df16bd152db0f3fd7e488d270b33f3a9e6c7fa3b1b8ac381faafde882",
                        "GLM-5.3-Flash-vocab.gguf":
                            "8f53cb1bd2e631c14ef413e3284735d9e53f3c508d07a6f609e705b487105912"}}},
+    "Maya-S24": {
+        "about": "Maya-S24, Maya-S with Q4_K attention and shared experts: about 1.5 GB less that stays on the GPU, so "
+                 "24 GB cards hold more experts (decode about 14% faster there, 11% on 32 GB), close to Maya-S in "
+                 "quality",
+        "repo": "peasantsmith/GLM-5.3-Flash-Maya-GGUF", "revision": "main", "folder": "Maya-S24",
+        "file": "GLM-5.3-Flash-Maya-S24-{i:05d}-of-{n:05d}.gguf", "shards": 3, "download_gb": 94.7,
+        "sha256": {
+            "GLM-5.3-Flash-Maya-S24-00001-of-00003.gguf":
+                "3dc347757686c1435eae36c4872f5c151191cc5063bc188ce699b97700aae076",
+            "GLM-5.3-Flash-Maya-S24-00002-of-00003.gguf":
+                "4bd445da3a0128a9c5b32228c924e0a622aa4a132c7a8dc9a2c207a4beea8e34",
+            "GLM-5.3-Flash-Maya-S24-00003-of-00003.gguf":
+                "a6fd4e88007ac49b431c7d02be34e43ab7a09224d53a0c52782327613cb41917"},
+        "vision": {
+            "folder": "vision", "mmproj": "mmproj-GLM-5.3-Flash-F16.gguf", "vocab": "GLM-5.3-Flash-vocab.gguf",
+            "download_gb": 1.14,
+            "sha256": {"mmproj-GLM-5.3-Flash-F16.gguf":
+                           "3627575df16bd152db0f3fd7e488d270b33f3a9e6c7fa3b1b8ac381faafde882",
+                       "GLM-5.3-Flash-vocab.gguf":
+                           "8f53cb1bd2e631c14ef413e3284735d9e53f3c508d07a6f609e705b487105912"}}},
     "Maya-M": {
         "about": "Maya-M, Project Maya's larger quant: error-feedback-rounded IQ2_S gate/up experts, IQ3_XXS down "
                  "projections (IQ3_S in the most sensitive layers), Q6_K attention, the MTP draft block, made from "
@@ -533,14 +553,22 @@ def choose_model(a, models: Path, inst: dict) -> tuple:
     if a.model:
         return "download", a.model
     opts = list(MODELS)
-    default = inst["quant"] if inst.get("quant") in MODELS else opts[0]
+    # cards of 24 GB or less: Maya-S24 (its 4-bit attention leaves ~1.5 GB more of the card for experts - decode about
+    # 14% faster there), else Maya-S
+    try:
+        cards = [g for g in S.gpus() if g.get("vram_gb")]
+    except Exception:  # noqa: BLE001 - no NVIDIA tools (AMD): no card-based recommendation
+        cards = []
+    rec = "Maya-S24" if cards and all(g["vram_gb"] <= 24.5 for g in cards) and "Maya-S24" in MODELS else opts[0]
+    default = inst["quant"] if inst.get("quant") in MODELS else rec
     say()
     say("  The model to download (GLM-5.3-Flash GGUF files you already have: --gguf-dir <file or folder>):")
     for i, q in enumerate(opts, 1):
         m, d = MODELS[q], download_dir(models, q)
         have = all((d / m["file"].format(i=j, n=m["shards"])).exists() for j in range(1, m["shards"] + 1))
         label = f"downloaded, in {d}" if have else f"download {m['download_gb']:.1f} GB from Hugging Face"
-        say(f"  {i}) {q}: {label}" + ("   (recommended)" if i == 1 else ""))
+        say(f"  {i}) {q}: {label}" + (("   (recommended for cards of 24 GB or less)" if q == "Maya-S24" else
+                                      "   (recommended)") if q == rec else ""))
     pick = ask("Model?", [str(i) for i in range(1, len(opts) + 1)], str(opts.index(default) + 1), a.yes)
     return "download", opts[int(pick) - 1]
 
