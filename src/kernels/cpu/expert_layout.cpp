@@ -51,14 +51,56 @@ bool cpu_avx512_ok() {
     return ok;
 }
 
+// AVX2 + FMA with the OS saving the YMM state (cpuid as cpu_avx512_ok does, so MSVC builds too): the AVX2 kernels'
+// gate - a CPU without it (Sandy/Ivy Bridge) takes ggml-cpu's own kernels
+bool cpu_avx2_ok() {
+    static const bool ok = [] {
+        unsigned r[4] = {0, 0, 0, 0};
+        auto cpuid = [&](unsigned leaf, unsigned sub) {
+#if defined(_MSC_VER)
+            int x[4];
+            __cpuidex(x, (int) leaf, (int) sub);
+            for (int i = 0; i < 4; ++i) r[i] = (unsigned) x[i];
+#else
+            __cpuid_count(leaf, sub, r[0], r[1], r[2], r[3]);
+#endif
+        };
+        cpuid(0, 0);
+        if (r[0] < 7) return false;
+        cpuid(1, 0);
+        const unsigned ecx1 = r[2];
+        if (!((ecx1 >> 27) & 1u) || !((ecx1 >> 28) & 1u) || !((ecx1 >> 12) & 1u)) return false;   // OSXSAVE, AVX, FMA
+#if defined(_MSC_VER)
+        const unsigned long long xcr0 = _xgetbv(0);
+#else
+        unsigned lo = 0, hi = 0;
+        __asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+        const unsigned long long xcr0 = ((unsigned long long) hi << 32) | lo;
+#endif
+        if ((xcr0 & 0x6) != 0x6) return false;             // the OS saves the XMM and YMM state
+        cpuid(7, 0);
+        return ((r[1] >> 5) & 1u) != 0;                    // AVX2
+    }();
+    return ok;
+}
+
+// A CPU without AVX2 (and without AVX-512) has no kernel for these: say so instead of an illegal instruction.
+// Run with the CPU expert lane off (STRATA_GLM_CPU_LANE=0) so the GPUs compute every expert.
+[[noreturn]] static void no_simd_kernel(const char* what) {
+    std::fprintf(stderr, "strata: %s needs AVX2 or AVX-512 and this CPU has neither; run with STRATA_GLM_CPU_LANE=0\n", what);
+    std::abort();
+}
+
 void q2_rows_any(const uint8_t* w, size_t row_bytes, int nblocks, const ActQ* const* a, int nt, float* const* out,
                  int r0, int r1) {
     if (cpu_avx512_ok()) q2_0_gguf_rows_multi(w, row_bytes, nblocks, a, nt, out, r0, r1);
+    else if (!cpu_avx2_ok()) no_simd_kernel("Q2_0 expert rows");
     else q2_0_gguf_rows_multi_avx2(w, row_bytes, nblocks, a, nt, out, r0, r1);
 }
 
 void act_quant_any(const float* x, int n, ActQ& a) {
     if (cpu_avx512_ok()) act_quant_q8_1(x, n, a);
+    else if (!cpu_avx2_ok()) no_simd_kernel("the Q8_1 activation quantizer");
     else act_quant_q8_1_avx2(x, n, a);
 }
 
