@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from serve.frontend import ChatTemplate  # noqa: E402
-from serve.server import CTX_SLACK, ByteTokenizer, EngineDied, MockEngine, Service, StrataEngine, request_timings, serve  # noqa: E402
+from serve.server import CTX_SLACK, ByteTokenizer, carry_embeddings, EngineDied, MockEngine, Service, StrataEngine, request_timings, serve  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CTX = 4096
@@ -1065,6 +1065,23 @@ class RequestBodies(unittest.TestCase):
 
     def test_the_listen_backlog(self):
         self.assertGreaterEqual(self.httpd.request_queue_size, 256)
+
+class TestCarryEmbeddings(unittest.TestCase):
+    def test_the_job_thread_sees_the_request_threads_image_file(self):
+        local = threading.local()
+        local.path = "req-1.sve"                       # set by the request thread while it prepares the prompt
+        seen = []
+
+        def chunks():
+            seen.append(getattr(local, "path", None))  # what Service.generate reads when the engine call starts
+            yield "chunk"
+
+        gen = carry_embeddings(local, local.path, chunks())
+        worker = threading.Thread(target=lambda: list(gen))   # the strata_resume job thread
+        worker.start()
+        worker.join()
+        self.assertEqual(seen, ["req-1.sve"])
+
 
 if __name__ == "__main__":
     unittest.main()

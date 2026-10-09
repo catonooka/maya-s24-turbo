@@ -1720,6 +1720,14 @@ def openai_chunks(svc: Service, req: dict, ids, thinking, tools, max_new, cancel
             yield last
 
 
+def carry_embeddings(local, path, chunks):
+    """`Service.embeddings` is thread-local (the request thread prepares the prompt and sets the image embeddings
+    file).  A strata_resume answer runs its chunks on the job thread, which would see no file: the image's place
+    in the prompt then went to the engine as plain pad tokens and the model answered about a black / blank picture."""
+    local.path = path                                  # runs on the thread that first pulls from the generator
+    yield from chunks
+
+
 class StreamJob:
     """A web-app answer that outlives its connection (the request's `strata_resume`): a thread runs its chunks into
     `items` and any reader streams them from an index (GET /v1/strata/stream?id=&from=), so a phone whose screen
@@ -2325,7 +2333,8 @@ def make_handler(svc: Service):
             if req.get("strata_resume") is True:
                 # the web app: the answer runs on if the connection drops; the page reconnects to it by id
                 first = next(chunks)
-                job = StreamJob(first["id"], itertools.chain([first], chunks), cancel)
+                job = StreamJob(first["id"], itertools.chain(
+                    [first], carry_embeddings(svc.embeddings, getattr(svc.embeddings, "path", None), chunks)), cancel)
                 jobs_put(job)
                 self._sse()
                 self._stream_job(job, 0)
