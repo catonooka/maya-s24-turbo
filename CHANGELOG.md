@@ -3,6 +3,39 @@
 Every release is on GitHub (Releases) with these notes; every published change moves the last number. Update: `git pull`, then `./setup.sh` (Windows:
 `START-MAYA.bat`) - it recompiles only what changed and starts.
 
+## v1.0.17 - 2026-10-09
+
+A new dashboard: many chats, the context size from the settings (the model reloads with it), editing and regenerating,
+code previews, and a Monitor and About that say what the server runs.
+
+- **Chats:** every chat is kept in the browser (IndexedDB, with its pictures and attached files) and listed in the
+  sidebar with search, rename and delete; "New chat" no longer wipes the last one. On a phone the list slides in from
+  the left. A user message can be edited and sent again (the answers after it are replaced), the last answer
+  regenerated, and an answer that was streaming when the page reloaded is taken back up from the server.
+- **Context size in Settings:** a slider from 4K to the model's trained 1M tokens. It shows what the size costs here,
+  from the engine's own measurement (2x V100: 3.3 GB at 128K; "about 249 more experts in VRAM" at 64K), warns past
+  256K (untested) and asks before it reloads the model (about a minute on 2x V100). Requests from other apps get a
+  503 with Retry-After meanwhile; a size that does not start puts the old one back; the new size is saved in the run
+  config. (`GET`/`POST /api/context`, from the page itself only.)
+- **Instructions per chat** (a system prompt, optionally for new chats too), sampling presets (Precise, Balanced,
+  Creative), min-p, and a guard against closing Settings with unsaved changes.
+- **While it answers:** a context meter for the chat, the prompt it read and reused under each answer, a "Latest"
+  button, Esc to stop, Ctrl+Shift+O for a new chat.
+- **Code:** syntax highlighting (bundled, no CDN), wrap, download, and a sandboxed preview for HTML pages.
+- **Monitor:** a reading from the last answer is marked as such (it looked live), idle charts say so instead of a flat
+  line, a GPUs table on multi-GPU PCs, the request's source (Chat / OpenAI / Anthropic) and prompt speed per row,
+  banners for a reload or a hot GPU, tips from the expert tiers, and **Copy report** (versions, PC, engine settings,
+  the engine log's telling lines; no API key).
+- **About:** the version (it was missing), the trained context, the KV cache as it is (16-bit; it showed "32-bit"),
+  each GPU's PCIe link, the model folder and its free disk, and copy-ready snippets for Claude Code, OpenAI-style
+  apps and curl.
+- **Phones and access:** no zoom into the message box on iOS, 44 px buttons, safe areas, a status word in the header,
+  installable as an app (manifest); focus stays in Settings and dialogs, the arrow keys move the thinking level, and
+  reduced motion is honoured. Removed: the Qwen-only speed-projection switch.
+- Checked: on 2x Tesla V100 with Maya-S, the context changed 128K -> 96K -> 128K through the page's endpoint (about a
+  minute each, chat requests answered 503 meanwhile, the run config's other keys unchanged), then answered exactly;
+  the page tried in the browser at desktop and phone widths; the server's tests (102 + 9 new) pass.
+
 ## v1.0.16 - 2026-10-08
 
 README: the users' speed table keeps the measurements on current versions.

@@ -157,8 +157,11 @@ It takes 20-40 minutes plus the download:
 
 ## Using it
 
-- **In the browser:** `http://127.0.0.1:8080` - **Chat**, and a live **Monitor** of the model, the expert caches
-  and your GPU/CPU/RAM.
+- **In the browser:** `http://127.0.0.1:8080` - **Chat** (your chats kept in this browser, instructions per chat,
+  edit and regenerate, code with a preview for HTML pages), a live **Monitor** of the model, the expert caches and
+  your GPU/CPU/RAM (with **Copy report** for an issue), and **About** (the version, this PC, how to connect your
+  tools). **Settings** (the gear in the chat) changes the **context size**: the model reloads with it in a minute or
+  two, and the dashboard shows what the size costs in GPU memory on this PC.
 - **Your apps and coding agents:** an "OpenAI-compatible" provider with the base URL `http://127.0.0.1:8080/v1`
   (any model name; any API key unless you set one). Anthropic's API: `http://127.0.0.1:8080/v1/messages`
   (Claude Code: `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`). Tool calls (function calling) work through both, streamed
