@@ -332,8 +332,15 @@ namespace glmfast {
 void read_slice(const Glm5Model::Shard& sh, uint64_t off, size_t len, uint8_t* dst) {
 #ifndef _WIN32
     if (sh.fd_direct >= 0) {
-        static thread_local uint8_t* bounce = nullptr;
-        static thread_local size_t cap = 0;
+        // freed when its thread ends
+        struct Bounce {
+            uint8_t* p = nullptr;
+            size_t cap = 0;
+            ~Bounce() { std::free(p); }
+        };
+        static thread_local Bounce bb;
+        uint8_t*& bounce = bb.p;
+        size_t& cap = bb.cap;
         const uint64_t a0 = off & ~(uint64_t) 4095, a1 = (off + len + 4095) & ~(uint64_t) 4095;
         const size_t need = (size_t) (a1 - a0);
         if (cap < need) {
@@ -367,9 +374,20 @@ void read_slice(const Glm5Model::Shard& sh, uint64_t off, size_t len, uint8_t* d
     // Windows: the unbuffered handle the same way (sector-aligned offset, size and buffer), the mapping otherwise.
     // The handle is overlapped (reads from many threads run at once): each read waits on this thread's own event
     if (sh.h_direct != nullptr) {
-        static thread_local uint8_t* bounce = nullptr;
-        static thread_local size_t cap = 0;
-        static thread_local HANDLE done_ev = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+        // freed and closed when its thread ends
+        struct Bounce {
+            uint8_t* p = nullptr;
+            size_t cap = 0;
+            HANDLE ev = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+            ~Bounce() {
+                _aligned_free(p);
+                if (ev != nullptr) CloseHandle(ev);
+            }
+        };
+        static thread_local Bounce bb;
+        uint8_t*& bounce = bb.p;
+        size_t& cap = bb.cap;
+        const HANDLE done_ev = bb.ev;
         const uint64_t a0 = off & ~(uint64_t) 4095, a1 = (off + len + 4095) & ~(uint64_t) 4095;
         const size_t need = (size_t) (a1 - a0);
         if (cap < need) {
@@ -3281,7 +3299,7 @@ bool Glm5Model::fast_token(int32_t token, std::string& err) {
         err = "glm fast: no embedding dequantizer";
         return false;
     }
-    tt->to_float(pack_emb_src_ + (size_t) token * strata::kernels::iq_row_bytes(pack_emb_type_, g.n_embd), F->emb_h,
+    tt->to_float(pack_emb_src_ + (size_t) token * ggml_row_size((ggml_type) pack_emb_type_, g.n_embd), F->emb_h,
                  g.n_embd);
     if (const float* img = image_row(p)) std::memcpy(F->emb_h, img, (size_t) g.n_embd * sizeof(float));   // an image
     cudaMemcpyAsync(F->emb, F->emb_h, (size_t) g.n_embd * sizeof(float), cudaMemcpyHostToDevice, F->cs);
@@ -3387,7 +3405,7 @@ bool Glm5Model::fast_mtp(int64_t p, int32_t next_tok, std::string& err) {
         return false;
     }
     cudaStreamSynchronize(s);   // emb_h may still feed an earlier copy
-    tt->to_float(pack_emb_src_ + (size_t) next_tok * strata::kernels::iq_row_bytes(pack_emb_type_, E), F->emb_h, E);
+    tt->to_float(pack_emb_src_ + (size_t) next_tok * ggml_row_size((ggml_type) pack_emb_type_, E), F->emb_h, E);
     cudaMemcpyAsync(F->emb, F->emb_h, (size_t) E * sizeof(float), cudaMemcpyHostToDevice, s);
     gf::mtp_in(F->emb, F->head_x, Ly.enorm, Ly.hnorm, g.norm_eps, E, F->mtp_catq, s);
     gf::MvJob eh = {Ly.eh.q, F->mtp_catq, nullptr, F->mtp_h, nullptr, 1.0f, Ly.eh.type, 2 * E, E};
@@ -3596,7 +3614,7 @@ bool Glm5Model::spec_head(int64_t p, int32_t token, std::string& err) {
     fast_boundary();
     lap(1);
     const ggml_type_traits* tt = ggml_get_type_traits((ggml_type) pack_emb_type_);
-    tt->to_float(pack_emb_src_ + (size_t) token * strata::kernels::iq_row_bytes(pack_emb_type_, g.n_embd), F->emb_h,
+    tt->to_float(pack_emb_src_ + (size_t) token * ggml_row_size((ggml_type) pack_emb_type_, g.n_embd), F->emb_h,
                  g.n_embd);
     if (const float* img = image_row(p)) std::memcpy(F->emb_h, img, (size_t) g.n_embd * sizeof(float));   // an image
     cudaMemcpyAsync(F->emb, F->emb_h, (size_t) g.n_embd * sizeof(float), cudaMemcpyHostToDevice, F->cs);

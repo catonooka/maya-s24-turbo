@@ -809,10 +809,13 @@ def vision_footprint(vcfg: dict, env: dict, cache_file: Path, gpu: int) -> tuple
     """(image token cap, bytes) for the on-demand vision encoder on THIS machine's first GPU: measured once by
     `strata-vision --measure` (before the model loads, so the GPU is otherwise idle) and cached per encoder file, cap
     and GPU.  A cap the config does not set is the largest of 4096 / 2048 / 1024 image tokens whose footprint stays
-    within 15% of the card (a 32 GB card keeps 4096, an 8-12 GB card gets 1024).  None: no GPU to measure on."""
+    within 15% of the card (a 32 GB card keeps 4096, an 8-12 GB card gets 1024).  None: no GPU to measure on, or
+    no measurement (the encoder failed or printed no well-formed MEM line)."""
     try:
         cache = json.loads(cache_file.read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        cache = {}
+    if not isinstance(cache, dict):                     # a hand-edited or damaged file: measured again
         cache = {}
     st = Path(vcfg["mmproj"]).stat()
     caps = [int(vcfg["max_tokens"])] if vcfg.get("max_tokens") else [4096, 2048, 1024]
@@ -820,16 +823,20 @@ def vision_footprint(vcfg: dict, env: dict, cache_file: Path, gpu: int) -> tuple
         key = f"{Path(vcfg['mmproj']).resolve()}|{st.st_size}|{int(st.st_mtime)}|gpu{gpu}|cap{cap}|" \
               f"fa{0 if vcfg.get('no_flash_attn') else 1}"
         m = cache.get(key)
+        if not isinstance(m, dict) or not all(isinstance(m.get(k), int) and m[k] > 0 for k in ("bytes", "total")):
+            m = None
         if m is None:
             args = [vcfg["exe"], "--mmproj", vcfg["mmproj"], "--model", vcfg["model"], "--gpu", "--max-tokens", str(cap),
                     "--measure"] + (["--no-flash-attn"] if vcfg.get("no_flash_attn") else [])
             print(f"[strata] images: measuring the vision encoder on this GPU ({cap} image tokens) ...", flush=True)
             try:
                 r = subprocess.run(args, capture_output=True, text=True, timeout=600, env=env)
-                f = next((l.split() for l in r.stdout.splitlines() if l.startswith("MEM ")), None)
+                # only a measurement that ran to its end (an encoder whose warm-up failed exits 1 without one)
+                f = next((l.split() for l in r.stdout.splitlines() if l.startswith("MEM ")), None) \
+                    if r.returncode == 0 else None
             except (OSError, subprocess.TimeoutExpired):
                 f = None
-            if f is None or int(f[3]) == 0:
+            if f is None or len(f) != 4 or not all(x.isdigit() for x in f[1:]) or int(f[3]) == 0:
                 return None
             # its weights and work buffers, the context this process had (and whatever else used the card then -
             # the safe side), and 256 MB of slack
@@ -2765,7 +2772,8 @@ def main() -> int:
             fp = vision_footprint(vcfg, venv, Path(a.config).resolve().with_name("vision-memory.json"),
                                   (gpu_list(cfg) or [0])[0])
             if fp is None:
-                print("[strata] images: no GPU to measure the vision encoder on - it runs on the CPU", flush=True)
+                print("[strata] images: the vision encoder could not be measured on the GPU - it runs on the CPU",
+                      flush=True)
                 vcfg, on_demand = dict(vcfg, gpu=False), False
             else:
                 vcfg = dict(vcfg, max_tokens=fp[0])

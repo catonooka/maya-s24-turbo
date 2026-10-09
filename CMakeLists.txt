@@ -772,6 +772,12 @@ if(STRATA_NATIVE_EXPERTS)
   endif()
   target_link_libraries(strata_kernels_cpu PUBLIC ggml-cpu ggml-base)
   target_compile_definitions(strata_kernels_cpu PUBLIC STRATA_NATIVE_EXPERTS=1)
+  if(STRATA_BUILD_TESTS)
+    # GLM's split-base expert rows (the CPU lane on a GGUF's own gate/up/down tensors) vs the contiguous blob path
+    add_executable(native_split_test src/kernels/cpu/native_split_test.cpp)
+    target_link_libraries(native_split_test PRIVATE strata_kernels_cpu)
+    add_test(NAME native_split_test COMMAND native_split_test)
+  endif()
   if(STRATA_ENABLE_CUDA)
     # prompt-speed plan step 2b: llama.cpp's MMQ kernels (ggml-cuda, MIT) for the prompt path's experts, compiled
     # from the same checkout as ggml above - only mmq.cuh's instances for the packs' types and the quantizer, with

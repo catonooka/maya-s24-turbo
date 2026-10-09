@@ -65,6 +65,12 @@ class GlmOracleTest(unittest.TestCase):
         self.assertTrue(np.isfinite(self.logits).all())
         self.assertEqual(self.logits.shape, (512, len(self.tokens)))
 
+    def test_future_tokens_do_not_change_prefix_logits(self):
+        # causal: a position's logits see only the tokens up to it (the KDA scan, the DSA indexer's selection and its
+        # pooled keys included), so the first four positions read the same with or without the four after them
+        prefix = self.model.forward(self.tokens[:4])
+        np.testing.assert_allclose(prefix, self.logits[:, :4], atol=3e-6, rtol=3e-6)
+
     def test_greedy_loop_runs(self):
         toks = list(self.tokens)
         for _ in range(3):

@@ -1844,8 +1844,12 @@ static int glm_pack_generate(const Options& o) {
                 std::string ge = f ? "" : "cannot open " + emb_path;
                 while (f && ge.empty()) {
                     int32_t hdr[5];
-                    if (std::fread(hdr, sizeof hdr, 1, f) != 1) break;   // the end of the records
-                    if (hdr[0] != 0x31455653 || hdr[1] <= 0 || hdr[4] != E) {
+                    // the end of the records only between two of them: a header cut short is a broken file, and a
+                    // record cannot hold more rows than the prompt has tokens (not a multi-GB allocation off one)
+                    const size_t got = std::fread(hdr, 1, sizeof hdr, f);
+                    if (got == 0 && std::feof(f)) break;
+                    if (got != sizeof hdr || hdr[0] != 0x31455653 || hdr[1] <= 0 || hdr[4] != E ||
+                        (size_t) hdr[1] > toks.size() - cur_img_rows.size() / (size_t) E) {
                         ge = "not a strata-vision record for this model";
                         break;
                     }
@@ -1875,7 +1879,7 @@ static int glm_pack_generate(const Options& o) {
             continue;
         }
         if (cmd.empty()) continue;
-        std::printf("ERR unsupported command '%s' (M3.1 supports GEN and QUIT)\n", cmd.c_str());
+        std::printf("ERR unsupported command '%s' (GEN, GENI, LOGP, VLEND, VRECLAIM, STOP and QUIT)\n", cmd.c_str());
     }
     // the engine ends (QUIT, or the server gone): the conversation in the model is kept for the next start
     if (slot_keep) slot_put(" on shutdown");
