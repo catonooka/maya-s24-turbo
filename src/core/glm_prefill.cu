@@ -118,8 +118,11 @@ KdaBufs carve_kda(Carve& c, size_t T, const Glm5Geometry& g) {
 
 #if defined(STRATA_USE_HIP)
 // The MLA batched products in FP16 with every head's tokens contiguous (hipBLAS picks far faster kernels than for the
-// F32 ones); the rocWMMA attention reads q_abs in FP16 too.  Both are on by default; STRATA_GLM_MLA_F16=0 and
-// STRATA_GLM_MLA_WMMA=0 turn them off (WMMA off keeps the F32 attention, F16 off also the F32 products).
+// F32 ones).  The prompt attention has three paths: the rocWMMA kernel on FP16 q_abs (f16q), the wave32 WMMA kernel on
+// F32 q_abs (wmma2), and the F32 kernel.  Both FP16 products and the WMMA attention are on by default;
+// STRATA_GLM_MLA_F16=0 and STRATA_GLM_MLA_WMMA=0 turn them off (WMMA off keeps the F32 attention, F16 off also the F32
+// products).  STRATA_GLM_PREFILL_ATTN=wmma2|f16q|f32 forces an attention path; unset, gfx12 (RDNA4) defaults to wmma2
+// and gfx11 to f16q.
 __global__ void pack_heads_f16(const float* __restrict__ src, uint16_t* __restrict__ dst, int T, int H, int K) {
     const int64_t n = (int64_t) T * H * K;
     for (int64_t i = blockIdx.x * (int64_t) blockDim.x + threadIdx.x; i < n; i += (int64_t) gridDim.x * blockDim.x) {
@@ -144,6 +147,18 @@ bool mla_wmma_on() {
 bool mla_f16_on() {
     static const bool on = env_on("STRATA_GLM_MLA_F16") || mla_wmma_on();
     return on;
+}
+enum class MlaAttnPath { F32, F16Q, WMMA2 };
+MlaAttnPath mla_attn_path() {
+    if (!mla_wmma_on()) return MlaAttnPath::F32;   // STRATA_GLM_MLA_WMMA=0 keeps the F32 kernel as before
+    static const char* mode = getenv("STRATA_GLM_PREFILL_ATTN");
+    static const bool want_wmma2 = mode != nullptr && std::strcmp(mode, "wmma2") == 0;
+    static const bool want_f16q = mode != nullptr && std::strcmp(mode, "f16q") == 0;
+    static const bool want_f32 = mode != nullptr && std::strcmp(mode, "f32") == 0;
+    if (want_f16q) return MlaAttnPath::F16Q;
+    if (want_f32) return MlaAttnPath::F32;
+    if (want_wmma2) return gb::mla_wmma2_supported() ? MlaAttnPath::WMMA2 : MlaAttnPath::F16Q;
+    return gb::mla_wmma2_default() ? MlaAttnPath::WMMA2 : MlaAttnPath::F16Q;
 }
 #endif
 struct DsaBufs {
@@ -1597,7 +1612,9 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
 #if defined(STRATA_USE_HIP)
                 // FP16 products; q is packed per head into B.attn's space and the context into B.q_abs's (both idle there)
                 const bool f16 = mla_f16_on() && (int64_t) g.qk_nope <= 2 * (int64_t) g.v_head;
-                const bool wmma = f16 && mla_wmma_on();
+                const MlaAttnPath attn_path = mla_attn_path();
+                const bool use_f16q = f16 && attn_path == MlaAttnPath::F16Q;
+                const bool use_wmma2 = attn_path == MlaAttnPath::WMMA2;
                 uint16_t* const hp_q = (uint16_t*) B.attn;
                 uint16_t* const hp_c = (uint16_t*) B.q_abs;
                 if (f16) {
@@ -1606,7 +1623,7 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
                     blas_ck(hipblasGemmStridedBatchedEx(S->blas, HIPBLAS_OP_T, HIPBLAS_OP_N, g.kv_lora, tn, g.qk_nope, &one,
                                                         S->w16, HIP_R_16F, g.qk_nope, (long long) g.kv_lora * g.qk_nope,
                                                         hp_q, HIP_R_16F, g.qk_nope, (long long) tn * g.qk_nope, &zero,
-                                                        B.q_abs, wmma ? HIP_R_16F : HIP_R_32F, g.n_head * g.kv_lora,
+                                                        B.q_abs, use_f16q ? HIP_R_16F : HIP_R_32F, g.n_head * g.kv_lora,
                                                         g.kv_lora, g.n_head, HIPBLAS_COMPUTE_32F, HIPBLAS_GEMM_DEFAULT),
                             "q_abs f16");
                 } else
@@ -1621,10 +1638,14 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
                 }
                 S->mark("dsa_qabs", s);
 #if defined(STRATA_USE_HIP)
-                if (wmma)
+                if (use_f16q)
                     gb::mla_attn_f16q((const uint16_t*) B.q_abs, (const uint16_t*) (state_ + dsa_lat_[(size_t) il]), B.cells,
                                       B.n_sel, g.n_sel_max(), g.n_head, g.kv_lora, 1.0f / std::sqrt((float) g.qk_nope), tn,
                                       B.ctx, s, lat_q8_);
+                else if (use_wmma2)
+                    gb::mla_attn_wmma2(B.q_abs, (const uint16_t*) (state_ + dsa_lat_[(size_t) il]), B.cells,
+                                       B.n_sel, g.n_sel_max(), g.n_head, g.kv_lora, 1.0f / std::sqrt((float) g.qk_nope), tn,
+                                       B.ctx, s, lat_q8_);
                 else
 #endif
                 gb::mla_attn(B.q_abs, (const uint16_t*) (state_ + dsa_lat_[(size_t) il]), B.cells, B.n_sel, g.n_sel_max(), g.n_head,

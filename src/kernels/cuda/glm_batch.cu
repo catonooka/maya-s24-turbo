@@ -1353,6 +1353,161 @@ __global__ void __launch_bounds__(256) mla_attn_wmma_kernel(const _Float16* __re
         o[i] = L > 0.0f ? sO[i] / L : 0.0f;
     }
 }
+
+using mla2_h16 = _Float16 __attribute__((ext_vector_type(16)));
+using mla2_f8 = float __attribute__((ext_vector_type(8)));
+__device__ __forceinline__ mla2_f8 mla2_wmma(mla2_h16 a, mla2_h16 b, mla2_f8 c) {
+#if defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || defined(__gfx1150__) || defined(__gfx1151__)
+    return __builtin_amdgcn_wmma_f32_16x16x16_f16_w32(a, b, c);
+#elif defined(__gfx1200__) || defined(__gfx1201__)
+    using h8 = _Float16 __attribute__((ext_vector_type(8)));
+    const int k0 = (threadIdx.x & 31) / 16 * 8;
+    h8 aa, bb;
+#pragma unroll
+    for (int i = 0; i < 8; ++i) { aa[i] = a[k0 + i]; bb[i] = b[k0 + i]; }
+    return __builtin_amdgcn_wmma_f32_16x16x16_f16_w32_gfx12(aa, bb, c);
+#else
+    __builtin_trap();
+    return c;
+#endif
+}
+__device__ __forceinline__ int mla2_wmma_row(int i, int hi) {
+#if defined(__gfx1200__) || defined(__gfx1201__)
+    return 8 * hi + i;
+#else
+    return 2 * i + hi;
+#endif
+}
+
+// One token, 16 heads, 16 selected cells per step. Eight waves split QK's
+// 512 columns and own 64 output columns apiece. The FP32 query and softmax
+// probability are each split into FP16 high + residual: both products go
+// through WMMA with FP32 accumulation, retaining substantially more precision
+// than a single FP16 attention product. FP16 latents are loaded directly;
+// INT8 records are expanded to the same FP16 tile, shared by QK and PV.
+__global__ void __launch_bounds__(256) mla_attn_wmma2_kernel(
+        const float* __restrict__ q_abs, const uint16_t* __restrict__ lat,
+        const int* __restrict__ cells_all, const int* __restrict__ n_sel_arr,
+        int n_sel_max, int n_head, float scale, float* __restrict__ ctx, bool q8) {
+    __shared__ __align__(16) _Float16 sl[16][512];
+    __shared__ __align__(16) _Float16 ph[16][16], pl[16][16];
+    __shared__ float scores[8][16][16], qi[8][16];
+    __shared__ float sm[16], denom[16], rescale[16];
+    __shared__ int cells[16];
+    const int tid = threadIdx.x, lane = tid & 31, wave = tid >> 5, l16 = lane & 15, hi = lane >> 4;
+    const int t = blockIdx.x, h0 = blockIdx.y * 16, ns = n_sel_arr[t];
+    const int* cl = cells_all + (size_t)t * n_sel_max;
+    const float* qr = q_abs + ((size_t)t * n_head + h0 + l16) * 512 + wave * 64;
+    float mx = 0;
+#pragma unroll
+    for (int k = 0; k < 64; ++k) mx = fmaxf(mx, fabsf(qr[k]));
+    int ex = 0;
+    if (mx > 0) { frexpf(mx, &ex); ex = max(-60, min(60, 14 - ex)); }
+    const float f = ldexpf(1.0f, ex);
+    if (hi == 0) qi[wave][l16] = ldexpf(1.0f, -ex);
+    mla2_h16 qh[4], ql[4];
+#pragma unroll
+    for (int k = 0; k < 4; ++k)
+#pragma unroll
+        for (int j = 0; j < 16; ++j) {
+            const float v = qr[16 * k + j] * f;
+            qh[k][j] = (_Float16)v;
+            ql[k][j] = (_Float16)(v - (float)qh[k][j]);
+        }
+    mla2_f8 acc[4] = {};
+    if (tid < 16) { sm[tid] = -INFINITY; denom[tid] = 0; }
+    for (int s0 = 0; s0 < ns; s0 += 16) {
+        __syncthreads();
+        if (tid < 16) cells[tid] = s0 + tid < ns ? cl[s0 + tid] : -1;
+        __syncthreads();
+        for (int i = tid; i < 16 * 512 / 8; i += 256) {
+            const int r = i / 64, col = (i % 64) * 8, cell = cells[r];
+            *(uint4*)(&sl[r][col]) = cell < 0 ? make_uint4(0, 0, 0, 0)
+                : q8 ? lat8_h8(lat8_rec(lat, 512, cell), 512, col / 8)
+                     : *(const uint4*)(lat + (size_t)cell * 512 + col);
+        }
+        __syncthreads();
+        mla2_f8 dot = {};
+#pragma unroll
+        for (int k = 0; k < 4; ++k) {
+            const mla2_h16 b = *(const mla2_h16*)(&sl[l16][wave * 64 + 16 * k]);
+            dot = mla2_wmma(qh[k], b, dot);
+            dot = mla2_wmma(ql[k], b, dot);
+        }
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            const int row = mla2_wmma_row(i, hi);
+            scores[wave][row][l16] = dot[i] * qi[wave][row];
+        }
+        __syncthreads();
+        const int r = tid >> 4, col = tid & 15;
+        float v = 0;
+#pragma unroll
+        for (int w = 0; w < 8; ++w) v += scores[w][r][col];
+        v = cells[col] < 0 ? -INFINITY : v * scale;
+        float m = v;
+#pragma unroll
+        for (int o = 8; o > 0; o >>= 1) m = fmaxf(m, __shfl_xor_sync(0xffffffffu, m, o));
+        const float old_m = sm[r], new_m = fmaxf(old_m, m);
+        const float p = v == -INFINITY ? 0 : expf(v - new_m);
+        float sum = p;
+#pragma unroll
+        for (int o = 8; o > 0; o >>= 1) sum += __shfl_xor_sync(0xffffffffu, sum, o);
+        ph[r][col] = (_Float16)p;
+        pl[r][col] = (_Float16)(p - (float)ph[r][col]);
+        if (col == 0) {
+            const float sc = old_m == -INFINITY ? 0 : expf(old_m - new_m);
+            rescale[r] = sc; denom[r] = denom[r] * sc + sum; sm[r] = new_m;
+        }
+        __syncthreads();
+        const mla2_h16 a_hi = *(const mla2_h16*)ph[l16], a_lo = *(const mla2_h16*)pl[l16];
+#pragma unroll
+        for (int nt = 0; nt < 4; ++nt) {
+#pragma unroll
+            for (int i = 0; i < 8; ++i) acc[nt][i] *= rescale[mla2_wmma_row(i, hi)];
+            mla2_h16 b;
+#pragma unroll
+            for (int k = 0; k < 16; ++k) b[k] = sl[k][wave * 64 + nt * 16 + l16];
+            acc[nt] = mla2_wmma(a_hi, b, acc[nt]);
+            acc[nt] = mla2_wmma(a_lo, b, acc[nt]);
+        }
+    }
+    __syncthreads();
+#pragma unroll
+    for (int nt = 0; nt < 4; ++nt)
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            // Keep all matrix lanes live before the output mask/normalization.
+            asm volatile("" :: "v"(acc[nt][i]));
+            const int r = mla2_wmma_row(i, hi);
+            const float inv = denom[r] > 0 ? 1 / denom[r] : 0;
+            ctx[((size_t)t * n_head + h0 + r) * 512 + wave * 64 + nt * 16 + l16] = acc[nt][i] * inv;
+        }
+}
+
+// Per device, the wave32 WMMA path: 0 not probed yet, 1 gfx12 (supported, the default), 2 gfx11 (supported),
+// 3 anything else (unsupported).
+int mla_wmma2_arch() {
+    static std::atomic<int> cache[64]{};
+    int dev = 0;
+    if (cudaGetDevice(&dev) != cudaSuccess || dev < 0 || dev >= 64) return 3;
+    int c = cache[dev].load(std::memory_order_relaxed);
+    if (!c) {
+        cudaDeviceProp prop{};
+        c = 3;
+        if (cudaGetDeviceProperties(&prop, dev) == cudaSuccess) {
+            const char* arch = prop.gcnArchName;
+            if (std::strncmp(arch, "gfx1200", 7) == 0 || std::strncmp(arch, "gfx1201", 7) == 0)
+                c = 1;
+            else if (std::strncmp(arch, "gfx1100", 7) == 0 || std::strncmp(arch, "gfx1101", 7) == 0 ||
+                     std::strncmp(arch, "gfx1102", 7) == 0 || std::strncmp(arch, "gfx1150", 7) == 0 ||
+                     std::strncmp(arch, "gfx1151", 7) == 0)
+                c = 2;
+        }
+        cache[dev].store(c, std::memory_order_relaxed);
+    }
+    return c;
+}
 #endif
 
 // ---------------------------------------------------------------- the NextN block's caches over a prompt
@@ -1863,6 +2018,21 @@ void mla_attn_f16q(const uint16_t* q16, const uint16_t* lat, const int* cells, c
     mla_attn_wmma_kernel<<<grid, 256, kHwSmem, s>>>((const _Float16*) q16, lat, cells, n_sel, n_sel_max, n_head, scale, ctx,
                                                     lat_q8);
     check("mla_attn_wmma");
+}
+
+bool mla_wmma2_supported() { return mla_wmma2_arch() <= 2; }
+bool mla_wmma2_default() { return mla_wmma2_arch() == 1; }
+
+void mla_attn_wmma2(const float* q_abs, const uint16_t* lat, const int* cells, const int* n_sel, int n_sel_max,
+                    int n_head, int kv_lora, float scale, int T, float* ctx, cudaStream_t s, bool lat_q8) {
+    if (T <= 0) return;
+    if (kv_lora != 512 || n_head % 16 != 0) {
+        std::fprintf(stderr, "glm_batch mla_attn_wmma2: kv_lora %d / n_head %d unsupported\n", kv_lora, n_head);
+        return;
+    }
+    const dim3 grid((unsigned) T, (unsigned) (n_head / 16));
+    mla_attn_wmma2_kernel<<<grid, 256, 0, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx, lat_q8);
+    check("mla_attn_wmma2");
 }
 #endif
 
