@@ -75,6 +75,14 @@ class Boxes(unittest.TestCase):
         self.assertIn("live · 19,456 routed experts", D.tiers_sub(METRICS).plain)
         self.assertIn("while it writes", text(D.tiers({"engine": {}}, 56)))    # (the mock engine: no tiers)
 
+    def test_the_tiers_bar_fits_when_the_tiers_overlap(self):   # (Maya-L on 9 GPUs: 10,813 + 1,571 of 12,096)
+        now = {**METRICS["tiers"]["now"], "vram_used": 10813, "ram_used": 1571}
+        m = {**METRICS, "engine": {**METRICS["engine"], "experts": 12096}, "tiers": {**METRICS["tiers"], "now": now}}
+        for width in (103, 61, 42):
+            first, second = text(D.tiers(m, width), width).split("\n")[:2]
+            self.assertEqual(len(first.rstrip()), width)
+            self.assertTrue(second.startswith("■"), second)        # (the legend next: nothing of the bar wrapped)
+
     def test_the_tiers_advice_fits_on_one_line(self):          # (a word of it on a line of its own: no more)
         m = {**METRICS, "tiers": {**METRICS["tiers"], "now": {**METRICS["tiers"]["now"], "vram_hit": 0.33,
                                                                  "ram_fetch": 19.8}}}
