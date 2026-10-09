@@ -45,15 +45,16 @@ class Streaming(unittest.TestCase):
             b.log.close()
             return r, [e for e in events(b) if e[0] in ("out", "status")], b
 
+    # (the child writes bytes: a text-mode stdout on Windows makes every \n a \r\n, so 'a\r\n' arrived as 'a\r\r\n')
     def test_lines_rewritten_lines_and_the_exit_code(self):
-        r, ev, b = self.run_code("import sys; sys.stdout.write('a\\r\\nb\\n 1 x\\r 50 y\\rlast'); sys.exit(3)")
+        r, ev, b = self.run_code("import sys; sys.stdout.buffer.write(b'a\\r\\nb\\n 1 x\\r 50 y\\rlast'); sys.exit(3)")
         self.assertEqual(r.returncode, 3)
         self.assertEqual(ev, [("out", "a"), ("out", "b"), ("status", " 1 x"), ("status", " 50 y"), ("out", "last")])
         self.assertEqual([t for _, k, t in b.entries if k == "out"], ["a", "b", "last"])
 
     def test_a_cr_lf_split_between_two_reads_is_one_line_end(self):
-        _, ev, _ = self.run_code("import sys, time; sys.stdout.write('a\\r'); sys.stdout.flush(); time.sleep(0.3); "
-                                 "sys.stdout.write('\\nb\\n')")
+        _, ev, _ = self.run_code("import sys, time; sys.stdout.buffer.write(b'a\\r'); sys.stdout.buffer.flush(); "
+                                 "time.sleep(0.3); sys.stdout.buffer.write(b'\\nb\\n')")
         self.assertEqual(ev, [("out", "a"), ("out", "b")])
 
     def test_stdin_is_closed(self):                 # nothing the setup runs can wait for a key under the screen

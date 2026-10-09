@@ -1,6 +1,7 @@
 """tools/test_maya_models.py - the setup's model downloads: what a setup is offered (Project Maya's four quants, the
 24 GB recommendation) and that every download names a hash per file.  No GPU, no network."""
 from pathlib import Path
+import shlex
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -90,7 +91,9 @@ class RunScript(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, patch.object(maya, "ROOT", Path(d)), patch.object(maya, "WIN", False):
             cfg = Path(d) / "maya-maya-l.json"
             script = maya.write_run_script(cfg, 8091).read_text()
-        self.assertIn(f"{maya.HERE / 'maya.py'} --config {cfg} --port 8091 \"$@\"", script)
+        # (shlex-quoted as the script writes it: a Windows test run's paths have backslashes)
+        self.assertIn(shlex.join([str(maya.HERE / "maya.py"), "--config", str(cfg), "--port", "8091"]) + ' "$@"',
+                      script)
         self.assertNotIn("server.py", script)
 
     def test_config_starts_that_one_without_the_question(self):
