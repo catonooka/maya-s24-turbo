@@ -1,0 +1,11 @@
+{
+ "name": "Project Maya",
+ "short_name": "Maya",
+ "description": "GLM-5.3-Flash on your own machine",
+ "start_url": "./",
+ "scope": "./",
+ "display": "standalone",
+ "background_color": "#090a14",
+ "theme_color": "#090a14",
+ "icons": [{"src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]
+}

@@ -229,7 +229,10 @@ class Telemetry:
                 t = vals("temp")
                 g["temp"] = max(t) if t else None
                 s["gpus"] = [{"index": i, "util": r.get("util"), "mem_used": r.get("mem_used"),
-                              "mem_total": r.get("mem_total"), "temp": r.get("temp"), "power": r.get("power")}
+                              "mem_total": r.get("mem_total"), "temp": r.get("temp"), "power": r.get("power"),
+                              "power_limit": r.get("power_limit"), "pcie_gen": r.get("pcie_gen"),
+                              "pcie_gen_max": r.get("pcie_gen_max"), "pcie_width": r.get("pcie_width"),
+                              "pcie_rx_mb": r.get("pcie_rx_mb")}
                              for i, r in reads]
             s.update({f"gpu_{k}": v for k, v in g.items()})
         if self.ps:

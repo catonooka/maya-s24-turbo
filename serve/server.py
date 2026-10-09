@@ -52,6 +52,15 @@ from serve.frontend import (CALL_START, ChatTemplate, Event, OutputParser, anthr
                             effort_kwargs, images_of, openai_to_messages)
 from serve.mcp import McpCancelled, hub_from_config  # noqa: E402
 
+try:                        # Project Maya's release (the dashboard's About; the engine's INFO carries none)
+    MAYA_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() or None
+except OSError:
+    MAYA_VERSION = None
+CONTEXT_MIN = 4096          # the dashboard's Context size: the smallest it offers ...
+CONTEXT_FALLBACK_MAX = 262144   # ... and the largest when the model file does not say what it was trained for
+# the engine log's lines a report carries (maya.py's --report reads the same ones)
+REPORT_LINES = re.compile(r"glm fast:|glm prefill: (?:CUDA|HIP)|glm split|glm stat|glm slots|glm prefill: \d|ERR|error|"
+                          r"failed|out of memory|WARNING", re.I)
 IM_END = "<|im_end|>"
 IMAGE_PAD = "<|image_pad|>"
 VISION_START = "<|vision_start|>"
@@ -205,8 +214,9 @@ class StrataEngine:
         self.log_path = log
         self.log = open(log, "a", encoding="utf-8") if log else subprocess.DEVNULL
         loading = threading.Event()                     # set once READY: the narrator below stops
+        log_start = os.path.getsize(log) if log else 0
         if log:
-            threading.Thread(target=narrate_start, args=(log, os.path.getsize(log), args, loading),
+            threading.Thread(target=narrate_start, args=(log, log_start, args, loading),
                              daemon=True).start()
         self.proc = subprocess.Popen([exe, "--serve", *args], cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=self.log, text=True, encoding="utf-8", bufsize=1, env=env)
@@ -237,9 +247,52 @@ class StrataEngine:
         # report their own version (INFO engine=, 0.1.8+) win, the manifest stays the fallback for older ones
         if self.info.get("engine"):
             self.info["version"] = str(self.info["engine"])
+        if log:
+            self._context_cost(log_start)
         # the engine's stdout on a thread, so a request can wait with a timeout (heartbeats, cancel checks)
         self.lines: queue.Queue = queue.Queue()
         threading.Thread(target=self._pump, daemon=True).start()
+
+    def _context_cost(self, offset: int):
+        """What this start's context costs in VRAM, from the GLM engine's own start lines ("CUDA0 VRAM before the
+        expert pool: ... state/KV (32768 ctx) 0.66"), summed over its GPUs: the dashboard scales it to the context
+        sizes it offers (measured here, so it fits this model, this split and these cards)."""
+        try:
+            with open(self.log_path, "rb") as f:
+                f.seek(offset)
+                text = f.read(8 << 20).decode("utf-8", "replace")
+        except OSError:
+            return
+        per = {}
+        for m in re.finditer(r"\b((?:CUDA|HIP)\d+) VRAM before the expert pool:.*?state/KV \((\d+) ctx\) ([\d.]+)", text):
+            per[m.group(1)] = (int(m.group(2)), float(m.group(3)))
+        if per:
+            self.info["kv_ctx"] = max(c for c, _ in per.values())
+            self.info["kv_gb"] = round(sum(g for _, g in per.values()), 3)
+
+    def set_context(self, n: int):
+        """The next start's context: --max-context in the command (restart() runs it)."""
+        exe, args, cwd, log, env = self.spawn
+        args = list(args)
+        if "--max-context" in args[:-1]:
+            args[args.index("--max-context") + 1] = str(int(n))
+        else:
+            args += ["--max-context", str(int(n))]
+        self.spawn = (exe, args, cwd, log, env)
+
+    def stop(self, timeout: float = 60.0):
+        """Ask the engine to end (QUIT: it frees its GPU memory itself), and end it if it does not in time."""
+        try:
+            self.proc.stdin.write("QUIT\n")
+            self.proc.stdin.flush()
+            self.proc.wait(timeout=timeout)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            try:
+                self.proc.kill()
+                self.proc.wait(timeout=20)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        self.ended = True
 
     def _pump(self):
         for line in self.proc.stdout:
@@ -721,6 +774,22 @@ def vision_footprint(vcfg: dict, env: dict, cache_file: Path, gpu: int) -> tuple
     return None
 
 
+def trained_context(model_dir) -> int | None:
+    """The context the model was trained for (`<arch>.context_length` in its first GGUF's header; GLM-5.3-Flash:
+    1,048,576): the top of the dashboard's Context size.  None when there is no readable GGUF."""
+    try:
+        sys.path.insert(0, str(ROOT / "tools"))
+        from gguf_reader import GGUFFile
+        shards = sorted(Path(model_dir).glob("*-00001-of-*.gguf")) or sorted(Path(model_dir).glob("*.gguf"))
+        if not shards:
+            return None
+        md = GGUFFile(shards[0]).metadata
+        n = md.get(f"{md.get('general.architecture', '')}.context_length")
+        return int(n) if isinstance(n, int) and n > 0 else None
+    except Exception:  # noqa: BLE001 - a header it can't read: the fallback range
+        return None
+
+
 def gpu_list(cfg: dict) -> list[int]:
     """The config's "gpu": one card (2), or several for a layer split ([0, 2] or "0,2"), numbered as nvidia-smi
     numbers them; [] when it names none."""
@@ -829,6 +898,10 @@ class Service:
         self.started_at = time.time()
         self.status_lock = threading.Lock()
         self.mcp = None                                  # serve/mcp.py's McpHub when MCP servers are configured
+        self.config_path = None                          # the run config (a context change is saved into it)
+        self.model_dir = None                            # the model's folder (free disk on the dashboard)
+        self.trained_context = None                      # what the model was trained for (its GGUF): the slider's top
+        self.reload = None                               # a context change: {state, from, to, started, error}
         # The ids that end an answer server-side.  A string that is not a special token in this vocabulary
         # (GLM-5.3 has no <|im_end|>) encodes to its TEXT pieces, whose ids occur inside ordinary answers -
         # stopping on them would cut generation at any '<'.  Only single-token (real special) encodings count.
@@ -882,6 +955,134 @@ class Service:
                 else:
                     req["output_config"] = {"effort": effort}
         return req
+
+    def reloading(self) -> bool:
+        with self.status_lock:
+            return bool(self.reload) and self.reload.get("state") in ("waiting", "running")
+
+    def context_limits(self) -> dict:
+        """The dashboard's Context size: the range it offers and the engine's measured cost of the current one."""
+        info = dict(getattr(self.engine, "info", {}) or {})
+        top = self.trained_context or CONTEXT_FALLBACK_MAX
+        with self.status_lock:
+            reload = dict(self.reload) if self.reload else None
+        return {"context": self.engine.max_context, "min": CONTEXT_MIN, "max": max(top, self.engine.max_context),
+                "trained": self.trained_context, "kv_gb": info.get("kv_gb"), "kv_ctx": info.get("kv_ctx"),
+                "vram_gb": info.get("vram_gb"), "vram_slots": info.get("vram_slots"), "reload": reload}
+
+    def set_context(self, n: int) -> dict:
+        """Reload the engine with an n-token context (the dashboard's Context size), on a thread: after the request in
+        flight; new requests get a 503 meanwhile.  A start that fails (the context does not fit) puts the old one back;
+        a good one is saved into the run config, so the next start keeps it."""
+        lim = self.context_limits()
+        if not lim["min"] <= n <= lim["max"]:
+            raise ValueError(f"the context must be between {lim['min']} and {lim['max']} tokens")
+        with self.status_lock:
+            if self.reload and self.reload.get("state") in ("waiting", "running"):
+                raise ValueError("the model is already reloading")
+            self.reload = {"state": "waiting", "from": self.engine.max_context, "to": n, "started": time.time(),
+                           "error": None}
+            reload = dict(self.reload)
+        threading.Thread(target=self._reload, args=(reload["from"], n), daemon=True).start()
+        return reload
+
+    def _restart_with(self, n: int):
+        if hasattr(self.engine, "set_context"):
+            self.engine.stop()
+            self.engine.set_context(n)
+            self.engine.restart()
+        else:                                            # the mock engine: nothing to start
+            time.sleep(float(os.environ.get("STRATA_MOCK_RELOAD_S", "2")))
+            self.engine.max_context = n
+
+    def _reload(self, old: int, n: int):
+        with self.fifo:                                  # the request in flight finishes first
+            with self.status_lock:
+                self.reload["state"] = "running"
+            print(f"[strata] reloading the model with a {n}-token context (was {old}) ...", flush=True)
+            err = None
+            try:
+                self._restart_with(n)
+            except Exception as e:  # noqa: BLE001 - any failed start: put the old context back
+                err = f"the engine did not start with a {n}-token context ({e})"
+                print(f"[strata] {err}; starting it again with {old} ...", flush=True)
+                try:
+                    self._restart_with(old)
+                except Exception as e2:  # noqa: BLE001
+                    err += f"; starting again with {old} failed too ({e2}) - the next request tries once more"
+            if err is None:
+                self._save_context(n)
+                print(f"[strata] the model runs with a {n}-token context now", flush=True)
+            with self.status_lock:
+                self.reload.update(state="failed" if err else "done", error=err, ended=time.time(),
+                                   context=self.engine.max_context)
+
+    def _save_context(self, n: int):
+        """--max-context in the run config (its other keys as they are), so the next start keeps the new size."""
+        if not self.config_path:
+            return
+        try:
+            p = Path(self.config_path)
+            cfg = json.loads(p.read_text(encoding="utf-8-sig"))
+            args = list(cfg.get("args") or [])
+            if "--max-context" in args[:-1]:
+                args[args.index("--max-context") + 1] = str(int(n))
+            else:
+                args += ["--max-context", str(int(n))]
+            cfg["args"] = args
+            tmp = p.with_name(p.name + ".tmp")
+            tmp.write_text(json.dumps(cfg, indent=1), encoding="utf-8")
+            os.replace(tmp, p)
+        except (OSError, ValueError) as e:
+            print(f"[strata] could not save the new context in {self.config_path}: {e}", flush=True)
+
+    def storage(self) -> dict | None:
+        """The model's folder and the free space on its drive (About)."""
+        if not self.model_dir:
+            return None
+        try:
+            import shutil
+            u = shutil.disk_usage(self.model_dir)
+            return {"path": str(self.model_dir), "free": u.free, "total": u.total}
+        except OSError:
+            return None
+
+    def report(self) -> str:
+        """A plain-text report for an issue (the dashboard's Copy report): versions, this PC, the engine's facts, the
+        run config without its secrets, and the engine log's telling lines."""
+        tel = self.telemetry.snapshot() if getattr(self, "telemetry", None) else {"now": {}, "static": {}}
+        hw, st = tel.get("now") or {}, tel.get("static") or {}
+        gib = lambda b: f"{b / 2**30:.1f} GB" if isinstance(b, (int, float)) else "?"  # noqa: E731
+        import platform
+        out = [f"Project Maya {MAYA_VERSION or '?'} - report of {time.strftime('%Y-%m-%d %H:%M')}",
+               f"System: {platform.platform()}, Python {platform.python_version()}",
+               f"GPU: {st.get('gpu_name') or 'not readable'} ({gib(hw.get('gpu_mem_total'))} VRAM)",
+               f"CPU: {st.get('cpu_name') or '?'}, {st.get('threads') or '?'} threads; RAM {gib(hw.get('ram_total'))}",
+               f"Model: {self.model}, context {self.engine.max_context}"]
+        info = dict(getattr(self.engine, "info", {}) or {})
+        if info:
+            out.append("Engine: " + " ".join(f"{k}={v}" for k, v in sorted(info.items())))
+        if self.config_path:
+            try:
+                cfg = json.loads(Path(self.config_path).read_text(encoding="utf-8-sig"))
+                secret = re.compile(r"key|token|secret|password", re.I)
+                env = {k: ("***" if secret.search(k) else v) for k, v in (cfg.get("env") or {}).items()}
+                out.append(f"Config: {Path(self.config_path).name}: args {' '.join(map(str, cfg.get('args') or []))}; "
+                           f"gpu {cfg.get('gpu')}; env {json.dumps(env)}")
+            except (OSError, ValueError):
+                pass
+        log = getattr(self.engine, "log_path", None)
+        if log:
+            try:
+                with open(log, "rb") as f:
+                    f.seek(0, 2)
+                    f.seek(max(0, f.tell() - (2 << 20)))
+                    lines = f.read().decode("utf-8", "replace").splitlines()
+                keep = [ln for ln in lines if REPORT_LINES.search(ln)]
+                out += ["", f"Engine log ({log}), the telling lines of the last 2 MB:"] + keep[-150:]
+            except OSError:
+                pass
+        return "\n".join(out) + "\n"
 
     def start_telemetry(self):
         """The hardware sampler behind GET /metrics (serve/telemetry.py), recording this server's tok/s too."""
@@ -955,7 +1156,10 @@ class Service:
         if state == "reading" and progress:
             live["prompt_read"], live["prompt_total"] = progress
         engine = {"model": self.model, "max_context": self.engine.max_context, "images": self.vision is not None,
-                  **dict(getattr(self.engine, "info", {}) or {})}
+                  **dict(getattr(self.engine, "info", {}) or {}), "maya_version": MAYA_VERSION,
+                  "trained_context": self.trained_context}
+        with self.status_lock:
+            reload = dict(self.reload) if self.reload else None
         tel = self.telemetry.snapshot() if getattr(self, "telemetry", None) else {"now": {}, "history": {}, "static": {}}
         # the GLM engine's expert tiers (STAT lines): the latest reading and the recent series for the sparklines
         tiers = None
@@ -967,7 +1171,7 @@ class Service:
         return {"engine": engine, "live": live, "tiers": tiers, "requests": hist[::-1][:None if all_requests else 12],
                 "requests_kept": len(hist), "totals": totals, "hardware": tel["now"],
                 "hardware_static":
-                tel["static"], "history": tel["history"], "time": now}
+                tel["static"], "history": tel["history"], "time": now, "reload": reload, "storage": self.storage()}
 
     def v1_status(self) -> dict:
         """GET /v1/status: what this server is and does, for a client that would rather ask than guess (a front-end
@@ -1240,6 +1444,9 @@ class Service:
                         "projection": (sampling or {}).get("experimental_speed_projection") is not False
                         if loaded else None,
                         "time": started, "duration_s": round(time.time() - started, 1), "finish": finish,
+                        "api": (sampling or {}).get("_api"),
+                        "prefill_tok_s": round((len(ids) - (last.get("reused") or 0)) / (last["prompt_ms"] / 1000), 1)
+                        if last.get("prompt_ms") and len(ids) > (last.get("reused") or 0) else None,
                         "prompt_tokens": len(ids), "reused": last.get("reused"), "output_tokens": n,
                         "engine_generated": last.get("generated"),
                         "prompt_ms": last.get("prompt_ms"), "decode_ms": last.get("decode_ms"),
@@ -1824,7 +2031,7 @@ def make_handler(svc: Service):
                 # the web app's own files (serve/web): styles, script, icon sprite - same origin, no CDN
                 name = path[len("/web/"):]
                 types = {".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-                         ".svg": "image/svg+xml"}
+                         ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json"}
                 f = ROOT / "serve" / "web" / name
                 ext = os.path.splitext(name)[1]
                 if "/" in name or "\\" in name or ext not in types or not f.is_file():
@@ -1864,8 +2071,23 @@ def make_handler(svc: Service):
                 rec = {k: v for k, v in svc.sampling_defaults.items() if k in ("temperature", "top_p", "top_k")}
                 if svc.default_effort:
                     rec["reasoning_effort"] = svc.default_effort
-                self._json(200, {"status": "ok", "max_context": svc.engine.max_context, "model": svc.model,
-                                 "images": svc.vision is not None, "api_key": bool(svc.api_key), "defaults": rec})
+                self._json(200, {"status": "reloading" if svc.reloading() else "ok",
+                                 "max_context": svc.engine.max_context, "model": svc.model,
+                                 "images": svc.vision is not None, "api_key": bool(svc.api_key), "defaults": rec,
+                                 "version": MAYA_VERSION, "mcp_tools": bool(svc.mcp)})
+            elif path == "/api/context":
+                # the dashboard's Context size: the range, the measured cost of the current size, a reload's state
+                if self._authorized():
+                    self._json(200, svc.context_limits())
+            elif path == "/api/report":
+                # the dashboard's Copy report: what an issue needs (the run config's secrets left out)
+                if self._authorized():
+                    body = svc.report().encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
             elif path == "/status":
                 with svc.status_lock:
                     s = dict(svc.status)
@@ -1916,9 +2138,23 @@ def make_handler(svc: Service):
                 if path == "/v1/strata/cancel":
                     self._job_cancel()
                     return
+                if path == "/api/context":
+                    self._context()
+                    return
                 req = json.loads(self._body() or b"{}")
                 if not isinstance(req, dict):
                     raise ValueError("the request body must be a JSON object")
+                if path in ("/v1/chat/completions", "/v1/messages") and svc.reloading():
+                    # a context change is reloading the model: say so, and when to try again
+                    body = json.dumps({"error": {"type": "overloaded_error", "message": "the model is reloading with a "
+                                       "new context size; try again in a minute"}}).encode()
+                    self.send_response(503)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Retry-After", "30")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 if path == "/v1/chat/completions":
                     self._openai(req)
                 elif path == "/v1/messages":
@@ -1975,6 +2211,20 @@ def make_handler(svc: Service):
                 return False
             return True
 
+        def _context(self):
+            # It reloads the model for every client, so only the app's own page may ask for it
+            body = self._body()
+            if not self._own_page("the context size can be changed"):
+                return
+            try:
+                req = json.loads(body or b"{}")
+                n = int(req.get("max_context")) if isinstance(req, dict) else 0
+                reload = svc.set_context(n)
+            except (TypeError, ValueError) as e:
+                self._json(400, {"error": {"type": "invalid_request_error", "message": str(e)}})
+                return
+            self._json(202, {"reload": reload})
+
         def _settings(self):
             # They change what every client gets, so only the app's own page may set them
             body = self._body()
@@ -1998,6 +2248,7 @@ def make_handler(svc: Service):
 
         def _openai(self, req):
             req = svc.with_shared(req, "openai")
+            req["_api"] = "web" if req.get("strata_resume") is True else "openai"   # the Monitor's request table
             messages, tools, kw = openai_to_messages(req)
             max_req = max_new = int(req.get("max_completion_tokens") or req.get("max_tokens") or 0)   # 0/-1: the rest
             use_mcp = req.get("strata_mcp") is True and svc.mcp is not None      # the web app's opt-in (serve/mcp.py)
@@ -2095,6 +2346,7 @@ def make_handler(svc: Service):
 
         def _anthropic(self, req):
             req = svc.with_shared(req, "anthropic")
+            req["_api"] = "anthropic"
             messages, tools, kw = anthropic_to_messages(req)
             max_new = int(req.get("max_tokens") or 0)                  # 0/-1: the rest of the context
             ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new)
@@ -2419,6 +2671,13 @@ def main() -> int:
     svc.api_key = a.api_key or cfg.get("api_key", "")
     svc.gpu_index = (gpu_list(cfg) or [0])[0]           # the Monitor reads the card the engine runs on (issue #51)
     svc.gpu_indices = gpu_list(cfg)                     # ... or every card of a layer split (issue #112)
+    if a.config:
+        svc.config_path = str(Path(a.config).resolve())  # a context change from the dashboard is saved there
+    args = [str(x) for x in cfg.get("args") or []]
+    if "--glm-pack" in args[:-1]:                       # the model's folder: the pack's parent holds its GGUF files
+        svc.model_dir = Path(args[args.index("--glm-pack") + 1]).resolve().parent
+        threading.Thread(target=lambda: setattr(svc, "trained_context", trained_context(svc.model_dir)),
+                         daemon=True).start()
     if a.config:                                        # the Chat settings shared with other apps, from last time
         svc.shared_path = str(Path(a.config).with_suffix("")) + ".shared-settings.json"
         try:

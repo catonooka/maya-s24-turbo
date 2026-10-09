@@ -923,7 +923,7 @@ static int glm_pack_generate(const Options& o) {
         // INFO facts for the server's Monitor tab (strata app): the expert tiers this engine runs with
         const auto st = model.fast_stats();
         // (+ the CPU lane setup's calibration reads: its threads and its PCIe share, as the engine started)
-        std::printf("INFO context=%lld kv=f32 expert_slots=%lld expert_cache_mib=%lld engine_kind=glm-fast experts=%d "
+        std::printf("INFO context=%lld kv=fp16 expert_slots=%lld expert_cache_mib=%lld engine_kind=glm-fast experts=%d "
                     "vram_slots=%lld vram_gb=%.1f ram_slots=%lld ram_gb=%.1f mtp=%d vision_lend=%zu cpu_threads=%d "
                     "pcie_share=%.2f\n",
                     (long long) o.max_context, (long long) st.pool_slots, (long long) (st.pool_gb * 1024.0),
