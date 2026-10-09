@@ -25,9 +25,11 @@ class FakeEngine:
         self.info = {"cpu_threads": threads, "pcie_share": f"{own_share:.2f}"}
         self.last = {}
         self.requests = []
+        self.prompts = []
         self.closed = False
 
     def generate(self, ids, max_new, sampling, cancel):
+        self.prompts.append(tuple(ids))
         tune = sampling.get("strata_tune") or {}
         share = tune.get("pcie_frac", self.own[0])
         threads = tune.get("cpu_threads", self.own[1])
@@ -83,6 +85,15 @@ class Measure(unittest.TestCase):
         res, _ = run_measure(eng)
         self.assertEqual(res["settings"], {CAL.THREADS_ENV: "10"})
 
+    def test_every_measurement_answers_new_prompts(self):
+        # the tiers follow the text: no prompt is answered twice while the list lasts, a measurement's three in turn
+        eng = FakeEngine(lambda s, t: 18.0)
+        ids = [[i] for i in range(90)]
+        CAL.measure({"env": {}}, ids, lambda c: eng, say=lambda *a: None, extra_threads=())
+        self.assertLessEqual(len(eng.prompts), len(ids))
+        self.assertEqual(len(set(eng.prompts)), len(eng.prompts))
+        self.assertEqual(eng.prompts[:6], [(0,), (1,), (2,), (3,), (4,), (5,)])
+
     def test_no_cpu_lane(self):
         eng = FakeEngine(lambda s, t: 30.0, threads=0, own_share=1.0)
         res, _ = run_measure(eng)
@@ -104,6 +115,55 @@ class Helpers(unittest.TestCase):
     def test_pick(self):
         self.assertEqual(CAL.pick({"a": [10.0], "b": [10.2]}, "a"), "a")
         self.assertEqual(CAL.pick({"a": [10.0], "b": [10.5]}, "a"), "b")
+
+    def test_prompts_are_groups_of_code_explanation_list(self):
+        self.assertEqual(len(set(CAL.PROMPTS)), len(CAL.PROMPTS))
+        self.assertEqual(len(CAL.PROMPTS) % CAL.GROUP, 0)
+        for i in range(0, len(CAL.PROMPTS), CAL.GROUP):
+            self.assertTrue(CAL.PROMPTS[i].startswith("Write a Python function"))
+            self.assertTrue(CAL.PROMPTS[i + 1].startswith("Explain"))
+            self.assertTrue(CAL.PROMPTS[i + 2].startswith("List"))
+
+    def test_usage_copy(self):
+        # the engine reads and writes a copy: this PC's usage file stays as it was
+        with tempfile.TemporaryDirectory() as d:
+            pack, tmp = Path(d) / "pack", Path(d) / "tmp"
+            pack.mkdir()
+            tmp.mkdir()
+            (pack / "expert_usage.txt").write_text("3 7:12\n")
+            env = CAL.usage_copy({"args": ["--glm-pack", str(pack)]}, tmp)
+            self.assertEqual(env, {"STRATA_GLM_USAGE": str(tmp / "expert_usage.txt")})
+            self.assertEqual((tmp / "expert_usage.txt").read_text(), "3 7:12\n")
+            own = Path(d) / "mine.txt"
+            own.write_text("5 1:2\n")
+            env = CAL.usage_copy({"args": ["--glm-pack", str(pack)], "env": {"STRATA_GLM_USAGE": str(own)}}, tmp)
+            self.assertEqual((tmp / "expert_usage.txt").read_text(), "5 1:2\n")
+            self.assertEqual(CAL.usage_copy({"env": {"STRATA_GLM_USAGE": "0"}}, tmp), {"STRATA_GLM_USAGE": "0"})
+            (tmp / "expert_usage.txt").unlink()
+            env = CAL.usage_copy({"args": ["--glm-pack", str(Path(d) / "none")]}, tmp)   # no file yet: a new one
+            self.assertEqual(env, {"STRATA_GLM_USAGE": str(tmp / "expert_usage.txt")})
+            self.assertFalse((tmp / "expert_usage.txt").exists())
+
+    def test_run_uses_a_usage_copy(self):
+        with tempfile.TemporaryDirectory() as d:
+            pack = Path(d) / "pack"
+            pack.mkdir()
+            (pack / "expert_usage.txt").write_text("3 7:12\n")
+            seen = []
+
+            def start(c):
+                seen.append(dict(c["env"]))
+                return FakeEngine(lambda s, t: 18.0, threads=0)
+            cfg = {"args": ["--glm-pack", str(pack)], "env": {CAL.THREADS_ENV: "12"}}
+            orig = CAL.prompt_ids
+            CAL.prompt_ids = lambda c: [[1, 2, 3]] * 3
+            try:
+                CAL.run(cfg, say=lambda *a: None, start_engine=start)
+            finally:
+                CAL.prompt_ids = orig
+            self.assertNotIn(CAL.THREADS_ENV, seen[0])                              # the engine's own choice
+            self.assertNotEqual(Path(seen[0]["STRATA_GLM_USAGE"]).parent, pack)    # not the pack's own file
+            self.assertEqual((pack / "expert_usage.txt").read_text(), "3 7:12\n")
 
     def test_cpu_list(self):
         self.assertEqual(CAL.cpu_list("0-3,8,10-11\n"), [0, 1, 2, 3, 8, 10, 11])
