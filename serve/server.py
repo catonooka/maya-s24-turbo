@@ -51,6 +51,7 @@ sys.path.insert(0, str(ROOT))   # run as a script (run-<model>.bat) as well as a
 from serve.frontend import (CALL_START, ChatTemplate, Event, OutputParser, anthropic_to_messages,  # noqa: E402
                             effort_kwargs, effort_level, images_of, openai_to_messages)
 from serve.mcp import McpCancelled, hub_from_config  # noqa: E402
+from serve.update import Updater  # noqa: E402
 
 try:                        # Project Maya's release (the dashboard's About; the engine's INFO carries none)
     MAYA_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() or None
@@ -902,6 +903,7 @@ class Service:
         self.model_dir = None                            # the model's folder (free disk on the dashboard)
         self.trained_context = None                      # what the model was trained for (its GGUF): the slider's top
         self.reload = None                               # a context change: {state, from, to, started, error}
+        self.updater = Updater(MAYA_VERSION)             # About > Updates: a newer release, and updating to it
         # The ids that end an answer server-side.  A string that is not a special token in this vocabulary
         # (GLM-5.3 has no <|im_end|>) encodes to its TEXT pieces, whose ids occur inside ordinary answers -
         # stopping on them would cut generation at any '<'.  Only single-token (real special) encodings count.
@@ -955,6 +957,15 @@ class Service:
                 else:
                     req["output_config"] = {"effort": effort}
         return req
+
+    def close_for_restart(self):
+        """Before the server ends for an update: the engine, the pictures encoder and the MCP servers stop first."""
+        for part in (self.engine, self.vision, self.mcp):
+            try:
+                if part is not None and hasattr(part, "close"):
+                    part.close()
+            except Exception as e:  # noqa: BLE001 - ending anyway
+                print(f"[strata] stopping {type(part).__name__}: {e}", flush=True)
 
     def reloading(self) -> bool:
         with self.status_lock:
@@ -2087,7 +2098,8 @@ def make_handler(svc: Service):
                 rec = {k: v for k, v in svc.sampling_defaults.items() if k in ("temperature", "top_p", "top_k")}
                 if svc.default_effort:
                     rec["reasoning_effort"] = effort_level(svc.default_effort) or svc.default_effort
-                self._json(200, {"status": "reloading" if svc.reloading() else "ok",
+                self._json(200, {"status": "updating" if svc.updater.busy() else
+                                           "reloading" if svc.reloading() else "ok",
                                  "max_context": svc.engine.max_context, "model": svc.model,
                                  "images": svc.vision is not None, "api_key": bool(svc.api_key), "defaults": rec,
                                  "version": MAYA_VERSION, "mcp_tools": bool(svc.mcp)})
@@ -2095,6 +2107,11 @@ def make_handler(svc: Service):
                 # the dashboard's Context size: the range, the measured cost of the current size, a reload's state
                 if self._authorized():
                     self._json(200, svc.context_limits())
+            elif path == "/api/update":
+                # About > Updates: the latest release (GitHub, cached six hours; ?force=1 asks now) and whether this
+                # folder can update itself
+                if self._authorized():
+                    self._json(200, svc.updater.check(force="force=1" in self.path))
             elif path == "/api/report":
                 # the dashboard's Copy report: what an issue needs (the run config's secrets left out)
                 if self._authorized():
@@ -2157,16 +2174,20 @@ def make_handler(svc: Service):
                 if path == "/api/context":
                     self._context()
                     return
+                if path == "/api/update":
+                    self._update()
+                    return
                 req = json.loads(self._body() or b"{}")
                 if not isinstance(req, dict):
                     raise ValueError("the request body must be a JSON object")
                 if path == "/api/tokens":                    # the context meter: a prompt's size, nothing run
                     self._json(200, svc.count_tokens(req))
                     return
-                if path in ("/v1/chat/completions", "/v1/messages") and svc.reloading():
-                    # a context change is reloading the model: say so, and when to try again
-                    body = json.dumps({"error": {"type": "overloaded_error", "message": "the model is reloading with a "
-                                       "new context size; try again in a minute"}}).encode()
+                if path in ("/v1/chat/completions", "/v1/messages") and (svc.reloading() or svc.updater.busy()):
+                    # a context change is reloading the model, or Maya is updating: say so, and when to try again
+                    why = ("Project Maya is updating and starts again in a few minutes" if svc.updater.busy() else
+                           "the model is reloading with a new context size; try again in a minute")
+                    body = json.dumps({"error": {"type": "overloaded_error", "message": why}}).encode()
                     self.send_response(503)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Retry-After", "30")
@@ -2243,6 +2264,18 @@ def make_handler(svc: Service):
                 self._json(400, {"error": {"type": "invalid_request_error", "message": str(e)}})
                 return
             self._json(202, {"reload": reload})
+
+        def _update(self):
+            # It replaces the server's files and restarts it for every client: only the app's own page
+            self._body()
+            if not self._own_page("an update can be started"):
+                return
+            try:
+                state = svc.updater.start(svc)
+            except ValueError as e:
+                self._json(400, {"error": {"type": "invalid_request_error", "message": str(e)}})
+                return
+            self._json(202, {"update": state})
 
         def _settings(self):
             # They change what every client gets, so only the app's own page may set them
@@ -2498,6 +2531,9 @@ def clean_shared_defaults(d) -> dict:
         elif key == "top_p":
             if not number or not 0 < value <= 1:
                 raise ValueError("top_p: 0 < top_p <= 1")
+        elif key == "min_p":                            # the Chat's Min-p (the Creative preset's 0.05)
+            if not number or not 0 <= value < 1:
+                raise ValueError("min_p: 0 <= min_p < 1")
         elif key == "top_k":
             if not number or value != int(value) or not 1 <= value <= 64:
                 raise ValueError("top_k: an integer 1..64")
@@ -2511,7 +2547,7 @@ def clean_shared_defaults(d) -> dict:
                 raise ValueError("experimental_speed_projection: true or false")
         else:
             raise ValueError(f"unknown setting {key!r}")
-        out[key] = float(value) if key in ("temperature", "top_p") else value
+        out[key] = float(value) if key in ("temperature", "top_p", "min_p") else value
     return out
 
 
