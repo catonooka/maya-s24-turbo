@@ -246,11 +246,38 @@ class Start(unittest.IsolatedAsyncioTestCase):
                 await until(lambda: app.pending is not None)               # the server ended: the failure ...
                 self.assertEqual(app.view, T.LOG)                          # ... on the log's page, in sight
                 self.assertTrue(app.query_one("#page").display)
+                self.assertIn("Maya stopped", str(app.query_one("#ask").border_title))   # (not the setup)
                 await pilot.press("enter")
             self.assertEqual(app.return_value[0], "fail")
         finally:
             S.UI = None
             bridge.log.close()
+
+    def test_a_failed_start_says_its_engine_s_last_line_and_not_setup_stopped(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "maya.log"
+            log.write_text("strata generate: an earlier start's error\n")
+
+            def serve(cmd, env, info):
+                with open(log, "a") as f:
+                    f.write("glm fast: CUDA8 tiers warm: 1440 experts (19.3 GB)\nstrata generate: pack: out of memory\n")
+                return 1
+            failed = []
+            ui = SimpleNamespace(serve=serve, fail=lambda m, h: failed.append((m, h)), say=lambda m: True)
+            with patch.object(maya, "server_command", return_value=([], {}, {"log": str(log)})), \
+                    patch.object(S, "UI", ui), self.assertRaises(SystemExit):
+                maya.serve_on_screen(Path("maya-test.json"), SimpleNamespace())
+        self.assertIn("its engine's last line: strata generate: pack: out of memory", failed[0][1])
+        self.assertNotIn("earlier", failed[0][1])
+        app = SimpleNamespace(run=lambda: ("fail", failed[0]), serving={"state": "starting"}, served=[])
+        out = io.StringIO()
+        try:
+            with patch.object(T, "SetupApp", return_value=app), patch("sys.stdout", out), self.assertRaises(SystemExit):
+                T.run(lambda: None, "1.0", None, "./maya.sh", steps=False)
+        finally:
+            S.UI = None
+        self.assertIn("pack: out of memory", out.getvalue())
+        self.assertNotIn("Setup stopped", out.getvalue())          # (Maya's server stopped, not the setup)
 
     async def test_only_maya_s_tabs_and_starting_maya_before_it_runs(self):
         server = "import time\nprint('ready: http://127.0.0.1:9/v1')\ntime.sleep(30)"

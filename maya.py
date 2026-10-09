@@ -1571,13 +1571,29 @@ def start(cfg_path: Path, a) -> int:
 
 
 def serve_on_screen(cfg_path: Path, a) -> int:
-    """Maya's server on the setup's screen (setup.UI): its exit code; one it did not choose stops there."""
+    """Maya's server on the setup's screen (setup.UI): its exit code; one it did not choose stops there, with the
+    last line its engine logged in this start (mostly the reason: "strata generate: pack: out of memory")."""
     cmd, env, info = server_command(cfg_path, a)
+    log = Path(info["log"]) if info.get("log") else None
+    seen = log.stat().st_size if log is not None and log.is_file() else 0
     rc = S.UI.serve(cmd, env, info)
     if rc not in (0, UPDATE_EXIT):
+        last = last_line(log, seen)
         fail(f"Maya stopped: its server ended with exit code {rc}",
-             f"the reason is in its output; {ME} starts it again")
+             (f"its engine's last line: {last} (the whole log: {log})" if last else "the reason is in its output")
+             + f"; {ME} starts it again")
     return rc
+
+
+def last_line(path: Path | None, since: int) -> str:
+    """The last line written to `path` after byte `since` ("": none, or no such file)."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(since, f.seek(0, os.SEEK_END) - 8192))
+            lines = [s.strip() for s in f.read().decode(errors="replace").splitlines() if s.strip()]
+    except (OSError, TypeError):
+        return ""
+    return lines[-1][:200] if lines else ""
 
 
 def after_server(rc: int, a) -> int:

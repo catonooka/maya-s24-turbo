@@ -61,13 +61,17 @@ def warn(msg):
     say(f"  [!]  {msg}")
 
 
-def fail(msg, hint=None):
+STOPPED = "Setup stopped. Fix the item above and run it again - everything already done is kept and skipped."
+
+
+def fail(msg, hint=None, end=STOPPED):
     if UI is not None:
         UI.fail(msg, hint)             # shown until it is read; the setup ends there (the lines below follow it)
     say(f"\n  [X]  {msg}")
     if hint:
         say(f"       {hint}")
-    say("\nSetup stopped. Fix the item above and run it again - everything already done is kept and skipped.")
+    if end:
+        say("\n" + end)
     sys.exit(1)
 
 

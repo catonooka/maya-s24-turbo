@@ -116,7 +116,8 @@ def setup_card(app, spin: str) -> Text:
     n = app.cur
     name = app.titles.get(n, "Starting" if app.steps else "Starting Maya")
     if app.pending is not None:
-        now = Text("The setup stopped (below)", f"bold {DANGER}") if app.pending[2] == "fail" else \
+        stopped = "Maya stopped" if app.serving is not None else "The setup stopped"
+        now = Text(f"{stopped} (below)", f"bold {DANGER}") if app.pending[2] == "fail" else \
             Text("Waiting for your answer (below)", f"bold {WARN}")
     else:
         now = Text.assemble((spin + " ", ACCENT), (app.doing, INK) if app.doing else (app.last, MUTED))

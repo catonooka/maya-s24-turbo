@@ -290,9 +290,8 @@ class SetupApp(App):
         self.end_step("fail")
         self.set_doing("")
         self.query_one("#output", RichLog).write(Text.assemble(("✗ ", f"bold {DANGER}"), (msg, f"bold {DANGER}")))
-        self.show_question(fut, "fail", msg, [hint] if hint else [],
-                           [(f"Exit - fix it and run {self.me} again: everything finished is kept", None, None)],
-                           [None], 0, [])
+        again = "" if self.serving is not None else f" - fix it and run {self.me} again: everything finished is kept"
+        self.show_question(fut, "fail", msg, [hint] if hint else [], [(f"Exit{again}", None, None)], [None], 0, [])
 
     def show_question(self, fut, kind, question, intro, options, values, default, outro) -> None:
         if self.serving is not None and self.view is None:   # (the dashboard shows: the log's page has the box)
@@ -301,7 +300,8 @@ class SetupApp(App):
         self.abouts = [" ".join(x for x in (o[2], " ".join(outro)) if x) for o in options]
         box = self.query_one("#ask")
         named = kind != "fail" and len(question) <= 40  # a short question names the box, a long one opens it
-        box.border_title = title("The setup stopped", f"bold {DANGER}") if kind == "fail" else \
+        stopped = "Maya stopped" if self.serving is not None else "The setup stopped"   # (once Maya ran: its server)
+        box.border_title = title(stopped, f"bold {DANGER}") if kind == "fail" else \
             title(question if named else "Question")
         body = Text.assemble((question, f"bold {DANGER if kind == 'fail' else INK}") if not named else "",
                              ("\n" if intro and not named else "") + " ".join(intro))
@@ -480,8 +480,8 @@ def run(body, version: str, log_path: Path | None, me: str, steps: bool = True):
         bridge.finish()
     if kind == "done":
         return value
-    if kind == "fail":
-        S.fail(*value)
+    if kind == "fail":                                  # (once Maya ran, the setup had not stopped: Maya's server did)
+        S.fail(*value, end=S.STOPPED if app.serving is None else None)
     if kind == "error":
         raise value
     print(f"  Maya stopped: {me} starts it again." if app.serving else
