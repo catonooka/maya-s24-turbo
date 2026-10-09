@@ -271,10 +271,6 @@ GPU_PICK = None                                         # --gpu N (issue #51); N
                                                         # prompt buffers too (docs/MULTI_GPU.md)
 
 
-def cc(g) -> str:
-    return f"{g['arch'][:-1]}.{g['arch'][-1]}"
-
-
 def gpu_info(pick=None):
     """The GPU Strata runs on: `pick` (nvidia-smi's number) if given, else the one with the most VRAM (ties: the
     lower number).  None when there is no NVIDIA GPU.  The dict also says how many there are ("count")."""

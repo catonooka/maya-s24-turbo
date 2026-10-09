@@ -275,7 +275,7 @@ def choose(question: str, intro: list, options: list, default: int, yes: bool, o
 def gpu_label(g) -> str:
     if g.get("vendor") == "amd":
         return f"GPU {g['index']} ({g['name']}, {g['vram_gb']:.0f} GB, {g['arch']})"
-    return f"GPU {g['index']} ({g['name']}, {g['vram_gb']:.0f} GB, compute capability {S.cc(g)})"
+    return f"GPU {g['index']} ({g['name']}, {g['vram_gb']:.0f} GB)"
 
 
 def select_build_backend(backend: str) -> None:
