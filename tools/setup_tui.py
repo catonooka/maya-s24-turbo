@@ -30,8 +30,7 @@ from textual.widgets.option_list import Option
 from setup_bridge import TAIL, Bridge, curl_meter, describe
 from setup_dash import Dashboard
 from setup_look import (ACCENT, ACCENT_TEXT, DANGER, EDGE, FAINT, INK, LINE, MUTED, OK, OK_TEXT, SETUP_CSS, THEME,
-                        TINT, WARN, Card, Output, StopScreen, clock, hints, serving_card, setup_card, splash, styled,
-                        title)
+                        TINT, Card, Output, StopScreen, clock, hints, serving_card, setup_card, splash, styled, title)
 
 # maya.py's steps (setup.step) as tabs, the tuning after them, then Maya running (Bridge.serve): its dashboard, its log
 STEPS = {1: "This PC", 2: "Choices", 3: "Packages", 4: "Engine", 5: "Model", 6: "Pack", 7: "Images", 8: "Config",
@@ -419,8 +418,8 @@ class SetupApp(App):
             if n > 8 and n not in self.times or n < SERVE and not self.steps:   # (the tuning and Maya: once
                 continue                                                        # they start; a start: Maya's only)
             state = self.state[n]
-            style = {"wait": FAINT, "run": f"bold {INK}", "done": ACCENT_TEXT, "warn": WARN, "ready": f"bold {OK}",
-                     "fail": f"bold {DANGER}"}[state] + (" bold underline" if n == self.view else "")
+            style = {"wait": FAINT, "run": f"bold {INK}", "ready": f"bold {OK}", "fail": f"bold {DANGER}"}.get(
+                state, ACCENT_TEXT) + (" bold underline" if n == self.view else "")   # (done, warned or not: alike)
             mark = (spin + " ", ACCENT) if state == "run" else ("● ", OK) if state == "ready" else ""
             tabs.append(Text.assemble(mark, (STEPS[n], style)))
         room = self.query_one("#tabs").size.width or 70
