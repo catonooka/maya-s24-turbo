@@ -221,6 +221,8 @@ class StrataEngine:
         except (OSError, ValueError):
             self.info["version"] = None
         for line in self.proc.stdout:
+            if line.startswith("NOTE "):
+                print("[strata] " + line[5:].strip(), flush=True)
             if line.startswith("INFO "):
                 for kv in line.split()[1:]:
                     k, _, v = kv.partition("=")
@@ -466,6 +468,8 @@ class StrataEngine:
                     yield None
                 elif line.startswith("STAT "):
                     self._parse_stat(line)
+                elif line.startswith("NOTE "):                # what happens to the kept conversations
+                    print("[strata] " + line[5:].strip(), flush=True)
                 elif line.startswith("DONE"):
                     self._parse_done(line)
                     done = True
@@ -511,11 +515,29 @@ class StrataEngine:
                 raise ValueError(got[4:].strip())
 
     def close(self):
+        """QUIT, then wait for the engine to end: with kept conversations (STRATA_GLM_SLOT_KEEP) it first writes the
+        one it holds, so it gets STRATA_ENGINE_QUIT_S seconds (50; llama-swap's unloadTimeout should exceed it)."""
+        wait = float(os.environ.get("STRATA_ENGINE_QUIT_S", "50") or 50)
         try:
             self.proc.stdin.write("QUIT\n")
             self.proc.stdin.flush()
-            self.proc.wait(timeout=10)
+            end = time.monotonic() + wait
+            src = getattr(self, "lines", None)          # after start-up the pump thread owns stdout: read its queue
+            while self.proc.poll() is None and time.monotonic() < end:
+                if src is not None:
+                    try:
+                        line = src.get(timeout=max(0.1, min(1.0, end - time.monotonic())))
+                    except queue.Empty:
+                        continue
+                else:
+                    line = self.proc.stdout.readline()
+                if not line:
+                    break
+                if line.startswith("NOTE "):
+                    print("[strata] " + line[5:].strip(), flush=True)
+            self.proc.wait(timeout=max(0.1, end - time.monotonic()))
         except Exception:
+            print(f"[strata] the engine did not end within {wait:.0f} s: stopped", flush=True)
             self.proc.kill()
 
 
@@ -2459,9 +2481,27 @@ def main() -> int:
     if a.open:
         import webbrowser
         webbrowser.open(f"http://{'127.0.0.1' if a.host in ('0.0.0.0', '') else a.host}:{a.port}/")
+    # SIGTERM (llama-swap's cmdStop, systemd) ends the server as Ctrl+C does: the engine gets QUIT and time to keep its
+    # conversation.  A second SIGTERM while that runs (systemd signals the whole group, then the supervisor again) is
+    # ignored instead of cutting it short.
+    stop = threading.Event()
+
+    def on_term(signum, frame):
+        if stop.is_set():
+            return
+        stop.set()
+        print("[strata] stopping: the engine ends", flush=True)
+        raise KeyboardInterrupt
+
+    if os.name != "nt":
+        import signal
+        signal.signal(signal.SIGTERM, on_term)
     try:
         threading.Event().wait()
     except KeyboardInterrupt:
+        stop.set()
+        if os.name != "nt":
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
         httpd.shutdown()
         if hasattr(engine, "close"):
             engine.close()

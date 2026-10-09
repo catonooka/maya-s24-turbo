@@ -82,6 +82,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <csignal>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -909,6 +910,17 @@ double probe_pcie_h2d_gbps() {
 // overrides it.  Serve stops on them by default; non-serve stops only when asked (--stop-eos or
 // --eos-ids), like the qwen path.
 static int glm_pack_generate(const Options& o) {
+#if !defined(_WIN32)
+    // serving: the server ends the engine with QUIT (or by closing its input), and the engine then sets the conversation
+    // aside (STRATA_GLM_SLOT_KEEP).  A SIGTERM to the whole process group (systemd stopping a service, a supervisor
+    // killing the server's group) must not end it mid-write; a server that is already gone must not end it with
+    // SIGPIPE when it writes its last lines.
+    if (o.serve) {
+        std::signal(SIGTERM, SIG_IGN);
+        std::signal(SIGINT, SIG_IGN);
+        std::signal(SIGPIPE, SIG_IGN);
+    }
+#endif
     strata::core::Glm5Model model;
     std::string err;
     // the layer split across the visible GPUs: STRATA_GLM_SPLIT, else --layer-split (auto | K1,K2,..)
@@ -1038,18 +1050,131 @@ static int glm_pack_generate(const Options& o) {
     bool snap_in_slot = false;   // the model's snapshot is one of the slots, unchanged since
     const auto env_num = [](const char* k, double d) { const char* v = getenv(k); return v ? std::atof(v) : d; };
     int slot_max = model.fast() && getenv("STRATA_GLM_NO_REUSE") == nullptr ? (int) env_num("STRATA_GLM_SLOTS", 4) : 0;
-    const size_t slot_min = (size_t) std::max(64.0, env_num("STRATA_GLM_SLOT_MIN", 1024));
+    const size_t slot_min = (size_t) std::max(1.0, env_num("STRATA_GLM_SLOT_MIN", 1024));
     const uint64_t slot_budget = (uint64_t) (env_num("STRATA_GLM_SLOT_GB", 16) * 1073741824.0);
+    // STRATA_GLM_SLOT_KEEP=1: the slots outlive the engine - the folder is not emptied at start (its files are indexed
+    // and kept when they belong to this model), the conversation in the model is set aside when the engine ends
+    // (QUIT or end of input), and a file not used for STRATA_GLM_SLOT_DAYS days (7) is removed.  Every slot then has a
+    // .meta beside it: this model's identity, the conversation's tokens and the slot's size; a slot whose .meta is
+    // missing, foreign or does not match its file is deleted.  Both files are written under a temporary name first.
+    const bool slot_keep = getenv("STRATA_GLM_SLOT_KEEP") != nullptr && std::atoi(getenv("STRATA_GLM_SLOT_KEEP")) != 0;
+    const double slot_days = env_num("STRATA_GLM_SLOT_DAYS", 7);
+    namespace fs = std::filesystem;
     std::filesystem::path slot_dir;
+    // what a kept slot must match: the session format, the engine version, the pack and the model's shards (names and
+    // sizes) and whether the draft block is loaded.  The split itself is checked by slot_load (each part's layers).
+    const std::string slot_identity = [&] {
+        std::ostringstream id;
+        id << "maya-session-1 engine=" << STRATA_VERSION << " mtp=" << (model.has_mtp() ? 1 : 0);
+        std::error_code ec;
+        for (const char* f : {"index.txt", "dense.bin", "native_experts.txt"})
+            id << " " << f << ":" << (unsigned long long) fs::file_size(fs::path(o.glm_pack) / f, ec);
+        std::vector<std::string> shards;
+        for (const auto& de : fs::directory_iterator(fs::path(o.glm_pack).parent_path(), ec))
+            if (de.path().extension() == ".gguf")
+                shards.push_back(de.path().filename().string() + ":" + std::to_string(de.file_size(ec)));
+        std::sort(shards.begin(), shards.end());
+        for (const auto& s : shards) id << " " << s;
+        return id.str();
+    }();
+    constexpr uint64_t kMetaMagic = 0x3153534559414d47ull;   // "GMAYESS1"
+    const auto meta_of = [](const std::string& bin) { return bin.substr(0, bin.size() - 4) + ".meta"; };
+    const auto meta_write = [&](const std::string& path, const std::vector<int32_t>& toks, uint64_t bytes) -> bool {
+        const std::string tmp = path + ".tmp";
+        {
+            std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+            const uint64_t il = slot_identity.size(), nt = toks.size();
+            f.write((const char*) &kMetaMagic, 8);
+            f.write((const char*) &il, 8);
+            f.write(slot_identity.data(), (std::streamsize) il);
+            f.write((const char*) &bytes, 8);
+            f.write((const char*) &nt, 8);
+            f.write((const char*) toks.data(), (std::streamsize) (nt * sizeof(int32_t)));
+            f.write((const char*) &kMetaMagic, 8);
+            f.flush();
+            if (!f) return false;
+        }
+        std::error_code ec;
+        fs::rename(tmp, path, ec);
+        return !ec;
+    };
+    // a .meta of this model -> its tokens and the slot's size (false: foreign, damaged or not this model's)
+    const auto meta_read = [&](const std::string& path, std::vector<int32_t>& toks, uint64_t& bytes) -> bool {
+        std::ifstream f(path, std::ios::binary);
+        uint64_t m0 = 0, il = 0, nt = 0, m1 = 0;
+        if (!f.read((char*) &m0, 8) || m0 != kMetaMagic || !f.read((char*) &il, 8) || il != slot_identity.size())
+            return false;
+        std::string id(il, '\0');
+        if (!f.read(id.data(), (std::streamsize) il) || id != slot_identity) return false;
+        if (!f.read((char*) &bytes, 8) || !f.read((char*) &nt, 8) || nt == 0 || nt > (uint64_t) o.max_context) return false;
+        toks.resize(nt);
+        return (bool) f.read((char*) toks.data(), (std::streamsize) (nt * sizeof(int32_t))) && f.read((char*) &m1, 8) &&
+               m1 == kMetaMagic;
+    };
+    const auto slot_age_days = [](const std::string& p) {
+        std::error_code ec;
+        const auto t = fs::last_write_time(p, ec);
+        if (ec) return 1e9;
+        return std::chrono::duration<double>(fs::file_time_type::clock::now() - t).count() / 86400.0;
+    };
+    // NOTE lines on stdout: the server shows them in its own log (what happens to the conversations)
+    const auto note = [&](const std::string& m) {
+        std::fprintf(stderr, "glm slots: %s\n", m.c_str());
+        if (o.serve) std::printf("NOTE sessions: %s\n", m.c_str());
+    };
+    const auto gb = [](uint64_t b) {
+        char s[32];
+        std::snprintf(s, sizeof s, "%.2f GB", (double) b / 1e9);
+        return std::string(s);
+    };
     if (slot_max > 0) {
         slot_dir = getenv("STRATA_GLM_SLOT_DIR") ? std::filesystem::path(getenv("STRATA_GLM_SLOT_DIR"))
                                                  : std::filesystem::path(o.glm_pack) / "slots";
         std::error_code ec;
         std::filesystem::create_directories(slot_dir, ec);
+        struct Found { std::string bin; std::vector<int32_t> toks; uint64_t bytes; fs::file_time_type t; };
+        std::vector<Found> found;
+        size_t refused = 0;
         for (const auto& de : std::filesystem::directory_iterator(slot_dir, ec)) {   // a previous run's slots
-            const std::string fn = de.path().filename().string();
-            if (fn.rfind("slot-", 0) == 0 && fn.size() > 9 && fn.compare(fn.size() - 4, 4, ".bin") == 0)
+            const std::string fn = de.path().filename().string(), p = de.path().string();
+            if (fn.rfind("slot-", 0) != 0) continue;
+            const bool is_bin = fn.size() > 9 && fn.compare(fn.size() - 4, 4, ".bin") == 0;
+            const bool is_meta = fn.size() > 10 && fn.compare(fn.size() - 5, 5, ".meta") == 0;
+            if (!slot_keep || (!is_bin && !is_meta)) {   // not kept, or a .tmp an interrupted write left
                 std::filesystem::remove(de.path(), ec);
+                continue;
+            }
+            if (!is_meta) continue;                      // a .bin is judged by its .meta
+            const std::string bin = p.substr(0, p.size() - 5) + ".bin";
+            Found fd{bin, {}, 0, fs::last_write_time(de.path(), ec)};
+            const uint64_t have = fs::exists(bin, ec) ? (uint64_t) fs::file_size(bin, ec) : 0;
+            if (meta_read(p, fd.toks, fd.bytes) && have == fd.bytes && fd.bytes > 0 && slot_age_days(p) <= slot_days) {
+                found.push_back(std::move(fd));
+            } else {
+                ++refused;
+                std::filesystem::remove(p, ec);
+                std::filesystem::remove(bin, ec);
+            }
+        }
+        if (slot_keep)                                   // a .bin without its .meta was never completed
+            for (const auto& de : std::filesystem::directory_iterator(slot_dir, ec)) {
+                const std::string p = de.path().string(), fn = de.path().filename().string();
+                if (fn.rfind("slot-", 0) == 0 && fn.size() > 9 && fn.compare(fn.size() - 4, 4, ".bin") == 0 &&
+                    !fs::exists(meta_of(p), ec))
+                    std::filesystem::remove(de.path(), ec);
+            }
+        std::sort(found.begin(), found.end(), [](const Found& a, const Found& b) { return a.t < b.t; });
+        uint64_t total = 0;
+        for (auto& fd : found) {
+            total += fd.bytes;
+            slots.push_back({std::move(fd.toks), fd.bin, fd.bytes, ++slot_clock});
+        }
+        if (slot_keep) {
+            std::ostringstream m;
+            m << "folder " << slot_dir.string() << ": " << slots.size() << " conversation(s) kept from earlier runs ("
+              << gb(total) << ")";
+            if (refused) m << ", " << refused << " not this model's or incomplete - removed";
+            note(m.str());
         }
         if (!std::filesystem::is_directory(slot_dir, ec)) {
             std::fprintf(stderr, "glm slots: %s is not writable - conversations are not set aside\n",
@@ -1060,6 +1185,7 @@ static int glm_pack_generate(const Options& o) {
     const auto slot_drop = [&](size_t i) {
         std::error_code ec;
         std::filesystem::remove(slots[i].path, ec);
+        std::filesystem::remove(meta_of(slots[i].path), ec);
         slots.erase(slots.begin() + (long) i);
     };
     const auto slot_lru = [&](size_t keep) {   // the least recently used slot other than `keep`
@@ -1069,7 +1195,7 @@ static int glm_pack_generate(const Options& o) {
         return lru;
     };
     // the conversation in the model (its snapshot, snap_tokens) into a slot
-    const auto slot_put = [&]() {
+    const auto slot_put = [&](const char* why) {
         if (slot_max <= 0 || snap_in_slot || snap_tokens.size() < slot_min || snap_img_hash != kNoImages) return;
         for (size_t i = slots.size(); i-- > 0;)   // an earlier state of this conversation is superseded
             if (slots[i].tokens.size() <= snap_tokens.size() &&
@@ -1078,33 +1204,43 @@ static int glm_pack_generate(const Options& o) {
         while (!slots.empty() && slots.size() >= (size_t) slot_max) slot_drop(slot_lru(SIZE_MAX));
         std::error_code ec;
         const auto space = std::filesystem::space(slot_dir, ec);
-        if (!ec && space.available < ((uint64_t) 8 << 30)) {
+        if (!ec && space.available < (uint64_t) 8 << 30) {
             std::fprintf(stderr, "glm slots: under 8 GB free in %s - the conversation is not set aside\n",
                          slot_dir.string().c_str());
             return;
         }
-        const std::string path = (slot_dir / ("slot-" + std::to_string(++slot_seq) + ".bin")).string();
         const auto t0 = std::chrono::steady_clock::now();
+        const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::system_clock::now().time_since_epoch()).count();
+        const std::string path = (slot_dir / ("slot-" + std::to_string(stamp) + "-" + std::to_string(++slot_seq) +
+                                              ".bin")).string();
         std::string e;
-        const uint64_t bytes = model.slot_save(path, e);
-        if (bytes == 0) {
+        const uint64_t bytes = model.slot_save(path + ".tmp", e);
+        if (bytes == 0 || (std::filesystem::rename(path + ".tmp", path, ec), ec) ||
+            !meta_write(meta_of(path), snap_tokens, bytes)) {
+            std::filesystem::remove(path + ".tmp", ec);
             std::filesystem::remove(path, ec);
-            std::fprintf(stderr, "glm slots: setting the conversation aside failed (%s)\n", e.c_str());
+            std::fprintf(stderr, "glm slots: setting the conversation aside failed (%s)\n",
+                         e.empty() ? "writing its files" : e.c_str());
             return;
         }
         slots.push_back({snap_tokens, path, bytes, ++slot_clock});
         snap_in_slot = true;
         uint64_t total = 0;
         for (const auto& s : slots) total += s.bytes;
+        size_t evicted = 0;
         while (slots.size() > 1 && total > slot_budget) {
             const size_t i = slot_lru(slots.size() - 1);
             total -= slots[i].bytes;
             slot_drop(i);
+            ++evicted;
         }
-        std::fprintf(stderr, "glm slots: set aside a conversation of %zu tokens (%.2f GB, %.2f s); %zu kept, %.1f GB\n",
-                     snap_tokens.size(), (double) bytes / 1073741824.0,
-                     std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), slots.size(),
-                     (double) total / 1073741824.0);
+        char m[256];
+        std::snprintf(m, sizeof m, "saved a %zu-token conversation%s (%s in %.1f s); %zu kept, %s%s",
+                      snap_tokens.size(), why, gb(bytes).c_str(),
+                      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), slots.size(),
+                      gb(total).c_str(), evicted ? ", least recently used removed to stay under the size cap" : "");
+        note(m);
     };
     // the longest slot this prompt continues, back in the model: the tokens it covers (0: none)
     const auto slot_take = [&](const std::vector<int32_t>& prompt) -> size_t {
@@ -1121,8 +1257,7 @@ static int glm_pack_generate(const Options& o) {
         const auto t0 = std::chrono::steady_clock::now();
         std::string e;
         if (!model.slot_load(slots[best].path, (int64_t) len, e)) {
-            std::fprintf(stderr, "glm slots: taking a conversation back failed (%s) - reading its prompt again\n",
-                         e.c_str());
+            note("taking a conversation back failed (" + e + ") - reading its prompt again");
             slot_drop(best);
             snap_tokens.clear();
             return 0;
@@ -1131,8 +1266,15 @@ static int glm_pack_generate(const Options& o) {
         snap_img_hash = kNoImages;
         snap_in_slot = true;
         slots[best].used = ++slot_clock;
-        std::fprintf(stderr, "glm slots: took back a conversation of %zu tokens (%.2f s)\n", len,
-                     std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+        if (slot_keep) {   // its age counts from its last use
+            std::error_code ec;
+            fs::last_write_time(meta_of(slots[best].path), fs::file_time_type::clock::now(), ec);
+        }
+        char m[160];
+        std::snprintf(m, sizeof m, "took back a %zu-token conversation from disk (%.1f s); %zu new tokens to read", len,
+                      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(),
+                      prompt.size() - len);
+        note(m);
         return len;
     };
     const auto run_request = [&](const std::vector<int64_t>& ids, int64_t max_new,
@@ -1163,12 +1305,12 @@ static int glm_pack_generate(const Options& o) {
             getenv("STRATA_GLM_NO_REUSE") == nullptr && model.snapshot_restore())
             reuse = snap_tokens.size();
         if (reuse == 0 && slot_max > 0) {
-            slot_put();                // the conversation in the model, before this prompt overwrites it
+            slot_put("");              // the conversation in the model, before this prompt overwrites it
             reuse = slot_take(prompt);
         } else if (reuse > 0 && slot_max > 0 && getenv("STRATA_GLM_SLOT_ROUNDTRIP") != nullptr) {
             // a test: the restored state goes through a slot file and back - the same tokens must follow
             snap_in_slot = false;
-            slot_put();
+            slot_put("");
             const size_t back = slot_take(prompt);
             if (back != reuse) {
                 std::fprintf(stderr, "glm slots: ROUNDTRIP took back %zu of %zu tokens\n", back, reuse);
@@ -1641,6 +1783,8 @@ static int glm_pack_generate(const Options& o) {
         if (cmd.empty()) continue;
         std::printf("ERR unsupported command '%s' (M3.1 supports GEN and QUIT)\n", cmd.c_str());
     }
+    // the engine ends (QUIT, or the server gone): the conversation in the model is kept for the next start
+    if (slot_keep) slot_put(" on shutdown");
     return 0;
 }
 
