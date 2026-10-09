@@ -58,6 +58,7 @@ import calibrate_glm as CAL  # noqa: E402  the CPU lane's tuning for this PC (./
 
 WIN = S.WIN
 ME = "START-MAYA.bat" if WIN else "./maya.sh"      # how this is started, for the messages
+UPDATE_EXIT = 75                                   # the server's exit after the dashboard updated Maya (serve/update.py)
 ROOT = S.ROOT
 BUILD = ROOT / "build"
 EXE = BUILD / ("strata.exe" if WIN else "strata")
@@ -1435,7 +1436,23 @@ def start(cfg_path: Path, a) -> int:
     say("  (STRATA_GLM_RAM_HEADROOM_GB changes the 6) and warms its caches - the first answers are the slowest.")
     say("  Ctrl+C (or closing this terminal) stops it. Engine log: " + str(cfg.get("log", "")))
     say("  " + "-" * 100)
-    return subprocess.call(cmd)
+    rc = subprocess.call(cmd, env=dict(os.environ, MAYA_RESTART_ON_UPDATE="1"))   # (the dashboard may update Maya)
+    if rc != UPDATE_EXIT:
+        return rc
+    # About > Updates moved this folder to a new release: start the new version - its maya.py compiles what changed
+    # in the engine and loads the same model (the most recently used, so no question)
+    again = [sys.executable, str(HERE / "maya.py"), "--yes"]
+    for flag, v in (("--backend", a.backend), ("--port", a.port), ("--host", a.host), ("--api-key", a.api_key),
+                    ("--gpu", a.gpu), ("--gpus", a.gpus)):
+        if v is not None:
+            again += [flag, str(v)]
+    say()
+    say("  Updated from the dashboard: starting the new version ...")
+    sys.stdout.flush()
+    if WIN:
+        return subprocess.call(again)
+    os.execv(sys.executable, again)
+    return 0
 
 
 # ------------------------------------------------------------------------------------------------ the report

@@ -418,3 +418,20 @@ body:not([data-tab="chat"]) .chats__search, body:not([data-tab="chat"]) .chats__
 /* the per-GPU values under a hardware card's total (two to four GPUs): they may take two lines */
 .st-metric__sub.is-each { white-space: normal; line-height: 1.35; }
 .st-metric__spark { margin-top: auto; }   /* the charts of a row stay level when one card's line wraps */
+/* About > Updates: a strip under the page title, and a dot on the About tab when a new version is out */
+.update-card { display: flex; align-items: center; gap: var(--st-s-3); flex-wrap: wrap; margin-bottom: var(--st-s-4);
+               padding: 12px 16px; border: 1px solid var(--st-line); border-radius: var(--st-r-lg);
+               background: var(--st-surface); font-size: var(--st-fs-sm); }
+.update-card[data-tone="accent"] { background: var(--st-accent-tint); border-color: transparent; }
+.update-card[data-tone="accent"] .update-card__icon { color: var(--st-accent); }
+.update-card[data-tone="ok"] .update-card__icon { color: var(--st-ok); }
+.update-card[data-tone="error"] { background: var(--st-danger-tint); color: var(--st-danger-text); border-color: transparent; }
+.update-card__icon { flex: none; display: flex; color: var(--st-ink-muted); }
+.update-card__text { flex: 1 1 260px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.update-card__text span { color: var(--st-ink-muted); }
+.update-card[data-tone="error"] .update-card__text span { color: inherit; }
+.update-card__how { margin-top: 2px; font-size: var(--st-fs-xs); }
+.update-card__acts { display: flex; gap: var(--st-s-2); flex-wrap: wrap; }
+.tab-dot { flex: none; width: 8px; height: 8px; margin-left: auto; border-radius: 50%; background: var(--st-accent);
+           box-shadow: 0 0 0 3px var(--st-accent-tint); }
+.tab-dot[hidden] { display: none; }

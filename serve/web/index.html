@@ -44,7 +44,8 @@
     <button class="st-tab" role="tab" id="tab-btn-monitor" aria-controls="view-monitor" aria-selected="false" data-tab="monitor">
       <svg class="st-icon"><use href="web/sprite.svg#i-activity"/></svg><span>Monitor</span></button>
     <button class="st-tab" role="tab" id="tab-btn-about" aria-controls="view-about" aria-selected="false" data-tab="about">
-      <svg class="st-icon"><use href="web/sprite.svg#i-info"/></svg><span>About</span></button>
+      <svg class="st-icon"><use href="web/sprite.svg#i-info"/></svg><span>About</span>
+      <i class="tab-dot" id="about-dot" hidden title="A new version is available"></i></button>
   </nav>
   <!-- the chats: in the sidebar on wide screens, a panel from the left on narrow ones -->
   <section class="chats" id="chats" aria-label="Chats">
@@ -247,6 +248,7 @@
       <div class="page-head">
         <div><h1 class="page-title">About</h1><p class="muted page-sub">The model, this machine, and how to connect your tools</p></div>
       </div>
+      <div class="update-card" id="update-card" hidden aria-live="polite"></div>
       <div class="about-grid">
         <div class="st-card about-engine">
           <span class="card-title">Model and engine</span>

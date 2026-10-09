@@ -47,5 +47,40 @@ class ModelChoice(unittest.TestCase):
             self.assertTrue(all(len(h) == 64 for h in m["sha256"].values()), q)
 
 
+class RestartAfterUpdate(unittest.TestCase):
+    """The dashboard's Update ends the server with UPDATE_EXIT: maya.py starts the new version - the same model and
+    settings, no setup flags, no question - and nothing else (no download, no pack)."""
+
+    def start(self, rc, argv=("maya.py", "--setup", "--model", "Maya-L", "--port", "8090")):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            for f in ("strata", "pack/x", "tok/vocab.json"):
+                (d / f).parent.mkdir(parents=True, exist_ok=True)
+                (d / f).write_text("x")
+            cfg = d / "maya-test.json"
+            cfg.write_text('{"exe": "%s", "tokenizer": "%s", "args": ["--glm-pack", "%s"]}'
+                           % ((d / "strata").as_posix(), (d / "tok").as_posix(), (d / "pack").as_posix()))
+            a = SimpleNamespace(port=8090, host=None, api_key=None, gpu=None, gpus="0,1", backend="cuda")
+            with patch.object(maya, "refresh_engine") as refresh, patch.object(maya, "say"),                     patch.object(maya.sys, "argv", list(argv)),                     patch.object(maya.subprocess, "call", return_value=rc) as call,                     patch.object(maya.os, "execv") as execv, patch.object(maya, "WIN", False):
+                out = maya.start(cfg, a)
+            return out, call, execv, refresh
+
+    def test_update_exit_starts_the_new_version(self):
+        _, call, execv, refresh = self.start(maya.UPDATE_EXIT)
+        self.assertEqual(call.call_args.kwargs["env"]["MAYA_RESTART_ON_UPDATE"], "1")
+        refresh.assert_called_once()                    # (the new maya.py compiles what changed when it starts)
+        argv = execv.call_args.args[1]
+        self.assertEqual(argv[1:3], [str(maya.HERE / "maya.py"), "--yes"])
+        self.assertNotIn("--setup", argv)               # no setup: the same model, nothing downloaded or packed
+        self.assertNotIn("--model", argv)
+        for flag, v in (("--port", "8090"), ("--gpus", "0,1"), ("--backend", "cuda")):
+            self.assertEqual(argv[argv.index(flag) + 1], v)
+
+    def test_other_exits_end_as_before(self):
+        out, _, execv, _ = self.start(0)
+        self.assertEqual(out, 0)
+        execv.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

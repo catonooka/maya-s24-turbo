@@ -179,6 +179,7 @@ function showTab(name) {
   if (location.hash.slice(1) !== tab) history.replaceState(null, "", tab === "chat" ? location.pathname : `#${tab}`);
   if (tab === "chat") $("input").focus();
   if (tab === "monitor") loadMcp();
+  if (tab === "about") loadUpdate();
   if (lastMetrics) render(lastMetrics);
 }
 for (const b of document.querySelectorAll(".st-tab")) b.onclick = () => showTab(b.dataset.tab);
@@ -220,6 +221,7 @@ async function loadHealth() {
     renderModelLine();
     updateCtxMeter();
     if (health.status === "reloading") watchReload();
+    if (health.status === "updating" && !updateWatch) loadUpdate().then((u) => u && u.state && watchUpdate(u.state.to));
   } catch (e) {
     setTimeout(loadHealth, 2000);
   }
@@ -651,6 +653,127 @@ document.addEventListener("click", (e) => {
   const b = e.target.closest("[data-copy]");
   if (b) copyText(b.dataset.copy, b);
 });
+// ------------------------------------------------------------------ About > Updates
+// the server asks GitHub for the latest release (at most every six hours) and says whether this folder can update
+// itself (a git checkout without local changes, started by maya.sh / START-MAYA.bat); else the steps by hand
+let update = null, updateWatch = null;
+async function loadUpdate(force = false) {
+  try {
+    const r = await fetch(force ? "api/update?force=1" : "api/update", {headers: headers()});
+    update = r.ok ? await r.json() : null;
+  } catch (e) { update = null; }
+  renderUpdate();
+  return update;
+}
+function renderUpdate() {
+  const el = $("update-card"), u = update;
+  $("about-dot").hidden = !(u && u.newer) || !!updateWatch;
+  if (!updateWatch && (!u || !u.enabled)) { el.hidden = true; return; }
+  const latest = (u && u.latest) || {};
+  const notes = latest.url ? `<a class="st-btn st-btn--secondary" href="${esc(latest.url)}" target="_blank" rel="noopener">What's new</a>` : "";
+  const again = (label) => `<button class="st-btn st-btn--secondary" type="button" data-update="check">${icon("refresh")}${label}</button>`;
+  const when = u && u.checked ? new Date(u.checked * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : "";
+  const state = u && u.state;
+  let tone = "", ic = "info", title, text = "", how = "", acts = "";
+  if (updateWatch || (state && state.state === "updating")) {
+    const to = updateWatch ? updateWatch.to : state.to;
+    tone = "accent"; ic = "download";
+    title = `Updating to v${to}…`;
+    text = updateWatch && updateWatch.down
+      ? "Maya is starting again: it compiles what changed in the engine and loads the model (a few minutes; the terminal shows the progress). This page reloads when it is back."
+      : "Maya finishes the answer it is writing, then downloads the update.";
+  } else if (state && state.state === "failed") {
+    tone = "error"; ic = "error";
+    title = "The update did not happen";
+    text = state.error || "";
+    acts = notes + (u.can_update ? `<button class="st-btn st-btn--primary" type="button" data-update="go">Try again</button>` : "");
+  } else if (u.newer) {
+    tone = "accent"; ic = "download";
+    title = `Project Maya v${latest.version} is out`;
+    text = latest.summary || "";
+    if (!u.can_update) how = `Update by hand: ${u.by_hand}. This page can't, because ${u.blocker}.`;
+    acts = notes + (u.can_update ? `<button class="st-btn st-btn--primary" type="button" data-update="go">${icon("download")}Update to v${esc(latest.version)}</button>` : "");
+  } else if (u.error) {
+    ic = "warning";
+    title = "Couldn't check for updates";
+    text = `${u.error}. Project Maya v${u.current || "?"} is running.`;
+    acts = again("Try again");
+  } else if (u.latest) {
+    tone = "ok"; ic = "check";
+    title = `Up to date: v${u.current} is the latest release`;
+    text = `Checked on GitHub${when ? ` at ${when}` : ""}.`;
+    acts = again("Check again");
+  } else {
+    title = "Checking for updates…";
+  }
+  el.hidden = false;
+  el.dataset.tone = tone;
+  el.innerHTML = `<span class="update-card__icon">${icon(ic)}</span>` +
+    `<div class="update-card__text"><b>${esc(title)}</b>${text ? `<span>${esc(text)}</span>` : ""}` +
+    `${how ? `<span class="update-card__how">${esc(how)}</span>` : ""}</div>` +
+    (acts ? `<div class="update-card__acts">${acts}</div>` : "");
+}
+$("update-card").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-update]");
+  if (!b) return;
+  if (b.dataset.update === "check") { b.disabled = true; loadUpdate(true); }
+  else startUpdate();
+});
+async function startUpdate() {
+  const v = update && update.latest && update.latest.version;
+  if (!v) return;
+  const ok = await confirmDialog(`Update Project Maya to v${v}?`,
+    "<p>Only Maya's code is updated: <b>the model is not downloaded again</b>, and its files, your settings and the " +
+    "chats in this browser stay.</p><p>Maya finishes the answer it is writing, downloads the new code (git), compiles " +
+    "only the engine files that changed (usually a few minutes; the terminal shows the progress) and loads the model " +
+    "again. Apps using the API are asked to try again meanwhile.</p>", `Update to v${v}`);
+  if (!ok) return;
+  let r, d = {};
+  try {
+    r = await fetch("api/update", {method: "POST", headers: headers(true), body: "{}"});
+    d = await r.json().catch(() => ({}));
+  } catch (e) {
+    toast("error", "The update did not start", "The server did not answer.", 9000);
+    return;
+  }
+  if (!r.ok) {
+    toast("error", "The update did not start", (d.error && d.error.message) || `HTTP ${r.status}`, 9000);
+    loadUpdate();
+    return;
+  }
+  watchUpdate(v);
+}
+// until the server answers with the new version (then the page reloads for its new files), or says it failed
+async function watchUpdate(to) {
+  if (updateWatch) return;
+  updateWatch = {to, down: false};
+  renderUpdate();
+  for (;;) {
+    await new Promise((ok) => setTimeout(ok, 3000));
+    let h = null;
+    try {
+      const r = await fetch("health", {cache: "no-store"});
+      h = r.ok ? await r.json() : null;
+    } catch (e) { h = null; }
+    if (!h) {                                      // stopped: compiling, or loading the model
+      if (!updateWatch.down) { updateWatch.down = true; renderUpdate(); }
+      continue;
+    }
+    if (h.version === to) {
+      toast("success", `Updated to v${to}`, "Reloading the page…", 4000);
+      setTimeout(() => location.reload(), 1200);
+      return;
+    }
+    if (h.status === "updating") continue;
+    const restarted = updateWatch.down;
+    updateWatch = null;
+    await loadUpdate();
+    if (!restarted) toast("error", "The update did not happen", (update && update.state && update.state.error) || "", 9000);
+    else toast("warn", "Maya started again on the same version", "The update's files did not arrive; the terminal shows why.", 9000);
+    return;
+  }
+}
+
 $("clear-data").onclick = async () => {
   const ok = await confirmDialog("Clear this browser's chats and settings?",
     "<p>Every chat, the Chat settings, the instructions and the API key kept in this browser are removed. The model, " +
@@ -1984,6 +2107,7 @@ loadChats().then(() => {
   renderChatList();
   return loadHealth();
 }).then(loadMcp).then(() => {
+  loadUpdate();                                    // (the About tab's dot when a new version is out)
   resumePending();
   if (startQuestion) { if (messages.length) openChat(newChatObj()); $("input").value = startQuestion; send(); }
 });
