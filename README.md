@@ -250,17 +250,8 @@ what you changed there):
 | `--prefill auto` | the largest chunk, in steps of 256 tokens, whose buffers each card's expert pool can lend - at most 90% of its slots (85% when under 90% of the experts' bytes are in VRAM or the pinned RAM tier), always keeping a route's experts and the spares - up to 8192 tokens. On a split every card reads the same chunks, so the smallest card's sets it, and the log names a card that holds it below the first card's |
 | `--prefill N` | chunks of N tokens (`32768`, say), halved until each card's pool can lend them - only a route's experts and the spares must stay; `0` = token by token. With 96 GB of RAM or more the setup points to `32768`: 32768-token chunks read prompts 21-35% faster in Strata's community benchmarks |
 
-Measured with a 137 GB community 3.5-bit quant of GLM-5.3-Flash (Q3_K/Q2_K experts; not one of the setup's downloads) - prompts in tokens/s, decode the same in every row:
-
-| Setup | 7.8K | 8.4K | 14.8K | 26.6K |
-| --- | --- | --- | --- | --- |
-| RTX 3090, `--prefill auto` (8192-token chunks) | 482 | 466 | 532 | 491 |
-| RTX 3090, `--prefill 32768` | 473 | 529 | 764 | 970 |
-| RTX 3090 + RTX 5060 Ti, `--prefill auto` (8192) | 430 | 501 | 648 | 727 |
-
-One card streams nearly every expert over PCIe for each chunk, so fewer, larger chunks pay off. On a split, a prompt
-that fits one chunk runs the cards one after the other, while two or more keep both busy (31232-token chunks on the
-two cards read the 14.8K prompt at 613 tok/s, against 648 at 8192).
+One card streams nearly every expert over PCIe for each chunk, so fewer, larger chunks pay off on long prompts. On a
+split, a prompt that fits one chunk runs the cards one after the other, while two or more keep both busy.
 
 ## Something went wrong?
 

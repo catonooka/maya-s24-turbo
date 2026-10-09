@@ -1346,7 +1346,7 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vi
     return cfg_path
 
 
-PREFILL_BIG_RAM_GB = 96        # Strata's bench #433 #440 #834 #669: 32768-token chunks +21-35% at 96 GB, ~3x slower at 32 GB
+PREFILL_BIG_RAM_GB = 96        # Strata's benchmarks: 32768-token chunks +21-35% at 96 GB, ~3x slower at 32 GB
 PREFILL_RISK_RAM_GB = 64       # below this a chunk set above 8192 is warned about
 
 
@@ -1355,10 +1355,10 @@ def prefill_tips(args: list, ram: float) -> list:
     prefill = args[args.index("--prefill") + 1] if "--prefill" in args[:-1] else None
     if prefill is not None and prefill.isdigit() and int(prefill) > 8192 and ram < PREFILL_RISK_RAM_GB:
         return [f"warning: --prefill {prefill} on {ram:.0f} GB of RAM: in Strata's community benchmarks 32768-token "
-                "chunks ran ~3x slower than --prefill auto with 32 GB (#834 #669); they paid off (+21-35%) with 96 GB"]
+                "chunks ran ~3x slower than --prefill auto with 32 GB; they paid off (+21-35%) with 96 GB"]
     if prefill == "auto" and ram >= PREFILL_BIG_RAM_GB:
         return [f"tip: with {ram:.0f} GB of RAM, --prefill 32768 in the config's args read prompts 21-35% faster in "
-                "Strata's community benchmarks (#433 #440 #834); not set, nothing changes"]
+                "Strata's community benchmarks; not set, nothing changes"]
     return []
 
 
