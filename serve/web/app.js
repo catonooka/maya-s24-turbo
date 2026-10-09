@@ -197,7 +197,8 @@ function headers(json = false) {
 let hintNote = "";
 function setHint(t) { hintNote = t || ""; refreshHint(); }
 function refreshHint() {
-  $("composer-hint").textContent = hintNote || (busy || reloadWatch ? "" : "Shift+Enter: new line");
+  $("composer-hint").textContent = hintNote || (busy && busy.chat !== current ? "An answer is being written in another chat" :
+                                                busy || reloadWatch ? "" : "Shift+Enter: new line");
 }
 $("api-key").value = store.get("apikey", "");
 $("api-key").onchange = () => { store.set("apikey", $("api-key").value.trim()); toast("success", "API key saved", "Kept in this browser only."); };
@@ -1102,21 +1103,20 @@ async function loadChats() {
   current = chats.find((c) => c.id === want) || chats[0] || newChatObj();
   messages = current.messages;
 }
+// an answer being written goes on in its own chat while another one is open (and shows again when its chat is)
 function openChat(c) {
-  if (busy) { toast("warn", "Still writing", "Stop the answer first, or wait for it."); return false; }
   current = c;
   messages = c.messages;
   store.set("current-chat", c.id);
   cancelEdit();
   renderChat();
   renderChatList();
+  refreshHint();
   showChats(false);
   if (tab !== "chat") showTab("chat");
   resumePending();
-  return true;
 }
 function newChat() {
-  if (busy) { toast("warn", "Still writing", "Stop the answer first."); return; }
   if (!messages.length && current.system === (settings.sys_default ? settings.system || "" : "")) {
     showChats(false); showTab("chat"); $("input").focus(); return;
   }
@@ -1236,7 +1236,7 @@ function msgEl(m, i) {
       `<div class="st-bubble"></div><div class="st-msg__meta"><span class="meta-text"></span>` +
       `<button class="st-btn st-btn--icon" data-msg-copy aria-label="Copy the answer" title="Copy">${icon("copy")}</button>` +
       `<button class="st-btn st-btn--icon" data-msg-regen aria-label="Write this answer again" title="Regenerate">${icon("refresh")}</button></div>`;
-    updateAssistant(el, m, false);
+    updateAssistant(el, m, !!busy && busy.msg === m);
   }
   return el;
 }
@@ -1432,10 +1432,10 @@ function showCtx(tokens, approx, why) {
     (approx ? " - approximate (pictures count once they are read)" : "") +
     (pct >= 95 ? ". Nearly full: start a new chat, or raise the context size in Settings." : "");
 }
-// while an answer is written: the server's live count (every poll)
+// while an answer is written in the open chat: the server's live count (every poll)
 function liveCtx() {
   const live = lastMetrics && lastMetrics.live;
-  if (!busy || !live || live.state === "idle" || live.prompt_tokens == null) return false;
+  if (!busy || busy.chat !== current || !live || live.state === "idle" || live.prompt_tokens == null) return false;
   showCtx(live.prompt_tokens + (live.generated || 0), false, "This request");
   return true;
 }
@@ -1504,7 +1504,8 @@ async function answer(resumeJob = null) {
   }
   const chat = current;
   renderChat();
-  const el = $("chat").lastElementChild;
+  // the answer on the screen: none while another chat is open (renderChat draws it anew when its chat is opened again)
+  const view = () => (chat === current ? $("chat").querySelector(`.st-msg[data-i="${chat.messages.indexOf(m)}"]`) : null);
   const controller = new AbortController();
   busy = {controller, msg: m, chat};
   setBusy(true);
@@ -1528,7 +1529,14 @@ async function answer(resumeJob = null) {
   }
   let firstAt = null, thinkStart = null, usage = null, pending = false, lastPaint = 0, jobId = resumeJob, nRecv = 0, finished = false;
   let ended = false;                               // a repaint queued while streaming must not land after the end
-  const paint = () => { pending = false; if (ended) return; lastPaint = performance.now(); updateAssistant(el, m, true); scrollDown(); };
+  const paint = () => {
+    pending = false;
+    const el = ended ? null : view();
+    if (!el) return;
+    lastPaint = performance.now();
+    updateAssistant(el, m, true);
+    scrollDown();
+  };
   const schedule = () => {                         // a long answer repaints at most ten times a second
     if (pending) return;
     pending = true;
@@ -1642,8 +1650,17 @@ async function answer(resumeJob = null) {
   ended = true;
   busy = null;
   setBusy(false);
-  if (chat === current) { updateAssistant(el, m, false); scrollDown(); updateCtxMeter(); }
+  if (chat === current) {
+    const el = view();
+    if (el) updateAssistant(el, m, false);
+    scrollDown();
+    updateCtxMeter();
+  } else {                                         // another chat is open: its last answer can be written again now
+    const last = $("chat").lastElementChild;
+    if (last && last.classList.contains("st-msg--assistant")) updateAssistant(last, messages[+last.dataset.i], false);
+  }
   saveChat(chat);
+  resumePending();                                 // the open chat's answer cut off by a reload, now that none runs
 }
 // after a reload: an answer the page was streaming when it went away is taken back up from the server
 function resumePending() {
@@ -2092,7 +2109,7 @@ document.addEventListener("keydown", (e) => {
     if ($("drawer").dataset.open === "true") { closeDrawer(); return; }
     if (document.body.classList.contains("chats-open")) { showChats(false); return; }
     if (editIndex != null) { cancelEdit(); return; }
-    if (busy) { stopAnswer(); return; }
+    if (busy && busy.chat === current) { stopAnswer(); return; }
   }
   if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "O" || e.key === "o")) { e.preventDefault(); newChat(); }
 });
