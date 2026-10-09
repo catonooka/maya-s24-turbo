@@ -26,6 +26,10 @@
 #include <string>
 #include <thread>
 #include <vector>
+#ifdef __linux__
+#include <pthread.h>
+#include <sched.h>
+#endif
 
 namespace strata::core {
 namespace glmfast {
@@ -38,15 +42,34 @@ inline void cpu_relax() {
 #endif
 }
 
+// a thread's CPUs: `cpus` (empty: left to the OS).  Linux only; elsewhere a no-op.
+inline void pin_thread(std::thread::native_handle_type h, const std::vector<int>& cpus) {
+#ifdef __linux__
+    if (cpus.empty()) return;
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    for (int c : cpus)
+        if (c >= 0 && c < CPU_SETSIZE) CPU_SET(c, &set);
+    pthread_setaffinity_np(h, sizeof set, &set);
+#else
+    (void) h;
+    (void) cpus;
+#endif
+}
+
 // a fixed pool of worker threads: run(n, fn) calls fn(0..n-1) across the workers AND the caller and returns
 // when all finished.  Jobs are claimed lock-free; a worker spins ~300 us for the next batch before it sleeps,
 // because one miss request runs its batches back to back (reads, gate/up, down) and a futex wake per batch
 // was most of the CPU path's latency.
 class Workers {
 public:
-    // spin_us: how long an idle worker spins for the next batch before it sleeps
-    explicit Workers(int n, int spin_us = 300) : spin_us_(spin_us), active_(n + 1) {
-        for (int i = 0; i < n; ++i) th_.emplace_back([this, i] { loop(i); });
+    // spin_us: how long an idle worker spins for the next batch before it sleeps; cpus: the CPUs the workers run on
+    // (empty: any)
+    explicit Workers(int n, int spin_us = 300, const std::vector<int>& cpus = {}) : spin_us_(spin_us), active_(n + 1) {
+        for (int i = 0; i < n; ++i) {
+            th_.emplace_back([this, i] { loop(i); });
+            pin_thread(th_.back().native_handle(), cpus);
+        }
     }
     ~Workers() {
         quit_.store(true);
@@ -344,6 +367,8 @@ struct Glm5Model::FastState {
     //      PCIe pulls and this pool, which computes its share from the pinned blobs meanwhile; the device adds the
     //      weighted sum (cpu_ans_h) before its down combine.  cpu_plan: how many of f RAM-tier experts go to the host.
     std::unique_ptr<glmfast::Workers> cpu_pool;
+    int cpu_node = -1;                         // the NUMA node the pool is pinned to (-1: unpinned) ...
+    std::vector<int> cpu_pin;                  // ... and its CPUs (the service thread runs there too)
     double cpu_c_ms = 0.0, cpu_p_ms = 0.0;   // the lane's calibration: an expert on the CPU, one over PCIe
     double cpu_ps_ms = 0.0;                  // ... one in a stream of copies (the prompt's staging)
     unsigned long long cpu_plan = 0;

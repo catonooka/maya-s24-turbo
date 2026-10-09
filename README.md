@@ -204,13 +204,15 @@ These settings change what the engine chooses (put them in the config with `--en
 | `STRATA_GLM_RAM_HEADROOM_GB` | 6 | RAM left free for the system when the RAM tier is sized |
 | `STRATA_GLM_RAM_GB` | from free RAM | a fixed RAM-tier size in GB |
 | `STRATA_GLM_RAM_RESIDENT` | off | `1` (or `--glm-ram-resident`): the RAM tier holds every expert not in VRAM and nothing is evicted to disk. The start fails if it cannot. For PCs whose RAM holds everything off-card (a 4090 D with 128 GB: decode 11.8 -> 22.1 tokens/s with `PROMOTE_MIN=6`). `STRATA_GLM_RAM_SLACK` is extra slots per MoE layer (default 16) |
-| `STRATA_GLM_SPLIT` | middle (+2) with 2 GPUs, by free VRAM with more | the first layer of each later GPU (`24`, or `7,12,17,22,27,32,37,41` for nine); `0` = one GPU. The config's `"layer_split"` sets the same |
+| `STRATA_GLM_SPLIT` | `auto`: Strata's split search on 2-4 GPUs, by free VRAM with more | the first layer of each later GPU (`24`, or `7,12,17,22,27,32,37,41` for nine); `0` = one GPU. The config's `"layer_split"` sets the same. `auto` prices every placement before loading: each card's room for experts after its layers' weights and state, the share of each layer's routes the experts it then holds take (your usage counts; Strata's coverage curve without them), each layer's reads over the card's memory bandwidth and each miss over the host's RAM speed - and takes the fastest one every card can start (on a two-GPU split that drafts with the model's MTP block the two cards work on consecutive tokens, so the token costs the slower card: RTX 3090 + 5060 Ti drafting with a NextN block, 24 -> 26, the cards 25.3 / 32.2 -> 28.1 / 29.8 ms a token, decode +3-5%). `STRATA_GLM_SPLIT_LOG=1` prints every placement's prediction |
 | `STRATA_GLM_CPU_LANE` | one thread per physical core (one GPU: at most one NUMA node's) | CPU threads for RAM-tier experts; `0` = off (the tuning sets it) |
 | `STRATA_GLM_CPU_LANE<n>` | the setting above | the same for CUDA`<n>` alone (`STRATA_GLM_CPU_LANE0=6`, `STRATA_GLM_CPU_LANE1=2`): two cards on links of different speed want different counts - the slower the link, the more CPU threads help. RTX 4070 Ti SUPER on PCIe 3.0 x4 + RTX 5070 Ti on 4.0 x16, split 17: 6 / 2 threads beat the default 4 / 4 |
+| `STRATA_GLM_CPU_PIN` | on with two GPUs or more | a split: every GPU's CPU lane on CPUs of its own - a whole NUMA node while there are enough (its GPU's node when the GPUs hang off different ones), else an even share of a node's physical cores - so one card's idle workers never spin on the cores the other's are using (2 x Xeon Gold 6152, RTX 3090 + 5060 Ti: decode 15.4 -> 19.8 tok/s; restricted to one socket, drafting with a NextN block: 19.3 -> 22.8); `0` = unpinned |
 | `STRATA_GLM_CPU_SPLIT` | about 48 pieces in all | decode: each CPU-lane thread's share of a token's RAM-tier experts is cut into this many pieces (1-64), claimed in turn, so one thread held up by the disk readers doesn't hold up the token. Few threads take several pieces each (6 threads: 8 - one V100, Maya-S: 17.1 tok/s against 14.3 with one); 40 or more take one each, which streams the memory best |
 | `STRATA_GLM_PCIE_SHARE` | measured at start | the share of a token's RAM-tier experts copied over PCIe and run on the GPU instead of on the CPU: `0` = the CPU takes every one, `1` = none (the tuning sets it; `STRATA_GLM_CPU_PLAN` = the split per expert count, digits for 0..8) |
 | `STRATA_GLM_NUMA` | on with 2+ NUMA nodes | `0` = allocate the RAM tier without spreading it page by page over the sockets' memory |
-| `STRATA_GLM_PREFILL_CHUNK` | 32768 on one GPU, 8192 on two, 512 on more | the most tokens per prompt chunk, bounded by `STRATA_GLM_PREFILL_MB` (one GPU: default 40% of the free VRAM less 1 GB, 1-8 GB - about 30K tokens on a 24 GB card; two: ~6% of the card, 1-2 GB) |
+| `STRATA_GLM_PREFILL_CHUNK` | unset | `--prefill N` from the environment (the older setting; it wins over the config's `--prefill`) |
+| `STRATA_PREFILL_LEND_PCT`, `STRATA_GLM_PREFILL_MB` | 90 or 85, unset | `--prefill auto`: the share of each card's expert-pool slots a prompt may borrow for its buffers - as Strata, 90 when at least 90% of the experts' bytes are held pinned (in VRAM or the RAM tier), else 85 - or a fixed budget in MB |
 | `STRATA_GLM_PREFILL_WINDOW` | the chunk's tokens | prompts: the expert output rows kept on the GPU at once - each expert set's rows are added into the layer's output as the window fills, instead of every routed row waiting for one combine (~40 KB a token instead of ~185, so a chunk holds ~2x the tokens); `0` = every row (the old layout) |
 | `STRATA_GLM_USAGE` | `<pack>/expert_usage.txt` | where your expert usage is kept between starts (the warm-up loads your experts first); `0` = off |
 | `STRATA_GLM_SLOTS` | 4 | conversations kept aside on the SSD, so switching back to one doesn't re-read its prompt; `0` = off |
@@ -237,6 +239,28 @@ These settings change what the engine chooses (put them in the config with `--en
 your usage file (above) blended with the pack's profile, `expert_counts.txt` / `expert_prior.txt`. To make one, start
 the model with `STRATA_GLM_USAGE=/tmp/profile.txt` (a fresh file), send it requests typical of your use (code, docs,
 chat, languages), stop it, then run `python tools/glm_expert_prior.py <pack folder> /tmp/profile.txt`.
+
+**Prompt chunks** (Strata's `--prefill`). The engine reads a prompt in chunks, and every expert a chunk routes to is
+copied into VRAM once per chunk, so larger chunks read long prompts faster; a chunk's buffers are borrowed from the
+expert pool while the prompt runs. The setup writes `--prefill auto` into the config's `"args"` (a setup again keeps
+what you changed there):
+
+| Argument | What it does |
+| --- | --- |
+| `--prefill auto` | the largest chunk, in steps of 256 tokens, whose buffers each card's expert pool can lend - at most 90% of its slots (85% when under 90% of the experts' bytes are in VRAM or the pinned RAM tier), always keeping a route's experts and the spares - up to 8192 tokens. On a split every card reads the same chunks, so the smallest card's sets it, and the log names a card that holds it below the first card's |
+| `--prefill N` | chunks of N tokens (`32768`, say), halved until each card's pool can lend them - only a route's experts and the spares must stay; `0` = token by token. With 96 GB of RAM or more the setup points to `32768`: 32768-token chunks read prompts 21-35% faster in Strata's community benchmarks |
+
+Measured with a 137 GB community 3.5-bit quant of GLM-5.3-Flash (Q3_K/Q2_K experts; not one of the setup's downloads) - prompts in tokens/s, decode the same in every row:
+
+| Setup | 7.8K | 8.4K | 14.8K | 26.6K |
+| --- | --- | --- | --- | --- |
+| RTX 3090, `--prefill auto` (8192-token chunks) | 482 | 466 | 532 | 491 |
+| RTX 3090, `--prefill 32768` | 473 | 529 | 764 | 970 |
+| RTX 3090 + RTX 5060 Ti, `--prefill auto` (8192) | 430 | 501 | 648 | 727 |
+
+One card streams nearly every expert over PCIe for each chunk, so fewer, larger chunks pay off. On a split, a prompt
+that fits one chunk runs the cards one after the other, while two or more keep both busy (31232-token chunks on the
+two cards read the 14.8K prompt at 613 tok/s, against 648 at 8192).
 
 ## Something went wrong?
 

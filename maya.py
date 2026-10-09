@@ -1240,7 +1240,10 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vi
                  choice: tuple | None = None) -> Path:
     step(8, "the configuration and the start script")
     port = a.port or 8080
-    cfg = {"exe": str(EXE), "args": ["--glm-pack", str(pack), "--max-context", str(ctx)], "cwd": str(ROOT),
+    # --prefill auto (as Strata's setup writes it): the engine picks its prompt chunk - the largest its expert pool
+    # can lend, up to 8192; a number (`32768`) sets the chunk itself
+    cfg = {"exe": str(EXE), "args": ["--glm-pack", str(pack), "--max-context", str(ctx), "--prefill", "auto"],
+           "cwd": str(ROOT),
            "tokenizer": str(pack / "tokenizer"), "model_name": MODEL_NAME, "gpu": [g["index"] for g in pc["gpus"]],
            "sampling": dict(SAMPLING), "reasoning_effort": EFFORT, "lib_dirs": meta.get("lib_dirs") or [],
            "port": port}
@@ -1284,6 +1287,12 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vi
     cfg_path = ROOT / f"maya-{quant.lower()}{suffix}.json"
     cfg["log"] = str(cfg_path.with_suffix(".log"))
     local = choice[1] if choice and choice[0] == "local" else None   # (choose_model's answer)
+    if cfg_path.exists():
+        kept = keep_args(read_json(cfg_path).get("args") or [], cfg["args"], ("--prefill",))
+        if kept:
+            ok("kept from the config before: " + ", ".join(kept))
+    for line in prefill_tips(cfg["args"], mem_gb()[0]):
+        ok(line)
     gguf_dir = local.parent if local else Path(a.gguf_dir).expanduser().resolve() if a.gguf_dir else None
     cfg["installer"] = {"models_dir": str(models), "quant": quant, "gguf": str(local) if local else None,
                         "gguf_dir": str(gguf_dir) if gguf_dir else None, "written": time.strftime("%Y-%m-%d %H:%M")}
@@ -1299,6 +1308,40 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vi
     ok(f"config: {cfg_path}")
     ok(f"start script: {write_run_script(cfg_path, port)}")
     return cfg_path
+
+
+PREFILL_BIG_RAM_GB = 96        # Strata's bench #433 #440 #834 #669: 32768-token chunks +21-35% at 96 GB, ~3x slower at 32 GB
+PREFILL_RISK_RAM_GB = 64       # below this a chunk set above 8192 is warned about
+
+
+def prefill_tips(args: list, ram: float) -> list:
+    """Strata's --prefill recommendations (its setup's bench tips): text only, nothing in the config changes."""
+    prefill = args[args.index("--prefill") + 1] if "--prefill" in args[:-1] else None
+    if prefill is not None and prefill.isdigit() and int(prefill) > 8192 and ram < PREFILL_RISK_RAM_GB:
+        return [f"warning: --prefill {prefill} on {ram:.0f} GB of RAM: in Strata's community benchmarks 32768-token "
+                "chunks ran ~3x slower than --prefill auto with 32 GB (#834 #669); they paid off (+21-35%) with 96 GB"]
+    if prefill == "auto" and ram >= PREFILL_BIG_RAM_GB:
+        return [f"tip: with {ram:.0f} GB of RAM, --prefill 32768 in the config's args read prompts 21-35% faster in "
+                "Strata's community benchmarks (#433 #440 #834); not set, nothing changes"]
+    return []
+
+
+def keep_args(old: list, new: list, flags: tuple) -> list:
+    """The engine arguments `flags` as the old config had them (edited by hand, or written by an earlier setup):
+    their values replace the new ones, or are added.  `new` is changed in place; what was kept is returned."""
+    kept = []
+    for flag in flags:
+        if flag not in old[:-1]:
+            continue
+        v = old[old.index(flag) + 1]
+        if flag in new[:-1]:
+            if new[new.index(flag) + 1] == v:
+                continue
+            new[new.index(flag) + 1] = v
+        else:
+            new += [flag, v]
+        kept.append(f"{flag} {v}")
+    return kept
 
 
 # ------------------------------------------------------------------------------------------------ calibration

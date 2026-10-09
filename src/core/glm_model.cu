@@ -17,6 +17,7 @@
 // lands), so a batched call is literally the same per-token steps as single-token calls - which
 // is what glm_model_test's batched-vs-streamed equivalence pins.
 #include "strata/core/glm_model.hpp"
+#include "glm_fast_state.hpp"
 
 #include "strata/kernels/glm_dsa.hpp"
 #include "strata/kernels/glm_ffn.hpp"
@@ -37,6 +38,11 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <tuple>
+#include <thread>
+#include <map>
+#include <atomic>
+#include <functional>
 #include <sstream>
 #include <memory>
 #ifdef _WIN32
@@ -53,6 +59,100 @@
 #include <cstdlib>
 #include <cstring>
 #include <numeric>
+
+// the GGUF shards a pack serves from, in order: native_experts.txt's header names shard 1 (they sit NEXT TO the pack;
+// the siblings follow its -NNNNN-of-MMMMM pattern)
+static bool pack_shard_names(const std::string& pack_dir, std::vector<std::string>& shard_names, std::string& err) {
+    shard_names.clear();
+    std::ifstream ne(pack_dir + "/native_experts.txt");
+    if (!ne) {
+        err = "pack: cannot open " + pack_dir + "/native_experts.txt";
+        return false;
+    }
+    std::string line;
+    while (std::getline(ne, line)) {
+        if (line.rfind("#", 0) == 0 && line.find("absolute offsets in ") != std::string::npos) {
+            const std::string key = "absolute offsets in ";
+            const size_t a = line.find(key) + key.size();
+            const size_t b = line.find(',', a);
+            shard_names.push_back(line.substr(a, b == std::string::npos ? line.size() : b - a));
+        }
+    }
+    if (shard_names.empty()) {
+        err = "pack: native_experts.txt names no source shards";
+        return false;
+    }
+    // the header names only shard 1; the siblings follow the -NNNNN-of-MMMMM pattern
+    const std::string first = shard_names[0];
+    const size_t of = first.find("-of-");
+    if (of != std::string::npos) {
+        const size_t sdash = first.rfind("-", of - 1);   // the dash that starts this shard's number
+        const std::string stem = first.substr(0, sdash);
+        const int total = std::atoi(first.c_str() + of + 4);
+        shard_names.clear();
+        for (int i = 1; i <= total; ++i) {
+            char buf[512];
+            std::snprintf(buf, sizeof(buf), "%s-%05d-of-%05d.gguf", stem.c_str(), i, total);
+            shard_names.push_back(buf);
+        }
+    }
+    return true;
+}
+
+// a dense row's VRAM bytes as load_pack uploads it (0: not uploaded), and how: the fast path keeps the pack's big BF16
+// rows (kind 4) BF16 and the natively served rows (kind 0) quantized, dequantizes the rest to F32, and leaves
+// token_embd on the host (the embedding row is dequantized there from the shard mapping)
+static uint64_t pack_row_vram(const std::string& name, const std::string& kind, const strata::TensorInfo* t, bool fast,
+                              std::string* how = nullptr) {
+    if (fast && name == "token_embd.weight") return 0;
+    if (fast && kind == "4" && t->elements() >= 65536) {
+        if (how) *how = " bf16";
+        return ((uint64_t) t->elements() * 2 + 255u) & ~(uint64_t) 255u;
+    }
+    if (kind != "0" || name == "attn_k_b.weight" || name == "attn_v_b.weight") {
+        if (how) *how = " f32";
+        return ((uint64_t) t->elements() * 4 + 255u) & ~(uint64_t) 255u;
+    }
+    if (how) *how = " q" + std::to_string((int) t->type);
+    return (strata::kernels::native_mmvq_weight_bytes(t->type, (int) t->shape[0], (int) t->shape[1]) + 255u) &
+           ~(uint64_t) 255u;
+}
+
+// the NextN draft block's dense tensors (blk.<n_layers>.*) as load_mtp keeps them: natively served, BF16, F32
+static const char* const kMtpRaw[] = {"attn_q_a.weight", "attn_q_b.weight", "attn_kv_a_mqa.weight",
+                                      "attn_output.weight", "ffn_gate_shexp.weight", "ffn_up_shexp.weight",
+                                      "ffn_down_shexp.weight", "nextn.eh_proj.weight"};
+static const char* const kMtpB16[] = {"indexer.attn_k.weight", "indexer_compressor_gate.weight",
+                                      "indexer.attn_q_b.weight", "indexer.proj.weight", "ffn_gate_inp.weight",
+                                      "attn_k_b.weight", "attn_v_b.weight"};
+static const char* const kMtpF32[] = {"attn_norm.weight", "ffn_norm.weight", "attn_q_a_norm.weight",
+                                      "attn_kv_a_norm.weight", "indexer.k_norm.weight", "indexer.k_norm.bias",
+                                      "indexer_compressor_ape.weight", "exp_probs_b.bias", "nextn.enorm.weight",
+                                      "nextn.hnorm.weight", "nextn.shared_head_norm.weight"};
+
+// ... and the VRAM they take
+static bool mtp_dense_vram(const std::function<const strata::TensorInfo*(const std::string&)>& find, int il,
+                           uint64_t& bytes, std::string& err) {
+    const std::string P = "blk." + std::to_string(il) + ".";
+    bytes = 0;
+    for (const char* n : kMtpRaw) {
+        const strata::TensorInfo* t = find(P + n);
+        if (t == nullptr) { err = "mtp: " + P + n + " missing"; return false; }
+        bytes += (strata::kernels::native_mmvq_weight_bytes(t->type, (int) t->shape[0], (int) t->shape[1]) + 255u) &
+                 ~(uint64_t) 255u;
+    }
+    for (const char* n : kMtpB16) {
+        const strata::TensorInfo* t = find(P + n);
+        if (t == nullptr) { err = "mtp: " + P + n + " missing"; return false; }
+        bytes += ((uint64_t) t->elements() * 2 + 255u) & ~(uint64_t) 255u;
+    }
+    for (const char* n : kMtpF32) {
+        const strata::TensorInfo* t = find(P + n);
+        if (t == nullptr) { err = "mtp: " + P + n + " missing"; return false; }
+        bytes += ((uint64_t) t->elements() * 4 + 255u) & ~(uint64_t) 255u;
+    }
+    return true;
+}
 
 namespace strata::core {
 namespace {
@@ -630,6 +730,8 @@ bool Glm5Model::load_pack_split(const std::string& pack_dir, int64_t max_ctx, co
             m = prev->split_next_.get();
         }
         m->n_parts_ = n;
+        m->part_ = i;
+        m->split_devs_ = devs;
         if (!m->load_pack(pack_dir, max_ctx, err, devs[(size_t) i], l0, l1)) {
             if (prev != nullptr) prev->split_next_.reset();
             return false;
@@ -637,6 +739,27 @@ bool Glm5Model::load_pack_split(const std::string& pack_dir, int64_t max_ctx, co
         where += (i ? ", [" : "[") + std::to_string(l0) + ", " + std::to_string(i + 1 < n ? l1 : g_.n_layers) +
                  ") on CUDA" + std::to_string(devs[(size_t) i]);
         prev = m;
+    }
+    // the chunks are the smallest part's (as Strata's split): the others keep their pinned staging to that, and a
+    // later card that holds the first one's chunk down is named (Strata #448: a small card in a split caps every
+    // stage's chunk - prompts read slower than on the first card alone)
+    int tmin = 0;
+    for (Glm5Model* p = this; p != nullptr; p = p->split_next_.get())
+        if (p->prefill_chunk() > 0) tmin = tmin == 0 ? p->prefill_chunk() : std::min(tmin, p->prefill_chunk());
+    if (tmin > 0) {
+        const int alone = prefill_chunk();
+        for (Glm5Model* p = split_next_.get(); p != nullptr; p = p->split_next_.get())
+            if (alone > tmin && p->prefill_chunk() == tmin) {
+                cudaDeviceProp prop{};
+                if (cudaGetDeviceProperties(&prop, p->dev_) != cudaSuccess) {
+                    cudaGetLastError();
+                    prop.name[0] = 0;
+                }
+                std::fprintf(stderr, "glm prefill: WARNING: prompt chunk %d tokens, not %d: CUDA%d (%s) can lend only "
+                                     "that much of its expert pool - prompts read slower than on CUDA%d alone\n",
+                             tmin, alone, p->dev_, prop.name, dev_);
+            }
+        for (Glm5Model* p = this; p != nullptr; p = p->split_next_.get()) p->prefill_cap(tmin, "the split's smallest");
     }
     cudaSetDevice(dev_);
     std::fprintf(stderr, "glm split: layers %s (one 64 KB host hop per boundary per token)\n", where.c_str());
@@ -692,6 +815,402 @@ static std::vector<int> glm_auto_bounds(const std::string& pack_dir, int n_layer
     return bounds;
 }
 
+// the host's RAM read speed with every CPU reading at once (bytes/s), each thread's slice first touched by that
+// thread: what the CPU lanes compute the experts VRAM does not hold from - the split search's price of a miss
+static double host_read_bps() {
+    const int T = (int) std::max(1u, std::thread::hardware_concurrency());
+    const size_t words = ((size_t) 512 << 20) / sizeof(uint64_t);
+    std::unique_ptr<uint64_t[]> buf(new (std::nothrow) uint64_t[words]);
+    if (!buf) return 0.0;
+    constexpr int kReps = 4;   // the first pass touches the pages, the rest are timed
+    std::atomic<int> phase{0}, arrived{0};
+    std::atomic<uint64_t> sink{0};
+    std::vector<std::thread> th;
+    for (int i = 0; i < T; ++i)
+        th.emplace_back([&, i] {
+            const size_t a = words * (size_t) i / (size_t) T, b = words * (size_t) (i + 1) / (size_t) T;
+            for (int ph = 1; ph <= kReps; ++ph) {
+                while (phase.load(std::memory_order_acquire) < ph) std::this_thread::yield();
+                uint64_t sum = 0;
+                if (ph == 1)
+                    for (size_t j = a; j < b; ++j) buf[j] = j;
+                else
+                    for (size_t j = a; j < b; ++j) sum += buf[j];
+                sink.fetch_add(sum, std::memory_order_relaxed);
+                arrived.fetch_add(1, std::memory_order_acq_rel);
+            }
+        });
+    double best = 0.0;
+    for (int ph = 1; ph <= kReps; ++ph) {
+        arrived.store(0);
+        const auto t0 = std::chrono::steady_clock::now();
+        phase.store(ph, std::memory_order_release);
+        while (arrived.load(std::memory_order_acquire) < T) std::this_thread::yield();
+        const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        if (ph > 1 && sec > 0) best = std::max(best, (double) (words * sizeof(uint64_t)) / sec);
+    }
+    for (auto& t : th) t.join();
+    return sink.load() == 1 ? best + 1.0 : best;   // (the sum keeps the reads)
+}
+
+// ---------------------------------------------------------------- --layer-split auto: Strata's split search
+// Every placement of the layers on the GPUs is priced by the decode time it predicts, and the cheapest one that can
+// start is taken - Strata's `--layer-split auto` (src/program/generate.cpp), with this engine's own measured terms
+// where Strata's are fits to its model:
+//   - a part's room for experts: its free VRAM less its layers' dense weights and state at the context (index.txt and
+//     the GGUF directory, as load_pack sizes them), the head and the draft block on the last part, its scratch, and
+//     the reserve fast_setup keeps (pool_avail); the pool gives every layer the same number of slots;
+//   - the experts those slots hold: each layer's most routed, their share of its routes read off this machine's usage
+//     counts (expert_usage.txt; the pack's expert_counts.txt without them; Strata's coverage curve 1 - (1 - f)^3,
+//     STRATA_SPLIT_COVER_B, without either - that is what Strata has to assume, its profile carries only a ranking);
+//   - a layer's time on its card: the bytes it reads (its dense weights and its VRAM experts' share of the routed
+//     ones) over the card's memory bandwidth - Strata scales a fitted per-layer time by SMs x clock; and each miss:
+//     the expert's bytes over the parts' share of the host's RAM read speed, measured here - the CPU lane computes
+//     the experts VRAM does not hold (Strata prices a fitted miss over the PCIe link);
+//   - a token: the parts' times added (Strata), the slowest part breaking a tie - except the pipelined decode of a
+//     two-part split with the draft block, where the GPUs work on consecutive tokens: there a token costs the slower
+//     part (the draft on the last one), and the sum breaks the tie;
+//   - the startability gate (Strata #1094): every part keeps its pool's floor and can lend a 512-token prompt chunk.
+// Two to four GPUs try every placement (memoised per part and range, as Strata's four-way search); more keep the
+// proportional split (glm_auto_bounds).  STRATA_GLM_SPLIT_LOG=1 prints every placement's prediction.
+static std::vector<int> glm_search_bounds(const std::string& pack_dir, int64_t max_ctx, const std::vector<int>& devs) {
+    std::string err;
+    std::vector<std::string> names;
+    if (!pack_shard_names(pack_dir, names, err)) return {};
+    std::vector<std::unique_ptr<strata::GgufFile>> gfs;
+    Glm5Geometry g;
+    try {
+        for (const auto& nm : names) gfs.emplace_back(new strata::GgufFile(pack_dir + "/../" + nm));
+        if (!Glm5Geometry::from_gguf(*gfs[0], g, err)) return {};
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "glm split auto: %s - the split by free VRAM instead\n", e.what());
+        return {};
+    }
+    const int L = g.n_layers, n = (int) devs.size();
+    if (n < 2 || L < n) return {};
+    const bool fast = getenv("STRATA_GLM_SLOW") == nullptr;
+    const auto find = [&](const std::string& nm) -> const strata::TensorInfo* {
+        for (const auto& gf : gfs)
+            if (const strata::TensorInfo* t = gf->find(nm)) return t;
+        return nullptr;
+    };
+    const auto tensor_bytes = [](const strata::TensorInfo* t) {
+        return (double) ggml_row_size((ggml_type) t->type, t->shape[0]) * (double) (t->elements() / t->shape[0]);
+    };
+    // the dense weights: per layer, the rows every part loads, the head's (the last part) and token_embd (the first,
+    // off the fast path)
+    std::vector<double> dense((size_t) L + 1, 0.0);
+    double common = 0, head = 0, embd = 0;
+    {
+        std::ifstream ix(pack_dir + "/index.txt");
+        std::string line;
+        while (std::getline(ix, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            std::istringstream ss(line);
+            std::string nm, served, kind;
+            ss >> nm >> served >> kind;
+            const strata::TensorInfo* t = find(nm);
+            if (t == nullptr) continue;
+            const double b = (double) pack_row_vram(nm, kind, t, fast);
+            if (nm.rfind("blk.", 0) == 0) {
+                const int il = std::atoi(nm.c_str() + 4);
+                if (il >= 0 && il < L) dense[(size_t) il] += b;
+            } else if (nm == "output.weight" || nm == "output_norm.weight") {
+                head += b;
+            } else if (nm == "token_embd.weight") {
+                embd += b;
+            } else {
+                common += b;
+            }
+        }
+    }
+    // the state at the context, as load_pack lays it out
+    const double max_pools = (double) (max_ctx / g.idx_kpool);
+    const double lat = fast ? (double) g.kv_lora * (double) max_ctx / 2 : (double) g.kv_lora * (double) max_ctx;
+    const double dsa_state = 4.0 * (lat + 2.0 * g.idx_key * (double) max_ctx + (double) g.idx_key * max_pools);
+    const double kda_state = 4.0 * ((double) g.d_inner() * g.kda_head_dim + 3.0 * g.d_inner() * (g.d_conv - 1));
+    // the experts: a layer's blob and its VRAM slot's stride (native_experts.txt)
+    std::vector<double> blob((size_t) L + 1, 0.0), stride((size_t) L + 1, 0.0);
+    {
+        std::ifstream ne(pack_dir + "/native_experts.txt");
+        std::string line;
+        while (std::getline(ne, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            std::istringstream ss(line);
+            long long il = -1, gu = 0, dt = 0, off = 0, b = 0;
+            if (!(ss >> il >> gu >> dt >> off >> b) || il < 0 || il >= L) continue;
+            blob[(size_t) il] = (double) b;
+            stride[(size_t) il] = (double) glmfast::expert_stride((size_t) b, (int) gu, (int) dt);
+        }
+    }
+    // the NextN draft block: the last part of a two-part split carries it (load_pack), from the model's GGUF or
+    // STRATA_GLM_MTP_GGUF's; the pipelined decode drafts with it once a token
+    bool mtp = false;
+    double mtp_dense = 0;
+    std::unique_ptr<strata::GgufFile> extra;
+    if (fast && n == 2 && getenv("STRATA_GLM_NO_MTP") == nullptr) {
+        const std::string P = "blk." + std::to_string(L) + ".";
+        const char* mg = getenv("STRATA_GLM_MTP_GGUF");
+        if (find(P + "nextn.eh_proj.weight") == nullptr && mg != nullptr && mg[0] != '\0') try {
+                extra.reset(new strata::GgufFile(mg));
+            } catch (const std::exception&) {
+                extra.reset();
+            }
+        const auto findm = [&](const std::string& nm) -> const strata::TensorInfo* {
+            if (const strata::TensorInfo* t = find(nm)) return t;
+            return extra ? extra->find(nm) : nullptr;
+        };
+        uint64_t b = 0;
+        std::string e2;
+        const strata::TensorInfo* tg = findm(P + "ffn_gate_exps.weight");
+        const strata::TensorInfo* tu = findm(P + "ffn_up_exps.weight");
+        const strata::TensorInfo* td = findm(P + "ffn_down_exps.weight");
+        if ((g.nextn > 0 || extra) && findm(P + "nextn.eh_proj.weight") != nullptr && tg && tu && td &&
+            mtp_dense_vram(findm, L, b, e2)) {
+            blob[(size_t) L] = (tensor_bytes(tg) + tensor_bytes(tu) + tensor_bytes(td)) / g.n_expert;
+            stride[(size_t) L] = (double) glmfast::expert_stride((size_t) blob[(size_t) L], (int) tg->type, (int) td->type);
+            mtp_dense = (double) b;
+            mtp = true;
+        }
+    }
+    const bool pipelined = n == 2 && mtp && getenv("STRATA_GLM_NO_SPEC") == nullptr;
+    // each layer's routes per expert: this machine's usage, else the pack's routing profile
+    std::vector<std::vector<double>> cnt((size_t) L + 1);
+    {
+        const char* u = getenv("STRATA_GLM_USAGE");
+        const std::string up = u != nullptr ? (std::string(u) == "0" ? std::string() : std::string(u))
+                                            : pack_dir + "/expert_usage.txt";
+        std::ifstream uf(up);
+        std::string line;
+        while (!up.empty() && std::getline(uf, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            std::istringstream ss(line);
+            int il = -1;
+            ss >> il;
+            if (il < 0 || il > L) continue;
+            std::string kv;
+            cnt[(size_t) il].assign((size_t) g.n_expert, 0.0);
+            while (ss >> kv) {
+                const size_t c = kv.find(':');
+                const int e = c == std::string::npos ? -1 : std::atoi(kv.c_str());
+                if (e >= 0 && e < g.n_expert) cnt[(size_t) il][(size_t) e] = std::atof(kv.c_str() + c + 1);
+            }
+        }
+        std::ifstream cf(pack_dir + "/expert_counts.txt");
+        while (std::getline(cf, line)) {
+            std::istringstream ss(line);
+            int il = -1;
+            ss >> il;
+            if (il < 0 || il > L || !cnt[(size_t) il].empty()) continue;
+            double c = 0;
+            while (ss >> c) cnt[(size_t) il].push_back(c);
+        }
+    }
+    // cover[l][s]: the share of layer l's routes its s most routed experts take
+    std::vector<std::vector<double>> cover((size_t) L + 1);
+    for (int l = 0; l <= L; ++l) {
+        std::vector<double> c = cnt[(size_t) l];
+        const double tot = std::accumulate(c.begin(), c.end(), 0.0);
+        if (tot <= 0) continue;
+        std::sort(c.rbegin(), c.rend());
+        cover[(size_t) l].assign(c.size() + 1, 0.0);
+        for (size_t i = 0; i < c.size(); ++i) cover[(size_t) l][i + 1] = cover[(size_t) l][i] + c[i] / tot;
+    }
+    const double cover_b = getenv("STRATA_SPLIT_COVER_B") ? std::atof(getenv("STRATA_SPLIT_COVER_B")) : 3.0;
+    const auto held_share = [&](int l, int64_t s) -> double {
+        s = std::clamp<int64_t>(s, 0, g.n_expert);
+        const auto& cv = cover[(size_t) l];
+        if (!cv.empty()) return cv[(size_t) std::min<int64_t>(s, (int64_t) cv.size() - 1)];
+        return 1.0 - std::pow(1.0 - (double) s / g.n_expert, cover_b);
+    };
+    // the cards: free VRAM, memory bandwidth (the bus: 2 x memory clock x width); the host's RAM read speed
+    struct Card {
+        int dev;
+        double free, total, bw;
+        std::string name;
+    };
+    std::vector<Card> cards;
+    int cur = 0;
+    cudaGetDevice(&cur);
+    for (int d : devs) {
+        Card c{d, 0, 0, 0, ""};
+        size_t fr = 0, tot = 0;
+        cudaSetDevice(d);
+        if (cudaMemGetInfo(&fr, &tot) != cudaSuccess) cudaGetLastError();
+        int khz = 0, bits = 0;
+        if (cudaDeviceGetAttribute(&khz, cudaDevAttrMemoryClockRate, d) != cudaSuccess) khz = 0;
+        if (cudaDeviceGetAttribute(&bits, cudaDevAttrGlobalMemoryBusWidth, d) != cudaSuccess) bits = 0;
+        cudaGetLastError();
+        cudaDeviceProp prop{};
+        if (cudaGetDeviceProperties(&prop, d) == cudaSuccess) c.name = prop.name;
+        cudaGetLastError();
+        c.free = (double) fr;
+        c.total = (double) tot;
+        c.bw = 2.0 * (double) khz * 1e3 * (double) bits / 8.0;
+        cards.push_back(c);
+    }
+    cudaSetDevice(cur);
+    for (auto& c : cards)
+        if (c.bw <= 0) c.bw = 1e11;   // (no reading: every card the same, and the misses decide)
+    const double host_bps = host_read_bps();
+    const double miss_bps = std::max(1e9, (host_bps > 0 ? host_bps : 2e10) / n);   // each part's lane, all at once
+    double max_stride = 0;
+    for (double st : stride) max_stride = std::max(max_stride, st);
+    const double fixed = 8.0 * max_stride + (double) (256u << 20);   // the scratch slots and the activations
+    constexpr int kSparesHere = 3;   // gf::kSpares: slots that hold no resident expert
+    const int64_t keep = g.n_exp_used + kSparesHere + 2;
+    const auto moe_layer = [&](int l) { return l >= g.dense_lead && blob[(size_t) l] > 0; };
+    struct Eval {
+        double ms = 0, routes = 0, hits = 0;
+        int64_t per = 0;
+        bool ok = false;
+    };
+    // part i running layers [lb, le), memoised (a part's fill and time depend on its own range and card only)
+    std::map<std::tuple<int, int, int>, Eval> memo;
+    const auto stage = [&](int i, int lb, int le) -> Eval {
+        const auto key = std::make_tuple(i, lb, le);
+        if (const auto it = memo.find(key); it != memo.end()) return it->second;
+        const bool last = i == n - 1;
+        const Card& c = cards[(size_t) i];
+        double used = common + fixed + 4.0 * 2 * g.hc * g.n_embd + (i == 0 ? embd : 0.0);
+        double bsum = 0, ssum = 0, smax = 0;
+        bool kda = false, dsa = false, dense_ffn = false, moe = false;
+        for (int l = lb; l < le; ++l) {
+            used += dense[(size_t) l] + (g.is_recr(l) ? kda_state : dsa_state);
+            (g.is_recr(l) ? kda : dsa) = true;
+            if (moe_layer(l)) {
+                bsum += blob[(size_t) l];
+                ssum += stride[(size_t) l];
+                smax = std::max(smax, stride[(size_t) l]);
+                moe = true;
+            } else {
+                dense_ffn = true;
+            }
+        }
+        if (last) {
+            used += head;
+            if (mtp) {
+                used += mtp_dense + dsa_state;
+                bsum += blob[(size_t) L];
+                ssum += stride[(size_t) L];
+                smax = std::max(smax, stride[(size_t) L]);
+                dsa = true;
+            }
+        }
+        const double room =
+            c.free > used ? (double) Glm5Model::pool_avail((size_t) (c.free - used), (size_t) c.total) : 0.0;
+        Eval ev;
+        ev.per = bsum > 0 ? std::min<int64_t>(g.n_expert, (int64_t) (room / bsum)) : 0;
+        while (ev.per > 0 && (double) ev.per * ssum > room) --ev.per;
+        // startable: the pool's floor, and a 512-token prompt chunk lent at --prefill auto's cap
+        ev.ok = ssum == 0 || ev.per >= keep;
+        if (ev.ok && ssum > 0) {
+            const double need = (double) glm_prefill_lend_bytes(g, 512, kda, dsa, dense_ffn, moe, last && mtp, max_ctx,
+                                                                (size_t) smax);
+            const int64_t k = (int64_t) std::ceil(need / ssum);
+            ev.ok = k + keep <= ev.per && k * 100 <= 90 * ev.per;
+        }
+        // a token on this part: each layer's reads over the card's bandwidth, its misses over the lane's share
+        const int64_t held = std::max<int64_t>(0, ev.per - kSparesHere);
+        const auto layer_ms = [&](int l, double dense_b) {
+            double gpu = dense_b, cpu = 0;
+            if (l == L || moe_layer(l)) {
+                const double h = g.n_exp_used * held_share(l, held);
+                gpu += h * blob[(size_t) l];
+                cpu = (g.n_exp_used - h) * blob[(size_t) l];
+                ev.hits += h;
+                ev.routes += g.n_exp_used;
+            }
+            return 1e3 * (gpu / c.bw + cpu / miss_bps);
+        };
+        for (int l = lb; l < le; ++l) ev.ms += layer_ms(l, dense[(size_t) l]);
+        if (last) {
+            ev.ms += 1e3 * head / c.bw;
+            if (pipelined) ev.ms += layer_ms(L, mtp_dense);   // the draft, once a token
+        }
+        memo[key] = ev;
+        return ev;
+    };
+    // a placement: {objective, tie-break, startable}; parts' times in `ms`
+    const auto price = [&](const std::vector<int>& b, std::vector<Eval>& ev, double& obj, double& tie) -> bool {
+        ev.clear();
+        double sum = 0, slow = 0;
+        bool ok = true;
+        for (int i = 0; i < n; ++i) {
+            const int lb = i == 0 ? 0 : b[(size_t) i - 1], le = i + 1 < n ? b[(size_t) i] : L;
+            ev.push_back(stage(i, lb, le));
+            sum += ev.back().ms;
+            slow = std::max(slow, ev.back().ms);
+            ok = ok && ev.back().ok;
+        }
+        obj = pipelined ? slow : sum;
+        tie = pipelined ? sum : slow;
+        return ok;
+    };
+    static const bool split_log = getenv("STRATA_GLM_SPLIT_LOG") != nullptr;
+    std::vector<int> best, best_any, b((size_t) n - 1);
+    double best_obj = 1e30, best_tie = 1e30, any_obj = 1e30, any_tie = 1e30;
+    const double eps = 1e-6;
+    std::vector<Eval> ev;
+    const auto consider = [&]() {
+        double obj = 0, tie = 0;
+        const bool ok = price(b, ev, obj, tie);
+        if (split_log) {
+            std::string s;
+            for (int k : b) s += (s.empty() ? "" : ",") + std::to_string(k);
+            std::fprintf(stderr, "glm split auto: %s -> %.2f ms%s\n", s.c_str(), obj, ok ? "" : " (cannot start)");
+        }
+        const auto better = [&](double o, double t, double bo, double bt) {
+            return o < bo - eps || (o <= bo + eps && t < bt - eps);
+        };
+        if (better(obj, tie, any_obj, any_tie)) { best_any = b; any_obj = obj; any_tie = tie; }
+        if (ok && better(obj, tie, best_obj, best_tie)) { best = b; best_obj = obj; best_tie = tie; }
+    };
+    if (n == 2) {
+        for (int k = 1; k < L; ++k) { b = {k}; consider(); }
+    } else if (n == 3) {
+        for (int k1 = 1; k1 + 1 < L; ++k1)
+            for (int k2 = k1 + 1; k2 < L; ++k2) { b = {k1, k2}; consider(); }
+    } else if (n == 4) {
+        for (int k1 = 1; k1 + 2 < L; ++k1)
+            for (int k2 = k1 + 1; k2 + 1 < L; ++k2)
+                for (int k3 = k2 + 1; k3 < L; ++k3) { b = {k1, k2, k3}; consider(); }
+    } else {
+        return {};
+    }
+    for (const auto& c : cards)
+        std::fprintf(stderr, "glm split auto: CUDA%d (%s) memory %.0f GB/s, %.2f GB free\n", c.dev, c.name.c_str(),
+                     c.bw / 1e9, c.free / 1073741824.0);
+    std::fprintf(stderr, "glm split auto: the host reads RAM at %.0f GB/s (a part's CPU lane: %.0f); the routes from %s; "
+                         "%s\n", host_bps / 1e9, miss_bps / 1e9,
+                 cover[3].empty() ? "Strata's coverage curve (no usage counts)" : "the usage counts",
+                 pipelined ? "the pipelined decode: a token costs the slower part" : "a token costs the parts added");
+    if (best.empty()) {
+        if (best_any.empty()) return {};
+        std::fprintf(stderr, "glm split auto: WARNING no placement leaves every part its pool's floor and a 512-token "
+                             "prompt chunk - the fastest one anyway (a smaller --max-context leaves more room)\n");
+        best = best_any;
+    }
+    double obj = 0, tie = 0;
+    price(best, ev, obj, tie);
+    std::string where, parts;
+    double hits = 0, routes = 0;
+    for (int i = 0; i < n; ++i) {
+        const int lb = i == 0 ? 0 : best[(size_t) i - 1], le = i + 1 < n ? best[(size_t) i] : L;
+        char buf[160];
+        std::snprintf(buf, sizeof buf, "%s[%d, %d) on CUDA%d", i ? ", " : "", lb, le, cards[(size_t) i].dev);
+        where += buf;
+        std::snprintf(buf, sizeof buf, "%sCUDA%d %.1f ms, %lld slots a layer", i ? " | " : "", cards[(size_t) i].dev,
+                      ev[(size_t) i].ms, (long long) ev[(size_t) i].per);
+        parts += buf;
+        hits += ev[(size_t) i].hits;
+        routes += ev[(size_t) i].routes;
+    }
+    std::fprintf(stderr, "glm split auto: layers %s - a token %.1f ms predicted (%s), %.0f%% of the routed experts in "
+                         "VRAM\n", where.c_str(), obj, parts.c_str(), routes > 0 ? 100.0 * hits / routes : 0.0);
+    return best;
+}
+
 bool Glm5Model::load_pack_env(const std::string& pack_dir, int64_t max_ctx, std::string& err,
                               const std::string& layer_split) {
     // the layer split is the DEFAULT on multi-GPU hosts (measured at steady state, 640-token GEN on
@@ -731,17 +1250,18 @@ bool Glm5Model::load_pack_env(const std::string& pack_dir, int64_t max_ctx, std:
         if (devs.empty())
             for (int d = 0; d < std::min(n_dev, (int) kMaxParts); ++d) devs.push_back(d);
         if (devs.size() < 2) return load_pack(pack_dir, max_ctx, err, devs.empty() ? 0 : devs[0]);
-        if (devs.size() == 2) {
-            // the midpoint - plus two layers for the head half when the tail also runs the NextN draft block (the
-            // speculative decode keeps both GPUs busy, so the halves should take equal time per token: 2x V100,
-            // split 22 / 23 / 24 / 25 / 26 -> 36.3 / 36.7 / 40.0 / 37.3 / 39.4 tok/s)
+        if (devs.size() == 2 && getenv("STRATA_GLM_DEVS") == nullptr)
+            if (const char* d1 = getenv("STRATA_GLM_DEV1")) devs[1] = std::atoi(d1);
+        // --layer-split auto: Strata's split search over two to four GPUs; more (or a pack it cannot read) share the
+        // layers by free VRAM - two GPUs at the midpoint, plus two layers for the head half when the tail also runs
+        // the NextN draft block (2x V100, split 22 / 23 / 24 / 25 / 26 -> 36.3 / 36.7 / 40.0 / 37.3 / 39.4 tok/s)
+        if (devs.size() <= 4) bounds = glm_search_bounds(pack_dir, max_ctx, devs);
+        if (bounds.empty() && devs.size() == 2)
             bounds = {g_.n_layers / 2 +
                       (getenv("STRATA_GLM_NO_MTP") == nullptr && getenv("STRATA_GLM_NO_SPEC") == nullptr ? 2 : 0)};
-        } else {
-            bounds = glm_auto_bounds(pack_dir, g_.n_layers, devs);
-        }
+        if (bounds.empty()) bounds = glm_auto_bounds(pack_dir, g_.n_layers, devs);
     }
-    if (devs.size() == 2 && getenv("STRATA_GLM_DEVS") == nullptr)
+    if (devs.size() == 2 && getenv("STRATA_GLM_DEVS") == nullptr && !spec.empty() && spec != "auto")
         if (const char* d1 = getenv("STRATA_GLM_DEV1")) devs[1] = std::atoi(d1);
     bool ok = devs.size() == bounds.size() + 1;
     for (size_t i = 0; ok && i < bounds.size(); ++i)
@@ -1531,40 +2051,7 @@ bool strata::core::Glm5Model::load_pack(const std::string& pack_dir, int64_t max
     cudaSetDevice(dev_);
     // 1. the shard names come from native_experts.txt's header; the shards sit NEXT TO the pack
     std::vector<std::string> shard_names;
-    {
-        std::ifstream ne(pack_dir + "/native_experts.txt");
-        if (!ne) {
-            err = "pack: cannot open " + pack_dir + "/native_experts.txt";
-            return false;
-        }
-        std::string line;
-        while (std::getline(ne, line)) {
-            if (line.rfind("#", 0) == 0 && line.find("absolute offsets in ") != std::string::npos) {
-                const std::string key = "absolute offsets in ";
-                const size_t a = line.find(key) + key.size();
-                const size_t b = line.find(',', a);
-                shard_names.push_back(line.substr(a, b == std::string::npos ? line.size() : b - a));
-            }
-        }
-        if (shard_names.empty()) {
-            err = "pack: native_experts.txt names no source shards";
-            return false;
-        }
-        // the header names only shard 1; the siblings follow the -NNNNN-of-MMMMM pattern
-        const std::string first = shard_names[0];
-        const size_t of = first.find("-of-");
-        if (of != std::string::npos) {
-            const size_t sdash = first.rfind("-", of - 1);   // the dash that starts this shard's number
-            const std::string stem = first.substr(0, sdash);
-            const int total = std::atoi(first.c_str() + of + 4);
-            shard_names.clear();
-            for (int i = 1; i <= total; ++i) {
-                char buf[512];
-                std::snprintf(buf, sizeof(buf), "%s-%05d-of-%05d.gguf", stem.c_str(), i, total);
-                shard_names.push_back(buf);
-            }
-        }
-    }
+    if (!pack_shard_names(pack_dir, shard_names, err)) return false;
     const std::string dir2 = pack_dir + "/..";   // the shards live beside the pack directory
     strata::GgufFile gguf(dir2 + "/" + shard_names[0]);
     if (!Glm5Geometry::from_gguf(gguf, g_, err)) return false;
@@ -1747,19 +2234,8 @@ bool strata::core::Glm5Model::load_pack(const std::string& pack_dir, int64_t max
             return false;
         }
         if (skip_upload(r)) continue;
-        uint64_t b = 0;
         std::string how;
-        if (keep16(r, t)) {
-            b = ((uint64_t) t->elements() * 2 + 255u) & ~(uint64_t) 255u;
-            how = " bf16";
-        } else if (dequant_at_load(r.name)) {
-            b = ((uint64_t) t->elements() * 4 + 255u) & ~(uint64_t) 255u;
-            how = " f32";
-        } else {
-            b = (strata::kernels::native_mmvq_weight_bytes(t->type, (int) t->shape[0], (int) t->shape[1]) + 255u) &
-                ~(uint64_t) 255u;
-            how = " q" + std::to_string((int) t->type);
-        }
+        const uint64_t b = pack_row_vram(r.name, r.kind, t, fast_mode_, &how);
         bytes += b;
         by_kind[kind_of(r.name.substr(r.name.find('.', 4) + 1)) + how] += b;
     }
@@ -2189,32 +2665,11 @@ bool strata::core::Glm5Model::load_mtp(const std::vector<std::unique_ptr<strata:
     };
     int si = -1;
     if (find(P + "nextn.eh_proj.weight", si) == nullptr) return true;   // a GGUF without the draft block
-    const char* raw_names[] = {"attn_q_a.weight", "attn_q_b.weight", "attn_kv_a_mqa.weight", "attn_output.weight",
-                               "ffn_gate_shexp.weight", "ffn_up_shexp.weight", "ffn_down_shexp.weight",
-                               "nextn.eh_proj.weight"};
-    const char* b16_names[] = {"indexer.attn_k.weight", "indexer_compressor_gate.weight", "indexer.attn_q_b.weight",
-                               "indexer.proj.weight", "ffn_gate_inp.weight", "attn_k_b.weight", "attn_v_b.weight"};
-    const char* f32_names[] = {"attn_norm.weight", "ffn_norm.weight", "attn_q_a_norm.weight", "attn_kv_a_norm.weight",
-                               "indexer.k_norm.weight", "indexer.k_norm.bias", "indexer_compressor_ape.weight",
-                               "exp_probs_b.bias", "nextn.enorm.weight", "nextn.hnorm.weight",
-                               "nextn.shared_head_norm.weight"};
+    const auto& raw_names = kMtpRaw;
+    const auto& b16_names = kMtpB16;
+    const auto& f32_names = kMtpF32;
     uint64_t bytes = 0;
-    for (const char* n : raw_names) {
-        const strata::TensorInfo* t = find(P + n, si);
-        if (t == nullptr) { err = "mtp: " + P + n + " missing"; return false; }
-        bytes += (strata::kernels::native_mmvq_weight_bytes(t->type, (int) t->shape[0], (int) t->shape[1]) + 255u) &
-                 ~(uint64_t) 255u;
-    }
-    for (const char* n : b16_names) {
-        const strata::TensorInfo* t = find(P + n, si);
-        if (t == nullptr) { err = "mtp: " + P + n + " missing"; return false; }
-        bytes += ((uint64_t) t->elements() * 2 + 255u) & ~(uint64_t) 255u;
-    }
-    for (const char* n : f32_names) {
-        const strata::TensorInfo* t = find(P + n, si);
-        if (t == nullptr) { err = "mtp: " + P + n + " missing"; return false; }
-        bytes += ((uint64_t) t->elements() * 4 + 255u) & ~(uint64_t) 255u;
-    }
+    if (!mtp_dense_vram([&](const std::string& n) { return find(n, si); }, il, bytes, err)) return false;
     if (cudaMalloc(&mtp_arena_, bytes) != cudaSuccess) {
         cudaGetLastError();
         err = "mtp: the draft block's weights (" + std::to_string(bytes >> 20) + " MB) did not allocate";

@@ -39,6 +39,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -267,6 +268,12 @@ void blas_ck(cublasStatus_t st, const char* what) {
 
 struct Glm5Model::PrefillState {
     int T = 0;                       // tokens per chunk
+    // --prefill: the chunk and its prestage slots for a lend cap (% of the pool's slots), the cap it was sized with,
+    // whether the measured pinned share may still lower it (prefill_settle), and how it reads in the log
+    std::function<std::pair<int64_t, int>(int64_t)> choose;
+    int64_t lend_pct = 90;
+    bool lend_pct_fixed = false;
+    std::string mode;
     int sub_env = 0;                 // STRATA_GLM_PREFILL_SUB: every sub-batch (0: mixer_sub, the shared expert kSub)
     int sh_sub() const { return sub_env > 0 ? sub_env : kSub; }   // the shared expert's sub-batch
     int max_pools = 0;
@@ -399,10 +406,84 @@ struct Glm5Model::PrefillState {
 
 int Glm5Model::prefill_chunk() const { return pf_ ? pf_->T : 0; }
 
+// --prefill as the engine reads it: STRATA_GLM_PREFILL (generate sets it from the config's args), unset = auto;
+// STRATA_GLM_PREFILL_CHUNK=N (the older knob) is --prefill N
+static std::string prefill_mode() {
+    if (const char* c = getenv("STRATA_GLM_PREFILL_CHUNK"); c != nullptr && c[0]) return c;
+    if (const char* v = getenv("STRATA_GLM_PREFILL"); v != nullptr && v[0]) return v;
+    return "auto";
+}
+
+// a split's chunks are its smallest part's (prefill()): a part set up for longer ones keeps its pinned staging to that
+// (a 24 GB card sized for 32K tokens beside a 16 GB card's 22K would pin ~1.5 GB of hop and embedding rows no chunk
+// uses)
+void Glm5Model::prefill_cap(int T, const char* why) {
+    PrefillState* S = pf_;
+    if (S == nullptr || S->T <= T) return;
+    const size_t E = (size_t) g_.n_embd;
+    const bool hop = S->hop_h != nullptr;
+    cudaSetDevice(dev_);
+    cudaFreeHost(S->emb_h);
+    S->emb_h = nullptr;
+    if (hop) cudaFreeHost(S->hop_h);
+    S->hop_h = nullptr;
+    if (cudaHostAlloc((void**) &S->emb_h, (size_t) T * E * sizeof(float), cudaHostAllocDefault) != cudaSuccess ||
+        (hop && cudaHostAlloc((void**) &S->hop_h, (size_t) 2 * T * 4 * E * sizeof(float), cudaHostAllocDefault) !=
+                    cudaSuccess)) {
+        cudaGetLastError();
+        std::fprintf(stderr, "glm prefill: CUDA%d pinned staging did not allocate - token by token\n", dev_);
+        prefill_destroy();
+        return;
+    }
+    std::fprintf(stderr, "glm prefill: CUDA%d chunks of %d tokens (%s)\n", dev_, T, why);
+    S->T = T;
+}
+
+// Strata's lend cap, settled once the RAM tier exists (prefill_setup sized the chunk with its 90): 90% of the pool's
+// slots when at least 90% of this card's expert bytes are held pinned - in the VRAM pool or the RAM tier, whose copies
+// are DMA - else 85% (the rest comes from the disk through host copies, the limit there: lending more only streams
+// more through them)
+void Glm5Model::prefill_settle(double pinned_share) {
+    PrefillState* S = pf_;
+    if (S == nullptr || S->lend_pct_fixed || pinned_share >= 0.9) return;
+    S->lend_pct = 85;
+    const auto pick = S->choose(S->lend_pct);
+    std::fprintf(stderr, "glm prefill: CUDA%d %.0f%% of the experts' bytes are held pinned: the pool lends at most 85%% "
+                         "of its slots\n", dev_, 100.0 * pinned_share);
+    if (pick.first == 0) {
+        std::fprintf(stderr, "glm prefill: CUDA%d the expert pool can lend no prompt chunk - token by token\n", dev_);
+        prefill_destroy();
+        return;
+    }
+    if (pick.first >= S->T) return;
+    S->NP = std::min(S->NP, pick.second);
+    S->pbuf_bytes = (size_t) S->NP * S->gstride;
+    prefill_cap((int) pick.first, "--prefill auto at 85%");
+}
+
+// the weight scratch the prompt path keeps beside a chunk's rows: {BF16 elements, F32 elements}
+static std::pair<int64_t, int64_t> weight_scratch(const Glm5Geometry& g, bool has_dsa) {
+    const int64_t E = g.n_embd;
+    int64_t w32 = 2 << 20;
+    if (has_dsa)
+        w32 = std::max<int64_t>({w32, (int64_t) g.n_head * g.kv_lora * g.qk_nope, (int64_t) g.n_head * g.v_head * g.kv_lora});
+    int64_t w16 = std::max<int64_t>((int64_t) g.d_inner() * E, (int64_t) 2048 * E);
+#if defined(STRATA_USE_HIP)
+    if (has_dsa)   // the MLA products' FP16 copy of wk_b / wv_b
+        w16 = std::max<int64_t>({w16, (int64_t) g.n_head * g.kv_lora * g.qk_nope, (int64_t) g.n_head * g.v_head * g.kv_lora});
+#endif
+    return {w16, w32};
+}
+static constexpr size_t kPfWorkspace = (size_t) 16 << 20;   // cuBLAS
+
 // ---------------------------------------------------------------- setup
 bool Glm5Model::prefill_setup(std::string& err) {
     (void) err;
     if (getenv("STRATA_GLM_NO_PREFILL") != nullptr) return true;
+    if (prefill_mode() != "auto" && std::atoll(prefill_mode().c_str()) <= 0) {
+        std::fprintf(stderr, "glm prefill: --prefill %s: the prompt runs token by token\n", prefill_mode().c_str());
+        return true;
+    }
     if (!mmq::built()) {
         std::fprintf(stderr, "glm prefill: this build has no MMQ kernels - the prompt runs token by token\n");
         return true;
@@ -469,81 +550,125 @@ bool Glm5Model::prefill_setup(std::string& err) {
 
     // ---- sizes: the chunk T from the budget (per device)
     const int64_t E = g.n_embd;
-    int64_t w32_elems = 2 << 20;
-    if (has_dsa)
-        w32_elems = std::max<int64_t>({w32_elems, (int64_t) g.n_head * g.kv_lora * g.qk_nope,
-                                       (int64_t) g.n_head * g.v_head * g.kv_lora});
-    int64_t w16_elems = std::max<int64_t>((int64_t) g.d_inner() * E, (int64_t) 2048 * E);
-#if defined(STRATA_USE_HIP)
-    if (has_dsa)   // the MLA products' FP16 copy of wk_b / wv_b
-        w16_elems = std::max<int64_t>({w16_elems, (int64_t) g.n_head * g.kv_lora * g.qk_nope,
-                                       (int64_t) g.n_head * g.v_head * g.kv_lora});
-#endif
-    const size_t ws_bytes = (size_t) 16 << 20;
-    const size_t fixed = (size_t) w16_elems * 2 + (size_t) w32_elems * 4 + ws_bytes +
-                         (size_t) PrefillState::NG * PrefillState::GE * gstride + ((size_t) 64 << 20);
-    const auto bytes_for = [&](size_t T) {
-        Carve c;
-        c.take<float>(T * 4 * E);                    // R
-        c.take<float>(T * E);                        // x
-        c.take<uint16_t>(T * E);                     // x16
-        c.take<float>(T * E);                        // mixer
-        c.take<float>(T * E);                        // ffn
-        c.take<float>(T * 4);
-        c.take<float>(T * 4);
-        c.take<float>(T * 16);
-        c.take<float>(T);
-        c.take<float>(T * 24);
-        c.take<int>(T * (size_t) g.n_exp_used);      // iota
-        size_t uni = 0;
-        const size_t ts =
-            std::min<size_t>(T, mixer_sub(T, g, has_kda, has_dsa, has_dense, has_moe, S->max_pools, S->sub_env));
-        if (has_kda) { Carve k; carve_kda(k, ts, g); uni = std::max(uni, k.off); }
-        if (has_dsa) { Carve d; carve_dsa(d, ts, g, S->max_pools); uni = std::max(uni, d.off); }
-        if (has_dense) { Carve d; carve_dense(d, ts, g); uni = std::max(uni, d.off); }
-        if (has_moe) { Carve m; carve_moe(m, T, (size_t) S->sh_sub(), g); uni = std::max(uni, m.off); }
-        return std::make_pair(c.off, uni);
-    };
-    // the budget: two GPUs ~6% of the card, 1-2 GB.  A bigger chunk re-stages the non-resident experts fewer times per
-    // prompt but borrows (evicts) more of the pool: Mercury (32 GB V100s, 16k prompt) 345 tok/s at 2048-token chunks,
-    // 488 at 4096 (with the landing ring and the read-ahead below), 467 at 8192
+    const auto wsc = weight_scratch(g, has_dsa);
+    const int64_t w16_elems = wsc.first, w32_elems = wsc.second;
+    const size_t ws_bytes = kPfWorkspace;
+    // ---- the chunk T, as Strata's --prefill (the config's args; STRATA_GLM_PREFILL, unset = auto).  `auto`: the
+    // largest chunk on the 256-token grid, up to 8192, whose buffers the expert pool fast_setup carves next can lend.
+    // The pool lends at most STRATA_PREFILL_LEND_PCT of its slots - Strata's 90 when at least 90% of the expert bytes
+    // are held pinned (the copies are DMA), 85 when host copies are the limit; that share is known once the RAM tier
+    // exists, so the chunk is sized with 90 here and prefill_settle() takes it down to 85's when the share falls short
+    // - and keeps every layer a route's experts and the spares (fast_setup's floor).  The prestage buffer is Strata's
+    // ring and comes out of the same loan: the chunk is the largest that leaves it whole, else the largest that leaves
+    // it 16 slots, else none.  A number N: chunks of N tokens, halved until the pool can lend them (only the floor
+    // applies - the operator's number).  A split reads in its smallest part's chunk (load_pack_split).
+    // STRATA_GLM_PREFILL_MB=<MB> fixes what may be lent.
+    const std::string mode = prefill_mode();
+    const bool is_auto = mode == "auto";
+    const int64_t ceiling = is_auto ? 8192 : (int64_t) std::atoll(mode.c_str());
+    // the pool to come: `per` slots a layer over the tier layers, as fast_setup sizes it from the same free VRAM
     size_t dev_free = 0, dev_total = 0;
     cudaMemGetInfo(&dev_free, &dev_total);
-    double budget_mb = std::min(2048.0, std::max(1024.0, 0.06 * (double) dev_total / 1048576.0));
-    int T = 8192;   // the largest chunk the budget allows, from here down
-    // one GPU: a chunk streams every expert VRAM does not hold over PCIe (~114 GB on a 24 GB card), so the prompt's
-    // speed is about proportional to the chunk - the borrow capped at 40% of the pool to come (what is free less ~1 GB;
-    // it must leave a route's experts and the spares their main slots), up to 32768 tokens: the windowed MoE output
-    // takes ~40 KB a token instead of ~185, so a 24 GB card's borrow holds ~30K tokens - a prompt that took two chunks
-    // (every expert over PCIe twice) takes one
-    if (n_parts_ == 1) {
-        budget_mb = std::max(1024.0, std::min(8192.0, 0.4 * ((double) dev_free / 1048576.0 - 1024.0)));
-        T = 32768;
+    const size_t avail = pool_avail(dev_free, dev_total);
+    size_t blob_sum = 0, stride_sum = 0;
+    for (int il = l0_; il < lt_; ++il) {
+        const auto& Ly = F->L[(size_t) il];
+        if (!Ly.moe) continue;
+        blob_sum += Ly.blob;
+        stride_sum += glmfast::expert_stride(Ly.blob, Ly.gu_type, Ly.d_type);
     }
-    // a split across more than two GPUs pipelines its chunks through every part: shorter chunks keep more parts busy
-    // (9 GPUs, 8K-token prompts: 512 -> 1150-1210 tok/s, ~1600 -> 880-965) and borrow less of the pool
-    if (n_parts_ > 2) T = 512;
-    if (const char* b = getenv("STRATA_GLM_PREFILL_MB")) budget_mb = std::atof(b);
-    if (const char* c = getenv("STRATA_GLM_PREFILL_CHUNK")) T = std::max(16, std::atoi(c));
-    while (T > 64) {
-        const auto pu = bytes_for((size_t) T);
-        if ((double) (fixed + pu.first + pu.second) <= budget_mb * 1048576.0) break;
-        T -= 64;
+    int64_t per = std::min<int64_t>(g.n_expert, (int64_t) (avail / std::max<size_t>(1, blob_sum)));
+    while (per > 0 && (size_t) per * stride_sum > avail) --per;
+    const int64_t keep = g.n_exp_used + gf::kSpares + 2;
+    const char* pct_env = getenv("STRATA_PREFILL_LEND_PCT");
+    const char* mb_env = getenv("STRATA_GLM_PREFILL_MB");
+    const size_t gbuf = has_moe ? (size_t) PrefillState::NG * PrefillState::GE * gstride : 0;
+    // the prestage buffer (the ring): one GPU (a split's parts hold most of their experts); STRATA_GLM_PRESTAGE=<slots>
+    int ring_max = has_moe && n_parts_ == 1 ? kPreSlots : 0;
+    if (const char* v = getenv("STRATA_GLM_PRESTAGE")) ring_max = has_moe ? std::max(0, std::atoi(v)) : 0;
+    // the chunk and its prestage slots for a lend cap of `pct`% of the pool's slots ({0, 0}: no chunk fits)
+    S->choose = [=, this](int64_t pct) -> std::pair<int64_t, int> {
+        size_t lendable = 0;   // the bytes the pool can lend the prompt path
+        if (mb_env != nullptr) {
+            lendable = (size_t) (std::atof(mb_env) * 1048576.0);
+        } else if (stride_sum == 0) {
+            lendable = avail;
+        } else {
+            int64_t k = std::max<int64_t>(0, per - keep);
+            if (is_auto) k = std::min<int64_t>(k, pct * per / 100);
+            lendable = (size_t) k * stride_sum;
+        }
+        const auto nonring = [&](int64_t T) -> size_t {
+            const auto pu = prefill_bytes_for((size_t) T);
+            Carve c;
+            c.take<uint8_t>(pu.first + pu.second);
+            c.take<uint16_t>((size_t) w16_elems);
+            c.take<float>((size_t) w32_elems);
+            c.take<uint8_t>(ws_bytes);
+            c.take<uint8_t>(gbuf);
+            return c.off;
+        };
+        constexpr int kRingMin = 16;   // a prestage buffer below this is none (prefill_trim_prestage)
+        // the prestage slots chunk T leaves beside its buffers (at most ring_max), -1 when T does not fit at all
+        const auto room = [&](int64_t T) -> int64_t {
+            const size_t nr = nonring(T);
+            if (nr + 256 > lendable) return -1;
+            if (T < kPreMinT || gstride == 0) return ring_max;   // (a chunk this short carves no prestage buffer)
+            return std::min<int64_t>(ring_max, (int64_t) ((lendable - nr - 256) / gstride));
+        };
+        // Strata's biggest_chunk: every test rises with T, so the largest chunk that passes is a bisection on the grid
+        const auto biggest = [&](int64_t floor) -> int64_t {
+            int64_t lo = 1, hi = ceiling / 256, best = 0;
+            while (lo <= hi) {
+                const int64_t mid = lo + (hi - lo) / 2;
+                if (room(mid * 256) >= floor) {
+                    best = mid * 256;
+                    lo = mid + 1;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            return best;
+        };
+        int64_t T = 0;
+        if (is_auto) {
+            T = biggest(ring_max);
+            if (T == 0 && ring_max > kRingMin) T = biggest(kRingMin);
+            if (T == 0) T = biggest(0);
+        } else {
+            for (int64_t c = ceiling; c >= 256; c /= 2)
+                if (room(c) >= 0) {
+                    T = c;
+                    break;
+                }
+            if (T == 0 && ceiling > 0 && ceiling < 256 && room(ceiling) >= 0) T = ceiling;
+        }
+        const int64_t r = T > 0 ? room(T) : 0;
+        return {T, T >= kPreMinT && r >= kRingMin ? (int) r : 0};
+    };
+    S->lend_pct = pct_env != nullptr ? (int64_t) std::atoi(pct_env) : 90;
+    S->lend_pct_fixed = pct_env != nullptr || mb_env != nullptr || !is_auto;
+    S->mode = is_auto ? "auto, up to 8192" : mode;
+    const auto pick = S->choose(S->lend_pct);
+    const int64_t T = pick.first;
+    if (T == 0) {
+        std::fprintf(stderr, "glm prefill: CUDA%d the expert pool (%lld slots a layer) can lend no prompt chunk "
+                             "(--prefill %s) - token by token\n", dev_, (long long) per, mode.c_str());
+        prefill_destroy();
+        return true;
     }
-    S->T = T;
-    const auto pu = bytes_for((size_t) T);
+    if (!is_auto && T != ceiling)
+        std::fprintf(stderr, "glm prefill: CUDA%d prompt chunk %lld -> %lld tokens so its buffers fit in the expert "
+                             "pool\n", dev_, (long long) ceiling, (long long) T);
+    S->T = (int) T;
+    const auto pu = prefill_bytes_for((size_t) T);
     S->arena_bytes = pu.first + pu.second;
     S->w16_elems = w16_elems;
     S->w32_elems = w32_elems;
     S->ws_bytes = ws_bytes;
-    S->gbuf_bytes = has_moe ? (size_t) PrefillState::NG * PrefillState::GE * gstride : 0;
-    // the prestage buffer: one GPU (a split's parts hold most of their experts); STRATA_GLM_PRESTAGE=<slots>, 0 = off
-    {
-        int np = has_moe && n_parts_ == 1 ? kPreSlots : 0;
-        if (const char* v = getenv("STRATA_GLM_PRESTAGE")) np = has_moe ? std::max(0, std::atoi(v)) : 0;
-        S->NP = np;
-        S->pbuf_bytes = (size_t) np * gstride;
-    }
+    S->gbuf_bytes = gbuf;
+    S->NP = pick.second;
+    S->pbuf_bytes = (size_t) pick.second * gstride;
     {
         Carve c;
         c.take<uint8_t>(S->arena_bytes);
@@ -619,14 +744,14 @@ bool Glm5Model::prefill_setup(std::string& err) {
         for (auto& t : S->tr)
             for (cudaEvent_t* e : {&t.start, &t.plan, &t.pre, &t.c1, &t.end}) cudaEventCreate(e);
     }
-    std::fprintf(stderr, "glm prefill: CUDA%d chunks of %d tokens (mixer sub-batches of %d), borrowing %.0f MB of the "
-                         "expert pool while a prompt runs (activations %.0f, weight scratch %.0f, expert staging %.0f, "
-                         "prestage %.0f: %d experts); disk landing ring %d experts (%.0f MB pinned)\n",
-                 dev_, T, mixer_sub((size_t) T, g, has_kda, has_dsa, has_dense, has_moe, S->max_pools, S->sub_env),
+    std::fprintf(stderr, "glm prefill: CUDA%d chunks of %d tokens (--prefill %s; mixer sub-batches of %d), borrowing "
+                         "%.0f MB of the expert pool while a prompt runs (activations %.0f, weight scratch %.0f, expert "
+                         "staging %.0f, prestage %.0f: %d experts); disk landing ring %d experts (%.0f MB pinned)\n",
+                 dev_, S->T, S->mode.c_str(),
+                 mixer_sub((size_t) S->T, g, has_kda, has_dsa, has_dense, has_moe, S->max_pools, S->sub_env),
                  (double) S->borrow_bytes / 1048576.0, (double) S->arena_bytes / 1048576.0,
                  (double) (w16_elems * 2 + w32_elems * 4) / 1048576.0, (double) S->gbuf_bytes / 1048576.0,
                  (double) S->pbuf_bytes / 1048576.0, S->NP, S->nland, (double) S->nland * (double) gstride / 1048576.0);
-    (void) fixed;
     return true;
 }
 
@@ -661,39 +786,66 @@ bool Glm5Model::prefill_bind(uint8_t* region, size_t bytes, std::string& err) {
     return true;
 }
 
+// a chunk of T tokens' device buffers: {the rows kept across a layer, the largest of the mixers' / FFN's / NextN cache
+// fill's scratch} - the layout prefill_carve lays out
+static std::pair<size_t, size_t> chunk_bytes(const Glm5Geometry& g, size_t T, bool has_kda, bool has_dsa,
+                                             bool has_dense, bool has_moe, int max_pools, int sub_env, bool mtp) {
+    const size_t E = (size_t) g.n_embd;
+    Carve a;
+    a.take<float>(T * 4 * E);                    // R
+    a.take<float>(T * E);                        // x
+    a.take<uint16_t>(T * E);                     // x16
+    a.take<float>(T * E);                        // mixer
+    a.take<float>(T * E);                        // ffn
+    a.take<float>(T * 4);
+    a.take<float>(T * 4);
+    a.take<float>(T * 16);
+    a.take<float>(T);
+    a.take<float>(T * 24);
+    a.take<int>(T * (size_t) g.n_exp_used);      // iota
+    size_t uni = 0;
+    const size_t ts = std::min<size_t>(T, mixer_sub(T, g, has_kda, has_dsa, has_dense, has_moe, max_pools, sub_env));
+    if (has_kda) { Carve k; carve_kda(k, ts, g); uni = std::max(uni, k.off); }
+    if (has_dsa) { Carve d; carve_dsa(d, ts, g, max_pools); uni = std::max(uni, d.off); }
+    if (has_dense) { Carve d; carve_dense(d, ts, g); uni = std::max(uni, d.off); }
+    if (has_moe) { Carve m; carve_moe(m, T, (size_t) (sub_env > 0 ? sub_env : kSub), g); uni = std::max(uni, m.off); }
+    // the NextN block's cache fill (the last half) carves 4 n_embd + 1.5 n_embd rows of its own
+    if (mtp) uni = std::max(uni, T * (size_t) (6 * g.n_embd + g.kv_lora + 2 * g.idx_key) * 4 + 8 * 256);
+    return {a.off, uni};
+}
+
+std::pair<size_t, size_t> Glm5Model::prefill_bytes_for(size_t T) const {
+    const PrefillState* S = pf_;
+    return chunk_bytes(g_, T, S->has_kda, S->has_dsa, S->has_dense, S->has_moe, S->max_pools, S->sub_env, mtp_il_ >= 0);
+}
+
+
+// what a part with these layers lends the prompt path for a chunk of T tokens, its prestage buffer aside (the split
+// search's startability gate: prefill_setup's layout without a PrefillState)
+size_t glm_prefill_lend_bytes(const Glm5Geometry& g, size_t T, bool has_kda, bool has_dsa, bool has_dense,
+                              bool has_moe, bool mtp, int64_t max_ctx, size_t gstride) {
+    const int max_pools = (int) std::max<int64_t>(1, max_ctx / g.idx_kpool);
+    int sub_env = 0;
+    if (const char* v = getenv("STRATA_GLM_PREFILL_SUB")) sub_env = std::clamp(std::atoi(v), 16, 8192);
+    const auto pu = chunk_bytes(g, T, has_kda, has_dsa, has_dense, has_moe, max_pools, sub_env, mtp);
+    const auto ws = weight_scratch(g, has_dsa);
+    Carve c;
+    c.take<uint8_t>(pu.first + pu.second);
+    c.take<uint16_t>((size_t) ws.first);
+    c.take<float>((size_t) ws.second);
+    c.take<uint8_t>(kPfWorkspace);
+    c.take<uint8_t>(has_moe ? (size_t) Glm5Model::PrefillState::NG * Glm5Model::PrefillState::GE * gstride : 0);
+    return c.off;
+}
+
 // the prompt path's device buffers for chunks of T tokens, carved from the start of the lendable region; returns the
 // bytes that layout uses (a short prompt borrows - and evicts - only that much of the pool's tail)
 size_t Glm5Model::prefill_carve(int Tn) {
     PrefillState* S = pf_;
     const Glm5Geometry& g = g_;
     const size_t T = (size_t) Tn, E = (size_t) g.n_embd;
-    size_t uni = 0;
-    {
-        S->sub = mixer_sub(T, g, S->has_kda, S->has_dsa, S->has_dense, S->has_moe, S->max_pools, S->sub_env);
-        const size_t ts = std::min<size_t>(T, S->sub);
-        if (S->has_kda) { Carve k; carve_kda(k, ts, g); uni = std::max(uni, k.off); }
-        if (S->has_dsa) { Carve d; carve_dsa(d, ts, g, S->max_pools); uni = std::max(uni, d.off); }
-        if (S->has_dense) { Carve d; carve_dense(d, ts, g); uni = std::max(uni, d.off); }
-        if (S->has_moe) { Carve m; carve_moe(m, T, (size_t) S->sh_sub(), g); uni = std::max(uni, m.off); }
-        // the NextN block's cache fill (the last half) carves 4 n_embd + 1.5 n_embd rows of its own
-        if (mtp_il_ >= 0) uni = std::max(uni, T * (size_t) (6 * g.n_embd + g.kv_lora + 2 * g.idx_key) * 4 + 8 * 256);
-    }
-    size_t pers = 0;
-    {
-        Carve a;
-        a.take<float>(T * 4 * E);
-        a.take<float>(T * E);
-        a.take<uint16_t>(T * E);
-        a.take<float>(T * E);
-        a.take<float>(T * E);
-        a.take<float>(T * 4);
-        a.take<float>(T * 4);
-        a.take<float>(T * 16);
-        a.take<float>(T);
-        a.take<float>(T * 24);
-        a.take<int>(T * (size_t) g.n_exp_used);
-        pers = a.off;
-    }
+    S->sub = mixer_sub(T, g, S->has_kda, S->has_dsa, S->has_dense, S->has_moe, S->max_pools, S->sub_env);
+    const auto [pers, uni] = prefill_bytes_for(T);
     Carve c{S->region};
     S->arena = c.take<uint8_t>(pers + uni);
     S->w16 = c.take<uint16_t>((size_t) S->w16_elems);
