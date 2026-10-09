@@ -2720,7 +2720,9 @@ def main() -> int:
         except ValueError as e:
             raise SystemExit(f"[strata] config reasoning_effort: {e}")
         svc.default_effort = cfg["reasoning_effort"]
-        print(f"[strata] thinking level when a request names none: {svc.default_effort}", flush=True)
+        print(f"[strata] thinking level when a request names none: {effort_level(svc.default_effort) or 'none'}"
+              f"{'' if effort_level(svc.default_effort) == svc.default_effort else f' (the config says {svc.default_effort})'}",
+              flush=True)
     svc.think_budget = int(cfg.get("thinking_budget", 32768) or 0) if svc.think_end_id is not None else 0
     if svc.think_budget:
         print(f"[strata] thinking budget: {svc.think_budget} tokens (then the answer)", flush=True)
