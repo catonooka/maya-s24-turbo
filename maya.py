@@ -751,7 +751,7 @@ def compile_engine(archs, gpu_ids, nvcc, host_compiler, llama: Path, src: str, s
     say("  Compiling the engine for " + ", ".join(f"sm_{x}" for x in archs) +
         " (10-30 minutes the first time, a few minutes after an update) ...")
     if cuda_archs == "native":
-        say("  (CMakeLists.txt refuses an explicit sm_70 - its own floor is sm_75 - so CMake is asked for this")
+        say("  (CMakeLists.txt refuses an explicit sm_70 - Maya's own floor is sm_75 - so CMake is asked for this")
         say(f"  machine's GPUs instead: CMAKE_CUDA_ARCHITECTURES=native with CUDA_VISIBLE_DEVICES={env['CUDA_VISIBLE_DEVICES']})")
     stopped = cmake_steps(conf, build, env, "build-maya.bat")
     if stopped:
