@@ -54,7 +54,8 @@ IQ3_S gate/up experts, IQ4_XS down projections and Q5_K in the most sensitive la
 error-feedback rounding. It is the closest to the FP8 model: **99.2% of its zero-shot accuracy** (the same score on
 HellaSwag and PIQA), a KL divergence 35% below Maya-M's (0.188 vs 0.291, the same engine), and the same next token as
 the FP8 model 90% of the time. It is the most demanding of the four: it is fastest when VRAM and RAM together hold most
-of its 156 GB (what does not fit is read from the SSD while it answers). Set it up with
+of its 156 GB (what does not fit is read from the SSD while it answers): a user's RTX 4090 with 192 GB of RAM holds
+all of it there and decodes 16.4 tokens/s ([#63](https://github.com/mw00/project-maya/issues/63)). Set it up with
 `./setup.sh --setup --model Maya-L` (Windows: `START-MAYA.bat --setup --model Maya-L`).
 Details: [bench/results/MAYA-L.md](bench/results/MAYA-L.md).
 
@@ -74,12 +75,14 @@ Measured with Maya-S. A token is about ¾ of a word. `./maya.sh --bench` measure
   hardware. A second GPU in a narrow slot (PCIe x4) still helps: the engine measures each card's link and lets the
   CPU compute more of that card's RAM-tier experts instead of copying them over.
 
-**Measured by users** with `./maya.sh --bench` (Maya-S, 32K context). Send yours: `--bench`, then `--report`, in a
+**Measured by users** with `./maya.sh --bench` (the model and the context as each row says). Send yours: `--bench`,
+then `--report`, in a
 [GitHub issue](https://github.com/mw00/project-maya/issues).
 
 | Machine | Decode (writing the answer) | Prefill (reading your prompt) | By |
 | --- | ---: | ---: | --- |
 | **2x NVIDIA CMP 170HX 64 GB** (Ampere GA100; PCIe Gen2 x4 each), 2x Xeon E5-2690 v4, 91 GB RAM - **Maya-M**, every expert in VRAM | 61.3 tokens/s (mean of 3 answers) | 514 tokens/s (8K-token prompt) | @ZackO2o (v1.0.6, #22) |
+| **NVIDIA RTX 4090 24 GB** (PCIe 4.0 x16), Ryzen 9 9950X3D, 192 GB DDR5-6000 (2 channels), Windows 11 - **Maya-L**, 128K context, every expert in VRAM or RAM | 16.4 tokens/s (mean of 3 answers) | 1371 tokens/s (8K-token prompt) | @npc97 (v1.0.24, #63) |
 
 ## What you need
 
@@ -292,8 +295,9 @@ one installed setup when you have several.
 ## Windows
 
 Experimental: the same installer sets Maya up natively on Windows 10/11 (64-bit), and the engine and the image
-encoder compile there with Visual Studio 2022 and CUDA 12.8. Maya is developed and measured on Linux and has not
-been run on a Windows PC with an NVIDIA GPU yet, so tell us how it runs on yours.
+encoder compile there with Visual Studio 2022 and CUDA 12.8 (CUDA 13 works for RTX 20 and newer). Maya is developed
+and measured on Linux; on Windows 11 a user runs Maya-L on an RTX 4090, built with CUDA 13.4 (the speed table above,
+[#63](https://github.com/mw00/project-maya/issues/63)). Tell us how it runs on yours.
 
 1. Install once: the NVIDIA driver,
    [CUDA Toolkit 12.8](https://developer.nvidia.com/cuda-12-8-0-download-archive),
