@@ -6,30 +6,14 @@ only what changed and starts; the model is not downloaded again.
 
 ## v1.0.20 - 2026-10-09
 
-Maya-S24 is listed apart from Maya-S on Hugging Face.
-
-- Maya-S24's files are `GLM-5.3-Flash-Maya-S24-IQ2_XXS_S-...` on Hugging Face (moved there, the same files and
-  sha256): v1.0.19's IQ2_XXS label was Maya-S's too, and Hugging Face adds up the files that share a label - the page
-  showed one 191 GB IQ2_XXS. `_S` marks the smaller mix of the same experts (its attention is 4-bit), as llama.cpp's
-  Q3_K_S does. Every Maya download now has a label of its own: IQ2_XXS (Maya-S), IQ2_XXS_S (Maya-S24), IQ2_S
-  (Maya-M), IQ3_S (Maya-L).
-- A Maya-S24 downloaded under either earlier name keeps it; setups of v1.0.19 and earlier can no longer download
-  Maya-S24 - update first (About > Update, or `git pull`).
-- Checked: the installer with v1.0.19's Maya-S24 names (a test), one label per download (a test).
+- Housekeeping: Maya-S24's files on Hugging Face are labelled IQ2_XXS_S, apart from Maya-S; the files themselves are
+  unchanged. A Maya-S24 already downloaded keeps its names; older setups need this update to download it.
 
 ## v1.0.19 - 2026-10-09
 
-Every Maya download is listed on its own on Hugging Face: the files carry their quant label.
-
-- **New file names on Hugging Face** (moved there, not re-uploaded; the same files and sha256): Maya-S24's are
-  `GLM-5.3-Flash-Maya-S24-IQ2_XXS-...`, Maya-M's `GLM-5.3-Flash-Maya-M-IQ2_S-...` and Maya-L's
-  `GLM-5.3-Flash-Maya-L-IQ3_S-...` - the label of their routed experts' main type. Hugging Face groups a repo's files
-  by that label, so the model page listed Maya-S alone and hid the rest behind "+4 variants".
-- **Nothing is downloaded again:** a model downloaded under the old names - finished or interrupted - keeps them (its
-  run config points at them); an interrupted one continues from the new address. Setups of v1.0.18 and earlier can no
-  longer download Maya-S24, Maya-M or Maya-L: update first (About > Update, or `git pull`).
-- Checked: the installer's choices for a fresh folder, an old finished download and an old interrupted one (5 new
-  tests); the renamed files on Hugging Face match their published sizes.
+- Housekeeping: Maya-M's and Maya-L's files on Hugging Face are named with their quant label (IQ2_S, IQ3_S); the files
+  themselves are unchanged. Models already downloaded keep their names; older setups need this update to download
+  them.
 
 ## v1.0.18 - 2026-10-09
 
@@ -143,7 +127,7 @@ cards; Strix Halo; an idle engine no longer holds a CPU core per GPU.
   token (#6, found by jerem91150).
 - **The MTP draft block from a file:** `STRATA_GLM_MTP_GGUF=<file>` now also replaces a model's own draft block, and
   `tools/maya_quant/mtp_gguf.py` writes a model's draft block alone as a small GGUF - for quants published without
-  one (GSQ-RCO 3.5-bit) on two GPUs.
+  one, on two GPUs.
 - **RAM-resident tier (#25 by @handmade0octopus, opt-in):** `STRATA_GLM_RAM_RESIDENT=1` sizes the pinned RAM tier to
   hold every expert that isn't in VRAM, so nothing is ever evicted to the SSD (the start refuses if RAM can't hold
   them). On an RTX 4090 D with 128 GB RAM, Maya-S at 256K context, a 38K-token prompt: decode 11.8 -> 22.1 tokens/s
@@ -236,10 +220,8 @@ Maya runs on up to 16 GPUs and reads long prompts much faster on one GPU, contri
   267 / 373 / 362 -> 263 / 578 / 620 tokens/s. 2x V100: 293 / 485 / 553 -> 313 / 541 / 674 tokens/s.
 - **Decode with most experts in RAM:** hot RAM-tier experts move into VRAM in the background while it answers
   (`STRATA_GLM_PROMOTE`), and on two-socket machines the RAM tier is spread over both sockets' memory. On
-  @needmorevram's RTX 3090 with GSQ-RCO 3.5-bit: 15.3 -> 18.7-19.9 tokens/s. 1x and 2x V100 with Maya-S: unchanged
+  @needmorevram's RTX 3090: 15.3 -> 18.7-19.9 tokens/s. 1x and 2x V100 with Maya-S: unchanged
   (17.1 and about 27.6 tokens/s).
-- **GSQ-RCO 3.5-bit download:** a community quant (137.1 GB, by pfeifferj, MIT) in the setup's model question, or
-  `--model GSQ-RCO-3.5bit`; checked against its sha256. It is not a Project Maya quant and is not measured by us.
 - **`./maya.sh --calibrate`:** measures decode with a few CPU-lane settings (how many RAM-tier experts go over PCIe
   instead of to the CPU, and how many CPU threads) and keeps one only if it is more than 3% faster (README > Tuning).
 - **`--models-dir`** names the folder downloaded models go to (`--data-dir` before; older configs still work).

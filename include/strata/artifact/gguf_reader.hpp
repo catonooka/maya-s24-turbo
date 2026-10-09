@@ -469,7 +469,7 @@ private:
 // refused with a precise error rather than silently mis-run.
 struct Qwen4ExpGuard {
     uint32_t block_count = 48, hidden = 2560, experts = 0, experts_used = 0, head_count = 24,
-             head_count_kv = 2;   // 0 = presence-only: pruned variants (GSQ-RCO Coder) legitimately ship
+             head_count_kv = 2;   // 0 = presence-only: pruned variants (the Qwen Coder) legitimately ship
                                   // fewer experts than the canonical 512; the graph reads the true value
 };
 

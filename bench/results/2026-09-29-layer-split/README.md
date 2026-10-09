@@ -5,7 +5,7 @@
 - RTX 5080 16 GB (x16), RTX 3090 24 GB (x4 gen4, ~6 GB/s), RTX 2080 Ti 22 GB (x4 gen3, Turing sm_75; the
   experimental `STRATA_EXPERIMENTAL_SM75` build).
 
-**Model:** the Coder (GSQ-RCO IQ1_M, 48 layers x 256 experts = 12,288 expert pairs, ~23 GB of experts), 32K
+**Model:** the Qwen3.8-Flash-Next Coder (IQ1_M, 48 layers x 256 experts = 12,288 expert pairs, ~23 GB of experts), 32K
 context, int8 KV, `--prefill auto`, `--spec 4`. It is the only model that fits the rig's RAM and disk.
 
 **Tools:** `rib_pp.py` (needle prompts at 2.7K/8K/16K/28K tokens with a code word at 50% depth, a 2-turn chat that

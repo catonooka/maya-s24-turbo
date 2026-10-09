@@ -28,7 +28,7 @@ from that dependency (`STRATA_GGUF_PY` can point to its `gguf-py` directory).
 ```
 
 Use this model's own tokenizer exported into the pack. Do not share another model's `dense.bin`,
-and do not rename the Orca files to impersonate one of setup's GSQ-RCO models.
+and do not rename the Orca files to impersonate one of the setup's models.
 
 Strata's persistent server also requires the MTP runtime, prepared by the existing tools:
 
@@ -76,7 +76,7 @@ Run from the repository root:
 ```
 
 The web interface is at `http://127.0.0.1:8080`; API clients use `http://127.0.0.1:8080/v1`.
-Vision is not configured in this text-only example. Performance of the original GSQ-RCO model
+Vision is not configured in this text-only example. Performance of the original Qwen3.8-Flash-Next quants
 does not establish this fine-tune's speed or accuracy.
 
 ## Scope and validation

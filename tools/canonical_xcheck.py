@@ -44,7 +44,7 @@ from load import _dequant_flat                             # noqa: E402
 
 # default: $STRATA_SHARD1, else the development layout (<Strata>/Q2_0 beside <Strata>/Public/Engine)
 SHARD1 = os.environ.get("STRATA_SHARD1") or os.path.join(os.path.dirname(os.path.dirname(REPO)), "Q2_0",
-                                                          "Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00001-of-00002.gguf")
+                                                          "Qwen3.8-Flash-Next-Q2_0-00001-of-00002.gguf")
 
 QK = 64          # Q2_0 block: 64 elements
 BLOCK_BYTES = 18  # 2-byte fp16 scale + 16 bytes of 2-bit codes

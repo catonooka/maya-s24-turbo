@@ -68,7 +68,7 @@ For OrcaRouter IQ3_XXS, follow [the explicit compatibility conversion](ORCA.md);
 this backend does not change quantization, model licenses, or tokenizers.
 Add `--experts-bin` to the `tools/iq_pack.py` command: mmap requires the pack's
 `experts.bin`, which the default native packing command does not emit. This
-consumes additional disk space. Original GSQ-RCO IQ3_XXS uses shard 2 for PLE;
+consumes additional disk space. The original Qwen3.8-Flash-Next IQ3_XXS uses shard 2 for PLE;
 Orca uses shard 1. Keep each model's own pack and tokenizer together.
 
 Use `build-hip/strata` as the executable in the server JSON. Select the AMD
@@ -82,13 +82,13 @@ available. The existing `--mmap-experts` path avoids allocating the full pinned
 expert arena; it still depends on OS file-cache residency and may stall on
 storage reads. It does not make SSD access equivalent to RAM.
 
-Starting args for the original GSQ-RCO IQ3_XXS model (replace the paths):
+Starting args for the original Qwen3.8-Flash-Next IQ3_XXS model (replace the paths):
 
 ```sh
 build-hip/strata --serve \
   --pack packs/iq3xxs \
-  --native /path/to/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf \
-  --ple-gguf /path/to/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00002-of-00002.gguf \
+  --native /path/to/the-model-IQ3_XXS-00001-of-00002.gguf \
+  --ple-gguf /path/to/the-model-IQ3_XXS-00002-of-00002.gguf \
   --mmap-experts --expert-profile data/expert-profile.bin --expert-cache auto \
   --prefill 512 --spec 4 --spec-min-p 0.5 --mtp mtp/rt \
   --max-context 4096 --kv int8 --pool-workers 15 \
@@ -136,7 +136,7 @@ latency-sensitive data on SSD and measure warm residency separately.
   and mmap tests passed on the same tree. This is a regression check, not a
   claim of complete CUDA inference validation.
 - CPU-only `strata-plan` build passed without either GPU backend.
-- Real GSQ-RCO IQ3_XXS server smoke with mmap, the shipped expert profile,
+- Real Qwen3.8-Flash-Next IQ3_XXS server smoke with mmap, the shipped expert profile,
   automatic GPU cache, and MTP passed arithmetic, executable Python addition,
   system-marker recall, and 1,170-token batched-prefill recall. All four requests
   ended normally with correct answers; one engine process served them all.

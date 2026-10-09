@@ -1,6 +1,6 @@
 # Project Maya quants of GLM-5.3-Flash - the plan
 
-Two quants of our own, made from the official weights with GSQ/RCO-style methods sized to what we can run:
+Two quants of our own, made from the official weights with error-feedback rounding and scale refinement sized to what we can run:
 
 | | Maya-S (first) | Maya-L (later) |
 |---|---|---|
@@ -95,7 +95,7 @@ Every tensor is quantized at each candidate GGUF type with **error-feedback roun
 - **Recorded**: the Hessian-weighted output error per (tensor, type) and per expert group.
 - **Cost control**: the error table needs a sample of experts per layer (~32 of 288). Only the final assembly
   quantizes everything.
-- **GSQ refinement**: the paper's Gumbel-softmax training of the grid choices and scales, published for
+- **Gumbel-softmax refinement**: the paper's Gumbel-softmax training of the grid choices and scales, published for
   scalar K-quants. It's a later add-on for any K-quant tensors the allocation picks, kept only if it measurably
   lowers KL.
 
@@ -183,7 +183,7 @@ The engine kernels go in parallel on the V100s.
 - **As close to FP8 as possible at the smallest size, no loops, no broken output.** Post-training is in scope:
   - Error-correcting rounding first.
   - Then, where the measurements still show damage, block/expert-wise output-matching refinement of the quantised
-    scales and grid choices (GSQ-style), and a short distillation of the small floating-point parts against the
+    scales and grid choices, and a short distillation of the small floating-point parts against the
     FP8 teacher's outputs.
   - Every candidate passes the loop test before it is called a release.
 - **Made on Uranus** (the EVO-X5 slipped a day):

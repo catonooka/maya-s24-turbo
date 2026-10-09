@@ -47,7 +47,7 @@ ROUTERS = ("ffn_gate_inp.weight", "ffn_gate_inp_shexp.weight")
 NOT_IN_PACK = {"per_layer_token_embd.weight"}      # the 28.8 GB PLE table: read from its GGUF by the engine
 
 # These small projections are read as BF16 by the residual, router, GDN, QSA and PLE kernels.
-# GSQ-RCO files already store them that way. Ordinary GGUF quants (including OrcaRouter's IQ3_XXS)
+# Strata's Qwen files already store them that way. Ordinary GGUF quants (including OrcaRouter's IQ3_XXS)
 # quantize them too; --compat-bf16 explicitly dequantizes and rounds ONLY these tensors.
 BF16_PROJECTIONS = (
     "hc_attn_down.weight", "hc_attn_up.weight", "hc_attn_inject.weight",

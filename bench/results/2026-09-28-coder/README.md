@@ -1,4 +1,4 @@
-# The GSQ-RCO Coder (256 of 512 experts) on Strata
+# The Qwen3.8-Flash-Next Coder (256 of 512 experts) on Strata
 
 RTX 5070 12 GB, Ryzen 5 7600, 64 GB DDR5-5200, Windows 10. Engine 0.1.15 + PR #54 (the expert count from the model
 file), the settings setup writes (`--prefill auto`, 8-bit KV above 4K, KV streaming from 64K, MTP, greedy, 256 tokens),

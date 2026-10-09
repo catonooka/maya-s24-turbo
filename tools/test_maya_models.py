@@ -26,16 +26,15 @@ class ModelChoice(unittest.TestCase):
         self.assertEqual((kind, quant), ("download", "Maya-S-v2-IQ2_XXS"))
         for q in ("Maya-S-v2-IQ2_XXS:", "Maya-S24:", "Maya-M:", "Maya-L:"):
             self.assertIn(q, text)
-        self.assertNotIn("GSQ-RCO", text)
 
     def test_24gb_cards_get_maya_s24(self):
         self.assertEqual(self.choose({}, vram_gb=24.0)[1], "Maya-S24")
 
     def test_a_setup_of_a_model_no_longer_offered_gets_the_recommendation(self):
-        # GSQ-RCO 3.5-bit is no longer a download: setting up again recommends a Maya quant (--gguf-dir keeps the files)
-        kind, quant, text = self.choose({"quant": "GSQ-RCO-3.5bit"})
+        # a download no longer offered: setting up again recommends a Maya quant (--gguf-dir keeps the files)
+        kind, quant, text = self.choose({"quant": "Retired-3.5bit"})
         self.assertEqual(quant, "Maya-S-v2-IQ2_XXS")
-        self.assertNotIn("GSQ-RCO", text)
+        self.assertNotIn("Retired-3.5bit", text)
 
     def test_an_earlier_maya_download_stays_the_default(self):
         self.assertEqual(self.choose({"quant": "Maya-L"})[1], "Maya-L")
