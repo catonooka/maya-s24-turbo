@@ -53,11 +53,33 @@ class PrefillConfigTests(unittest.TestCase):
             self.addCleanup(ctx.stop)
         self.a = SimpleNamespace(env=[], port=None, host=None, api_key=None, gguf_dir=None)
 
-    def write(self, gpus):
+    def write(self, gpus, ctx=32768):
         pc = {"gpus": [{"index": i, "name": "GPU", "vram_gb": 24} for i in gpus]}
-        p = maya.write_config(self.a, pc, {}, self.model / "pack", "test", 32768, self.root / "models", None,
+        p = maya.write_config(self.a, pc, {}, self.model / "pack", "test", ctx, self.root / "models", None,
                               ("local", self.first))
         return p, json.loads(p.read_text())["args"]
+
+    def test_tuned_settings_follow_a_new_context(self):
+        # #57: tuned at 32K, a setup for 128K wrote the engine's own settings (half the speed there)
+        p, _ = self.write([0])
+        store = {maya.hardware_key(json.loads(p.read_text())): {"settings": {"STRATA_GLM_PCIE_SHARE": "0.25"},
+                                                                  "date": "2026-10-09"}}
+        maya.CAL_STORE.write_text(json.dumps(store))
+        p, _ = self.write([0], 131072)
+        c = json.loads(p.read_text())
+        self.assertEqual(c["env"]["STRATA_GLM_PCIE_SHARE"], "0.25")
+        self.assertIsNone(maya.saved_calibration(c))                        # this context is not tuned itself
+        self.assertEqual(maya.saved_calibration(c, any_context=True)["context"], 32768)
+        # the nearest tuned context wins, and this context's own tuning over any other
+        store[maya.hardware_key(c).replace("|131072|", "|65536|")] = {"settings": {"STRATA_GLM_PCIE_SHARE": "0.30"}}
+        maya.CAL_STORE.write_text(json.dumps(store))
+        self.assertEqual(maya.saved_calibration(c, any_context=True)["settings"]["STRATA_GLM_PCIE_SHARE"], "0.30")
+        store[maya.hardware_key(c)] = {"settings": {"STRATA_GLM_PCIE_SHARE": "0.35"}}
+        maya.CAL_STORE.write_text(json.dumps(store))
+        self.assertNotIn("context", maya.saved_calibration(c, any_context=True))
+        # another model on the same PC takes nothing from this one
+        self.assertIsNone(maya.saved_calibration(dict(c, installer=dict(c["installer"], quant="other")),
+                                                 any_context=True))
 
     def test_prefill_auto_is_written_and_an_edit_kept(self):
         for gpus in ([0], [0, 1]):

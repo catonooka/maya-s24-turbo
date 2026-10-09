@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shlex
@@ -1332,7 +1333,7 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vi
     gguf_dir = local.parent if local else Path(a.gguf_dir).expanduser().resolve() if a.gguf_dir else None
     cfg["installer"] = {"models_dir": str(models), "quant": quant, "gguf": str(local) if local else None,
                         "gguf_dir": str(gguf_dir) if gguf_dir else None, "written": time.strftime("%Y-%m-%d %H:%M")}
-    cal = saved_calibration(cfg)                       # tuned on this PC for this model and context before
+    cal = saved_calibration(cfg, any_context=True)     # tuned on this PC for this model (and context) before
     if cal is not None:
         tuned = CAL.apply(cfg.get("env") or {}, cal.get("settings") or {})
         tuned.update(env)                              # (an --env given now wins)
@@ -1340,6 +1341,8 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vi
             cfg["env"] = tuned
         ok("the settings tuned for this PC earlier are used" + (f" ({cal['date']})" if cal.get("date") else "") +
            (": " + ", ".join(f"{k}={v}" for k, v in cal["settings"].items()) if cal.get("settings") else ""))
+        if cal.get("context"):
+            ok(f"(tuned at context {cal['context']}: {ME} --calibrate tunes this context too)")
     cfg_path.write_text(json.dumps(cfg, indent=1), encoding="utf-8")
     ok(f"config: {cfg_path}")
     ok(f"start script: {write_run_script(cfg_path, port)}")
@@ -1408,11 +1411,29 @@ def load_calibrations() -> dict:
         return {}
 
 
-def saved_calibration(cfg: dict) -> dict | None:
-    """The settings an earlier tuning found for this PC, model and context, if any (CUDA only, as the tuning)."""
+def saved_calibration(cfg: dict, any_context=False) -> dict | None:
+    """The settings an earlier tuning found for this PC, model and context, if any (CUDA only, as the tuning).
+    any_context: else the ones tuned at the nearest other context, with that context in "context" - the CPU lane's
+    split depends on the PC far more than on the context, and a setup for another context used to drop them (#57: the
+    engine's own settings, half the speed on a two-socket DDR3 PC)."""
     if cfg.get("backend") == "hip":
         return None
-    return load_calibrations().get(hardware_key(cfg))
+    store, key = load_calibrations(), hardware_key(cfg)
+    if key in store or not any_context:
+        return store.get(key)
+    want = key.split("|")
+    best, best_d = None, None
+    for k, v in store.items():
+        have = k.split("|")
+        if len(have) != len(want) or have[:5] != want[:5] or have[6:] != want[6:]:
+            continue
+        try:
+            d = abs(math.log(int(have[5]) / int(want[5])))
+        except (ValueError, ZeroDivisionError):
+            continue
+        if isinstance(v, dict) and (best_d is None or d < best_d):
+            best, best_d = dict(v, context=int(have[5])), d
+    return best
 
 
 def busy_gpus(cfg: dict) -> list:
@@ -1952,7 +1973,8 @@ def main() -> int:
     # answers (--yes and --no-start setups are not held up by it)
     tuned = None
     cfg = read_json(cfg_path)
-    offer = cfg.get("backend") != "hip" and saved_calibration(cfg) is None and not a.yes and not a.no_start
+    offer = (cfg.get("backend") != "hip" and saved_calibration(cfg, any_context=True) is None and not a.yes and
+             not a.no_start)
     if a.calibrate or (offer and ask(
             "Tune Maya for this PC now? It measures the split of the work between the CPU and the PCIe link and the "
             "CPU threads (about 10-15 minutes; later: ./maya.sh --calibrate)", ["y", "n"], "y", a.yes) == "y"):
