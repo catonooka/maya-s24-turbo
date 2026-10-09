@@ -349,7 +349,7 @@ public:
     void fast_read_part(int il, int e, int role, uint8_t* blob, int chunk = 0, int n_chunks = 1);
     void fast_ahead_route(int il, const int* ids, unsigned int miss, const short (*ahead)[8]);   // LOOKAHEAD
     void fast_ahead_reader();
-    void fast_boundary();                                  // between tokens: apply finished promotions
+    bool fast_boundary(std::string& err);                  // between tokens: apply finished promotions
     int fast_sample(strata::kernels::SamplerParams& sp, std::string& err);   // this half's logits, sampled on its stream
     int64_t ram_budget_ = -1;                              // bytes of pinned RAM tier for this half (-1: derive)
     float* snap_ = nullptr;                                // the saved KDA states + conv histories (this half)
@@ -433,14 +433,14 @@ public:
     size_t prefill_trim_prestage(size_t max_borrow);       // ... at most this many: a smaller prestage buffer (the new bytes)
     bool prefill_bind(uint8_t* region, size_t bytes, std::string& err);   // its buffers inside the borrowed region
     size_t prefill_carve(int T);                           // ... laid out for chunks of T (the bytes it uses)
-    void prefill_lend();                                   // the tail slots -> the prompt path (drops their experts)
-    void prefill_return();                                 // ... and back to the expert pool
+    bool prefill_lend(std::string& err);                    // the tail slots -> the prompt path (drops their experts)
+    bool prefill_return(std::string& err);                  // ... and back to the expert pool
     void prefill_destroy();
     void prefill_cap(int T, const char* why);              // its pinned staging for chunks of at most T
     void prefill_settle(double pinned_share);              // --prefill auto's lend cap from the pinned share (85/90%)
     std::pair<size_t, size_t> prefill_bytes_for(size_t T) const;   // a chunk's device buffers {kept rows, scratch}
     static size_t pool_avail(size_t free_b, size_t total_b);   // the expert pool's bytes from the free VRAM
-    void lend_tail(size_t limit, uint64_t& moved, uint64_t& dropped);   // the tail's slots below xpool + limit -> kLent
+    bool lend_tail(size_t limit, uint64_t& moved, uint64_t& dropped, std::string& err);
     bool vis_lend_ok_ = false;                             // this half's tail can go to the vision encoder
     bool vis_lent_ = false;                                // ... and is with it now (freed)
     bool prefill_half(int64_t p0, int T, std::string& err,

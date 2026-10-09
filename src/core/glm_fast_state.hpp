@@ -1,6 +1,6 @@
 // src/core/glm_fast_state.hpp - the fast path's private state (Glm5Model::FastState) and host helpers, shared by
 // src/core/glm_fast_path.cu (the one-token decode path) and src/core/glm_prefill.cu (the batched prompt path).
-// Not a public header: only those two translation units include it.
+// Not a public header: glm_model.cu also uses it to reset request-local routing errors.
 #pragma once
 
 #include "strata/core/glm_model.hpp"
@@ -34,6 +34,16 @@
 
 namespace strata::core {
 namespace glmfast {
+inline bool cuda_ok(cudaError_t e, const char* what, std::string& err) {
+    if (e == cudaSuccess) return true;
+    err = std::string(what) + ": " + cudaGetErrorString(e);
+    return false;
+}
+inline bool wait_event(cudaEvent_t ev, const char* what, std::string& err) {
+    cudaError_t e;
+    while ((e = cudaEventQuery(ev)) == cudaErrorNotReady) std::this_thread::yield();
+    return cuda_ok(e, what, err);
+}
 
 namespace gf = strata::kernels::glmf;
 
@@ -348,6 +358,7 @@ struct Glm5Model::FastState {
     };
     std::vector<BgMove> bg;
     bool bg_hold = false;   // lend_tail: no new moves while the pool's tail is lent
+    volatile int* route_error_h = nullptr;   // in the mapped ring allocation, visible after compute completion
     uint64_t bg_up = 0, bg_down = 0;
     std::vector<cudaEvent_t> ev_free;
     int* upd_key_h = nullptr;
@@ -443,6 +454,13 @@ struct Glm5Model::FastState {
         cudaEvent_t e = nullptr;
         cudaEventCreateWithFlags(&e, cudaEventDisableTiming);
         return e;
+    }
+    bool route_ok(std::string& err) const {
+        const int e = route_error_h ? *route_error_h : 0;
+        if (e == 0) return true;
+        const char* kind = (e % 4 == 1) ? "decode" : (e % 4 == 2) ? "predicted" : "lookahead";
+        err = "glm router: layer " + std::to_string(e / 4) + " " + kind + " invalid expert ID or non-finite score";
+        return false;
     }
 };
 

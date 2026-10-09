@@ -16,7 +16,6 @@
 // The DSA caches are append-only (latent column per token; a pool's key when its last member
 // lands), so a batched call is literally the same per-token steps as single-token calls - which
 // is what glm_model_test's batched-vs-streamed equivalence pins.
-#include "strata/core/glm_model.hpp"
 #include "glm_fast_state.hpp"
 
 #include "strata/kernels/glm_dsa.hpp"
@@ -651,6 +650,8 @@ void Glm5Model::reset() {
     cudaSetDevice(dev_);
     cudaMemset(state_, 0, state_bytes_);
     pos_ = 0;
+    if (fast_ && fast_->route_error_h && cudaStreamSynchronize(fast_->cs) == cudaSuccess)
+        *fast_->route_error_h = 0;   // a failed route belongs to the previous request
     if (split_next_) {
         split_next_->reset();
         cudaSetDevice(dev_);

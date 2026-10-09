@@ -176,6 +176,7 @@ struct MoeDev {
     const void* cpu_ans = nullptr;             // ... host-mapped CpuAnswer (device pointer)
     unsigned int* dcnt = nullptr;              // ... [n_keys] routes per key (halved every 4096 routes): the coldest
                                                //     RAM-tier experts go to the host, the hot ones are promoted
+    volatile int* route_error = nullptr;       // host-mapped, first invalid route: 4 * layer + kind (1..3)
 };
 /// The CPU LANE's answer: the weighted sum of the RAM-tier experts the host computed for route `seq`.
 struct CpuAnswer {
@@ -190,6 +191,7 @@ constexpr int kAhead = 4;
 struct MoeRequest {
     volatile unsigned int seq;   // written LAST (after a system fence)
     int layer;
+    int error;                   // invalid route: no experts or table edits; the host still retires its sequence
     unsigned int miss_mask;      // experts the host must provide (only on disk) - the device waits for these
     unsigned int fetch_mask;     // experts fetched from the RAM tier
     unsigned int promo_mask;     // ... of which promoted into a spare slot: promo_ptr[i] is the slot

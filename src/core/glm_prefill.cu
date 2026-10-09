@@ -892,19 +892,20 @@ size_t Glm5Model::prefill_carve(int Tn) {
 
 // The pool's tail -> the prompt path: every lendable slot's expert leaves VRAM (it is only on disk until the decode
 // fetches it again), a spare there leaves the spare table, and the device tables learn it before any prompt work.
-void Glm5Model::prefill_lend() {
+bool Glm5Model::prefill_lend(std::string& err) {
     FastState* F = fast_;
     PrefillState* S = pf_;
-    if (F == nullptr || S == nullptr || S->lent) return;
+    if (F == nullptr || S == nullptr || S->lent) return true;
     cudaSetDevice(dev_);
-    lend_tail(S->need, S->moved, S->dropped);
+    if (!lend_tail(S->need, S->moved, S->dropped, err)) return false;
     // the borrowed memory holds expert bytes: what the prompt path reads before writing is set up again
     mmq::iota(S->iota, (int64_t) S->T_bound * g_.n_exp_used, F->cs);
     for (int b = 0; b < PrefillState::NG; ++b) cudaEventRecord(S->ev_free[b], F->cs);
     if (S->ev_pfree) cudaEventRecord(S->ev_pfree, F->cs);
     S->pre_layer = -1;
-    cudaStreamSynchronize(F->cs);
+    if (!glmfast::cuda_ok(cudaStreamSynchronize(F->cs), "glm prefill lend", err)) return false;
     S->lent = true;
+    return true;
 }
 
 // The on-demand vision encoder (serve VLEND): the whole tail is emptied the same way and its memory freed, so the
@@ -922,9 +923,7 @@ bool Glm5Model::vision_lend(size_t& bytes, std::string& err) {
     }
     cudaSetDevice(dev_);
     uint64_t moved = 0, dropped = 0;
-    lend_tail(F->xpool_bytes, moved, dropped);
-    cudaStreamSynchronize(F->cs);
-    cudaStreamSynchronize(F->copy);
+    if (!lend_tail(F->xpool_bytes, moved, dropped, err)) return false;
     cudaFree(F->xpool);
     F->xpool = nullptr;
     for (auto& P : F->lp) P.xbase = nullptr;
@@ -974,33 +973,43 @@ bool Glm5Model::vision_reclaim(std::string& err) {
 
 // The tail's slots below xpool + limit leave the decode: a resident expert takes the slot of a colder main-slot
 // resident (a device copy) or goes; a spare there leaves the spare table; the slots are kLent after this.
-void Glm5Model::lend_tail(size_t limit, uint64_t& moved, uint64_t& dropped) {
+bool Glm5Model::lend_tail(size_t limit, uint64_t& moved, uint64_t& dropped, std::string& err) {
     FastState* F = fast_;
     // background moves in flight land first and no new ones start (fast_boundary step 5): a slot with a copy on its
     // way would otherwise be lent under it
     F->bg_hold = true;
-    cudaStreamSynchronize(F->copy);
-    fast_boundary();                   // finished promotions and demotions go live (the plan reads the tables)
-    F->bg_hold = false;
-    cudaStreamSynchronize(F->copy);    // every demotion issued so far has read its slot
-    if (F->ram_resident) fast_boundary();   // resident mode keeps VRAM entries live until the copy lands: the
-                                            // synced demotions must publish their RAM copies before the tail is borrowed
+    // Retire metadata as well as DMA. With the hold set, the boundary cannot start replacement moves.
+    if (!glmfast::cuda_ok(cudaStreamSynchronize(F->copy), "glm lending copies", err) || !fast_boundary(err))
+        return false;
+    if (!F->bg.empty() || !F->draining.empty()) {
+        err = "glm lending: tier moves were not retired";
+        return false;
+    }
     const int NE = g_.n_expert;
     {
         std::lock_guard<std::mutex> lk(F->mu);
         int nu = 0;
+        bool ok = true;
         const auto flush = [&]() {
-            if (nu == 0) return;
-            cudaMemcpyAsync(F->upd_key_d, F->upd_key_h, (size_t) nu * sizeof(int), cudaMemcpyHostToDevice, F->cs);
-            cudaMemcpyAsync(F->upd_val_d, F->upd_val_h, (size_t) nu * sizeof(unsigned long long),
-                            cudaMemcpyHostToDevice, F->cs);
-            gf::tab_update(F->tab, F->upd_key_d, F->upd_val_d, nu, F->cs);
-            cudaStreamSynchronize(F->cs);   // the host buffers are reused after it ran
+            if (nu == 0 || !ok) return;
+            ok = glmfast::cuda_ok(cudaMemcpyAsync(F->upd_key_d, F->upd_key_h, (size_t) nu * sizeof(int),
+                                                  cudaMemcpyHostToDevice, F->cs), "glm lending keys", err) &&
+                 glmfast::cuda_ok(cudaMemcpyAsync(F->upd_val_d, F->upd_val_h,
+                                                  (size_t) nu * sizeof(unsigned long long), cudaMemcpyHostToDevice,
+                                                  F->cs), "glm lending values", err);
+            if (ok) {
+                gf::tab_update(F->tab, F->upd_key_d, F->upd_val_d, nu, F->cs);
+                ok = glmfast::cuda_ok(cudaGetLastError(), "glm lending table update", err);
+            }
+            const cudaError_t e = cudaStreamSynchronize(F->cs);   // pinned sources may now be reused
+            if (ok) ok = glmfast::cuda_ok(e, "glm lending table sync", err);
             nu = 0;
         };
         // (every key is edited at most once here, so a batch never carries two values for one key)
         const auto upd = [&](size_t k, unsigned long long v) {
+            if (!ok) return;
             if (nu == FastState::kMaxUpd) flush();
+            if (!ok) return;
             F->upd_key_h[nu] = (int) k;
             F->upd_val_h[nu] = v;
             ++nu;
@@ -1033,8 +1042,12 @@ void Glm5Model::lend_tail(size_t limit, uint64_t& moved, uint64_t& dropped) {
                 F->left[(size_t) old] = 2;
             }
             // on the compute stream: the prompt's work behind it cannot overwrite the slot before the copy read it
-            cudaMemcpyAsync(R.base + (size_t) rs * R.stride, F->lp[(size_t) il].slot_ptr(s), F->L[(size_t) il].blob,
-                            cudaMemcpyDeviceToHost, F->cs);
+            if (!glmfast::cuda_ok(cudaMemcpyAsync(R.base + (size_t) rs * R.stride,
+                                                   F->lp[(size_t) il].slot_ptr(s), F->L[(size_t) il].blob,
+                                                   cudaMemcpyDeviceToHost, F->cs), "glm lending park", err)) {
+                ok = false;
+                return false;
+            }
             R.key[(size_t) rs] = key;
             R.tick[(size_t) rs] = F->clock;
             R.st[(size_t) rs] = FastState::kRHold;
@@ -1069,8 +1082,10 @@ void Glm5Model::lend_tail(size_t limit, uint64_t& moved, uint64_t& dropped) {
                         const int v = cold[ci++].second;   // the coldest: it goes, this expert takes its slot
                         const int vkey = il * NE + P.key[(size_t) v];
                         const bool parked = park(il, v, vkey);   // (read before the copy below overwrites the slot)
-                        cudaMemcpyAsync(P.slot_ptr(v), P.slot_ptr(s), F->L[(size_t) il].blob, cudaMemcpyDeviceToDevice,
-                                        F->cs);
+                        if (!ok || !glmfast::cuda_ok(cudaMemcpyAsync(P.slot_ptr(v), P.slot_ptr(s),
+                                                                     F->L[(size_t) il].blob, cudaMemcpyDeviceToDevice,
+                                                                     F->cs), "glm lending relocation", err))
+                            return false;
                         upd(F->tab_key((size_t) vkey), 0ull);
                         F->slot_of[(size_t) vkey] = -1;
                         if (!parked) F->left[(size_t) vkey] = 3;
@@ -1083,6 +1098,7 @@ void Glm5Model::lend_tail(size_t limit, uint64_t& moved, uint64_t& dropped) {
                         upd(F->tab_key((size_t) key), 0ull);
                         F->slot_of[(size_t) key] = -1;
                         if (!park(il, s, key)) F->left[(size_t) key] = 3;
+                        if (!ok) return false;
                     }
                     ++dropped;
                     ++F->diag_lend;
@@ -1098,17 +1114,20 @@ void Glm5Model::lend_tail(size_t limit, uint64_t& moved, uint64_t& dropped) {
             }
         }
         flush();
+        if (!ok) return false;
     }
+    F->bg_hold = false;
+    return true;
 }
 
 // ... and back: the slots are free again; the decode's boundaries hand them out as spares (misses refill them)
-void Glm5Model::prefill_return() {
+bool Glm5Model::prefill_return(std::string& err) {
     FastState* F = fast_;
     PrefillState* S = pf_;
-    if (F == nullptr || S == nullptr || !S->lent) return;
+    if (F == nullptr || S == nullptr || !S->lent) return true;
     cudaSetDevice(dev_);
-    cudaStreamSynchronize(F->cs);
-    cudaStreamSynchronize(F->copy);
+    if (!glmfast::cuda_ok(cudaStreamSynchronize(F->cs), "glm return compute", err) ||
+        !glmfast::cuda_ok(cudaStreamSynchronize(F->copy), "glm return copies", err)) return false;
     std::lock_guard<std::mutex> lk(F->mu);
     for (int il = l0_; il < lt_; ++il) {
         auto& P = F->lp[(size_t) il];
@@ -1116,6 +1135,7 @@ void Glm5Model::prefill_return() {
             if (P.st[(size_t) s] == FastState::kLent) P.st[(size_t) s] = FastState::kFree;
     }
     S->lent = false;
+    return true;
 }
 
 void Glm5Model::prefill_destroy() {
@@ -1703,7 +1723,14 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
         gb::expert_count(M.ids, T * K, NE, M.counts, M.rank, s);
         gb::copy_i32(M.counts, S->h_counts, NE, s);   // (not a copy: the engine may be busy with x, x_down)
         S->mark("route", s);
-        cudaStreamSynchronize(s);
+        if (!glmfast::cuda_ok(cudaStreamSynchronize(s), "glm prompt route/count sync", err)) return false;
+        int counted = 0;
+        for (int e = 0; e < NE; ++e) counted += S->h_counts[e];
+        if (counted != T * K) {
+            err = "glm router: prompt layer " + std::to_string(il) + " invalid expert ID or non-finite score (" +
+                  std::to_string(counted) + " of " + std::to_string(T * K) + " routes)";
+            return false;
+        }
         const auto tp = std::chrono::steady_clock::now();
         // (the split's balance measures both lanes from here: the compute stream is idle, the event is the plan's start)
         if (S->ev_c0 == nullptr) {
@@ -2184,7 +2211,7 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
             if (S->c_act.size() < (size_t) cpu_nrows * kA) S->c_act.resize((size_t) cpu_nrows * kA);
             if (S->c_hq.size() < (size_t) cpu_nrows * kH) S->c_hq.resize((size_t) cpu_nrows * kH);
             if (S->c_ff.size() < (size_t) cpu_nrows * nff) S->c_ff.resize((size_t) cpu_nrows * nff);
-            cudaStreamSynchronize(S->xs);   // x and the tokens of the CPU rows are here
+            if (!glmfast::cuda_ok(cudaStreamSynchronize(S->xs), "glm prompt CPU rows", err)) return false;
             const int ncx = (int) cpu_set.size();
             std::vector<int> r_of((size_t) ncx);   // each expert's first row in the CPU segment
             for (int j = 0; j < ncx; ++j) r_of[(size_t) j] = S->h_base[cpu_set[(size_t) j].e] - cpu_r0;
@@ -2391,7 +2418,7 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
                 return false;
             }
             const size_t row_b = ggml_row_size((ggml_type) pack_emb_type_, E);
-            cudaStreamSynchronize(s);   // emb_h: the host writes it now
+            if (!glmfast::cuda_ok(cudaStreamSynchronize(s), "glm prompt mtp embedding", err)) return false;
             for (int t = 0; t < Tv; ++t)
                 tt->to_float(pack_emb_src_ + (size_t) next_ids[t] * row_b, S->emb_h + (size_t) t * E, E);
             Carve c{S->uni};
@@ -2521,13 +2548,20 @@ bool Glm5Model::prefill(const std::vector<int32_t>& tokens, std::string& err, in
     // so 8449 tokens as 8192 + 257 cost about one chunk's experts, as two equal 4225s about two (240 -> ~300 tok/s)
     const int Trun = split_next_ == nullptr ? (int) std::min<int64_t>(Tmax, (nn + 63) / 64 * 64)
                                             : (int) std::min<int64_t>(Tmax, ((nn + nchunks - 1) / nchunks + 63) / 64 * 64);
+    bool ok = true;
     for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) {
         cudaSetDevice(m->dev_);
         m->prefill_carve(Trun);
-        m->prefill_lend();
+        if (!m->prefill_lend(err)) { ok = false; break; }
     }
-    const bool ok = prefill_run(tokens, err);
-    for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) m->prefill_return();
+    if (ok) ok = prefill_run(tokens, err);
+    for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) {
+        std::string return_err;
+        if (!m->prefill_return(return_err)) {
+            if (ok) err = return_err;
+            ok = false;
+        }
+    }
     cudaSetDevice(dev_);
     return ok;
 }
@@ -2564,11 +2598,11 @@ bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err
         }
     };
     // chunk c's embedding rows into this half's R (host-dequantized from the shard mapping)
-    const auto embed = [&](int c) {
+    const auto embed = [&](int c) -> bool {
         PrefillState* S = pf_;
         const int T = chunk_len(c);
         const int64_t i = (int64_t) c * Tc;
-        cudaStreamSynchronize(fast_->cs);   // emb_h may still feed the previous chunk's copy
+        if (!glmfast::cuda_ok(cudaStreamSynchronize(fast_->cs), "glm prompt embedding", err)) return false;
         for (int t = 0; t < T; ++t) {
             tt->to_float(pack_emb_src_ + (size_t) tokens[(size_t) (i + t)] * row_b, S->emb_h + (size_t) t * E, E);
             if (const float* img = image_row(pos_start + i + t))   // an image's row in place of its <|image|> token
@@ -2577,6 +2611,7 @@ bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err
         // the embedding lands in x (free until the first layer's gates write it) and fans out to the 4 streams
         cudaMemcpyAsync(S->x, S->emb_h, (size_t) T * E * sizeof(float), cudaMemcpyHostToDevice, fast_->cs);
         gb::embed_rows(S->x, S->R, T, E, fast_->cs);
+        return true;
     };
     std::vector<Glm5Model*> parts;
     for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) parts.push_back(m);
@@ -2589,7 +2624,7 @@ bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err
             const int T = chunk_len(c);
             const int64_t p0 = pos_start + (int64_t) c * Tc;
             cudaSetDevice(dev_);
-            embed(c);
+            if (!embed(c)) return false;
             std::vector<int32_t> nx0;
             if (mtp_il_ >= 0) next_of(c, nx0);   // a single device carries the draft block itself
             if (!prefill_half(p0, T, err, nx0.empty() ? nullptr : nx0.data())) return false;
@@ -2644,7 +2679,11 @@ bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err
             }
             cudaMemcpyAsync(m->pf_->hop_h + (size_t) (c & 1) * slot, m->pf_->R, (size_t) T * 4 * E * sizeof(float),
                             cudaMemcpyDeviceToHost, m->fast_->cs);
-            cudaStreamSynchronize(m->fast_->cs);
+            std::string e;
+            if (!glmfast::cuda_ok(cudaStreamSynchronize(m->fast_->cs), "glm prompt hop out", e)) {
+                fail(e);
+                return false;
+            }
             {
                 std::lock_guard<std::mutex> lk(mu);
                 produced[(size_t) k] = c + 1;
@@ -2668,14 +2707,17 @@ bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err
                     const int64_t p0 = pos_start + (int64_t) c * Tc;
                     cudaMemcpyAsync(m->pf_->R, up->pf_->hop_h + (size_t) (c & 1) * slot,
                                     (size_t) T * 4 * E * sizeof(float), cudaMemcpyHostToDevice, m->fast_->cs);
-                    cudaStreamSynchronize(m->fast_->cs);
+                    std::string e2;
+                    if (!glmfast::cuda_ok(cudaStreamSynchronize(m->fast_->cs), "glm prompt hop in", e2)) {
+                        fail(e2);
+                        return;
+                    }
                     {
                         std::lock_guard<std::mutex> lk(mu);
                         consumed[(size_t) k - 1] = c + 1;
                     }
                     cv.notify_all();
                     m->pos_ = p0;
-                    std::string e2;
                     std::vector<int32_t> nx;
                     if (m->mtp_il_ >= 0) next_of(c, nx);
                     if (!m->prefill_half(p0, T, e2, nx.empty() ? nullptr : nx.data())) {
@@ -2686,7 +2728,10 @@ bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err
                         if (!hand_on(k, c, T)) return;
                         continue;
                     }
-                    cudaStreamSynchronize(m->fast_->cs);
+                    if (!glmfast::cuda_ok(cudaStreamSynchronize(m->fast_->cs), "glm prompt pipeline", e2)) {
+                        fail(e2);
+                        return;
+                    }
                     if (prefill_progress && c + 1 < nc &&
                         !prefill_progress(std::min<int64_t>(n, (int64_t) (c + 1) * Tc), n)) {
                         fail("cancelled");
@@ -2702,7 +2747,7 @@ bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err
             }
             const int T = chunk_len(c);
             const int64_t p0 = pos_start + (int64_t) c * Tc;
-            embed(c);
+            if (!embed(c)) { fail(err); break; }
             std::string e1;
             if (!prefill_half(p0, T, e1)) {
                 fail(e1.empty() ? "glm prefill: the head half failed" : e1);
@@ -2729,10 +2774,8 @@ bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err
     }
     for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) {
         cudaSetDevice(m->dev_);
-        cudaStreamSynchronize(m->fast_->cs);
-        const cudaError_t e = cudaGetLastError();
-        if (e != cudaSuccess) {
-            err = std::string("glm prefill: ") + cudaGetErrorString(e);
+        if (!glmfast::cuda_ok(cudaStreamSynchronize(m->fast_->cs), "glm prefill compute", err) ||
+            !glmfast::cuda_ok(cudaStreamSynchronize(m->fast_->copy), "glm prefill copies", err)) {
             cudaSetDevice(dev_);
             return false;
         }

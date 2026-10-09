@@ -1933,8 +1933,8 @@ __device__ void topk_argmax(float* sel, int E, int k, int* out, float* s_bv, int
                     v = s_bv[w];
                     i = s_bi[w];
                 }
-            out[r] = i;
-            if (i >= 0 && i < E) sel[i] = -INFINITY;
+            out[r] = i >= 0 && i < E && isfinite(v) ? i : -1;
+            if (out[r] >= 0) sel[i] = -INFINITY;
         }
         __syncthreads();
     }
@@ -1984,6 +1984,9 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
     __shared__ int s_ids[8];
     __shared__ float s_w[8];
     __shared__ unsigned int s_mask, s_seq;
+    __shared__ int bad;
+    if (tid == 0) bad = a.d.route_error != nullptr && *a.d.route_error != 0 ? 1 : 0;
+    __syncthreads();
     // the CPU lane's frequency counts age: every 4096 routes all of them halve (the whole block, before any use)
     if (a.cpu_plan != 0ull && a.d.dcnt != nullptr && ((*a.d.seq + 1) & 4095u) == 0u)
         for (int i = tid; i < a.d.n_keys; i += ROUTE_THREADS) a.d.dcnt[i] >>= 1;
@@ -1991,11 +1994,15 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
         const float p = 1.0f / (1.0f + expf(-a.logits[e]));
         s_p[e] = p;
         s_sel[e] = a.bias ? p + a.bias[e] : p;
+        if (!isfinite(a.logits[e]) || !isfinite(s_sel[e])) atomicMax(&bad, 1);
     }
     __shared__ float s_bv[32];
     __shared__ int s_bi[32];
     __syncthreads();
     topk_argmax(s_sel, E, a.k, s_ids, s_bv, s_bi);
+    if (tid == 0)
+        for (int i = 0; i < a.k; ++i)
+            if (s_ids[i] < 0 || s_ids[i] >= E) atomicMax(&bad, 1);
     // the next layer's predicted top-k (same selection rule, its own bias)
     __shared__ int s_pred[8];
     if (tid < 8) s_pred[tid] = -1;
@@ -2004,9 +2011,13 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
         for (int e = tid; e < E; e += ROUTE_THREADS) {
             const float p = 1.0f / (1.0f + expf(-a.pred_logits[e]));
             s_sel[e] = a.pred_bias ? p + a.pred_bias[e] : p;   // s_sel is free again: the selection is done
+            if (!isfinite(a.pred_logits[e]) || !isfinite(s_sel[e])) atomicMax(&bad, 2);
         }
         __syncthreads();
         topk_argmax(s_sel, E, a.k, s_pred, s_bv, s_bi);
+        if (tid == 0)
+            for (int i = 0; i < a.k; ++i)
+                if (s_pred[i] < 0 || s_pred[i] >= E) atomicMax(&bad, 2);
     }
     // LOOKAHEAD: one warp per later layer, its top-k in registers (E <= 512; the same selection rule and ties)
     __shared__ short s_ah[kAhead][8];
@@ -2022,6 +2033,7 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
             if (e < E) {
                 const float p = 1.0f / (1.0f + expf(-lg[e]));
                 x = bs ? p + bs[e] : p;
+                if (!isfinite(lg[e]) || !isfinite(x)) atomicMax(&bad, 3);
             }
             v[j] = x;
         }
@@ -2030,7 +2042,7 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
             int bi = 0x7fffffff;
 #pragma unroll
             for (int j = 0; j < 16; ++j)
-                if (v[j] > bv || (v[j] == bv && lane + 32 * j < bi)) {
+                if (lane + 32 * j < E && (v[j] > bv || (v[j] == bv && lane + 32 * j < bi))) {
                     bv = v[j];
                     bi = lane + 32 * j;
                 }
@@ -2046,10 +2058,38 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
 #pragma unroll
             for (int j = 0; j < 16; ++j)
                 if (lane + 32 * j == bi) v[j] = -INFINITY;
-            if (lane == 0) s_ah[w][r] = (short) (bi < E ? bi : -1);
+            if (lane == 0) {
+                const bool valid = bi >= 0 && bi < E && isfinite(bv);
+                s_ah[w][r] = (short) (valid ? bi : -1);
+                if (!valid) atomicMax(&bad, 3);
+            }
         }
     }
     __syncthreads();
+    if (bad != 0) {
+        if (tid == 0) {
+            // No probability/table lookup or DMA for an invalid route. Still publish and retire its sequence.
+            if (a.d.route_error != nullptr && *a.d.route_error == 0) *a.d.route_error = 4 * a.layer + bad;
+            *a.d.wait_seq = 0u;
+            if (a.d.cpu_seq != nullptr) *a.d.cpu_seq = 0u;
+            *a.d.cpu_flag = 0;
+            *a.d.pf_n = 0;
+            for (int i = 0; i < a.k; ++i) {
+                a.d.plan_ptr[i] = a.d.fetch_src[i] = 0ull;
+                a.d.plan_w[i] = 0.0f;
+                a.d.plan_id[i] = -1;
+            }
+            const unsigned int seq = *a.d.seq + 1;
+            *a.d.seq = seq;
+            MoeRequest* rq = (MoeRequest*) a.d.ring + (seq % kRingSize);
+            rq->layer = a.layer;
+            rq->error = bad;
+            __threadfence_system();
+            rq->seq = seq;
+            __threadfence_system();
+        }
+        return;
+    }
     __shared__ unsigned int s_fetch, s_promo, s_cpu;
     __shared__ unsigned long long s_pp[8], s_cs[8];
     __shared__ int s_npf, s_pfid[8];
@@ -2177,6 +2217,7 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
         for (int e = tid; e < a.n_embd; e += ROUTE_THREADS) rq->x[e] = a.x[e];
     if (tid == 0) {
         rq->layer = a.layer;
+        rq->error = 0;
         rq->miss_mask = s_mask;
         rq->fetch_mask = s_fetch;
         rq->promo_mask = s_promo;

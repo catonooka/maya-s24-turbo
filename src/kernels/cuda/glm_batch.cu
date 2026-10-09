@@ -1476,8 +1476,8 @@ __device__ void topk_argmax(float* sel, int E, int k, int* out, float* s_bv, int
                     v = s_bv[w];
                     i = s_bi[w];
                 }
-            out[r] = i;
-            if (i >= 0 && i < E) sel[i] = -INFINITY;
+            out[r] = i >= 0 && i < E && isfinite(v) ? i : -1;
+            if (out[r] >= 0) sel[i] = -INFINITY;
         }
         __syncthreads();
     }
@@ -1491,14 +1491,27 @@ __global__ void __launch_bounds__(256) route_kernel(const float* __restrict__ lo
     __shared__ int s_ids[8];
     __shared__ float s_bv[32];
     __shared__ int s_bi[32];
+    __shared__ int bad;
+    if (tid == 0) bad = 0;
+    __syncthreads();
     for (int e = tid; e < E; e += blockDim.x) {
         const float p = 1.0f / (1.0f + expf(-logits[(size_t) t * E + e]));
         s_p[e] = p;
         s_sel[e] = bias ? p + bias[e] : p;
+        if (!isfinite(logits[(size_t) t * E + e]) || !isfinite(s_sel[e])) atomicExch(&bad, 1);
     }
     __syncthreads();
     topk_argmax(s_sel, E, k, s_ids, s_bv, s_bi);
     if (tid == 0) {
+        for (int i = 0; i < k; ++i) bad |= s_ids[i] < 0 || s_ids[i] >= E;
+        if (bad) {
+            // Invalid rows contribute no counts. The host rejects them before planning/scattering.
+            for (int i = 0; i < k; ++i) {
+                ids[(size_t) t * k + i] = -1;
+                w[(size_t) t * k + i] = 0.0f;
+            }
+            return;
+        }
         double sum = 0.0;
         for (int i = 0; i < k; ++i) sum += (double) s_p[s_ids[i]];
         const float inv = (float) (norm_w ? 1.0 / fmax(sum, 6.103515625e-5) : 1.0);
