@@ -1358,6 +1358,7 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
                 d.kv_raw = B.kv_raw;
                 d.kv_norm = Ly.kv_a_norm;
                 d.lat = (uint16_t*) (state_ + dsa_lat_[(size_t) il]);
+                d.lat_q8 = lat_q8_;
                 d.kv_lora = g.kv_lora;
                 d.ik_raw = B.ik_raw;
                 d.k_norm_w = Ly.k_norm_w;
@@ -1366,6 +1367,7 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
                 d.ig_raw = B.ig_raw;
                 d.ig_cache = state_ + dsa_ig_[(size_t) il];
                 d.idx_key = g.idx_key;
+                d.ring = ik_ring_;
                 d.p0 = pt;
                 d.T = tn;
                 d.eps = g.norm_eps;
@@ -1375,7 +1377,8 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
                 const int pool_lo = (pt + kp) / kp - 1, pool_hi = (pt + tn) / kp - 1;
                 if (pool_hi >= pool_lo)
                     gb::dsa_pool(state_ + dsa_ik_[(size_t) il], state_ + dsa_ig_[(size_t) il], Ly.ape,
-                                 state_ + dsa_pool_[(size_t) il], g.idx_key, kp, pool_lo, pool_hi - pool_lo + 1, s);
+                                 state_ + dsa_pool_[(size_t) il], g.idx_key, kp, pool_lo, pool_hi - pool_lo + 1, s,
+                                 ik_ring_);
                 hgemm_q(Ly.q_b, g.n_head * g.qk_nope, g.q_lora, B.qr16, g.q_lora, B.q, g.n_head * g.qk_nope, tn, 0.0f);
                 sgemm_bf16(Ly.idx_q_b, g.idx_heads * g.idx_key, g.q_lora, B.qr, g.q_lora, B.iq, g.idx_heads * g.idx_key,
                            tn, 1.0f);
@@ -1418,11 +1421,11 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
                 if (wmma)
                     gb::mla_attn_f16q((const uint16_t*) B.q_abs, (const uint16_t*) (state_ + dsa_lat_[(size_t) il]), B.cells,
                                       B.n_sel, g.n_sel_max(), g.n_head, g.kv_lora, 1.0f / std::sqrt((float) g.qk_nope), tn,
-                                      B.ctx, s);
+                                      B.ctx, s, lat_q8_);
                 else
 #endif
                 gb::mla_attn(B.q_abs, (const uint16_t*) (state_ + dsa_lat_[(size_t) il]), B.cells, B.n_sel, g.n_sel_max(), g.n_head,
-                             g.kv_lora, 1.0f / std::sqrt((float) g.qk_nope), tn, B.ctx, s);
+                             g.kv_lora, 1.0f / std::sqrt((float) g.qk_nope), tn, B.ctx, s, lat_q8_);
                 S->mark("dsa_attn", s);
                 // out[t][h] = wv_b[h] (v_head x kv_lora) . ctx[t][h]
 #if defined(STRATA_USE_HIP)
@@ -2224,6 +2227,7 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
             d.kv_raw = kv;
             d.kv_norm = Ly.kv_a_norm;
             d.lat = (uint16_t*) (state_ + dsa_lat_[(size_t) mtp_il_]);
+            d.lat_q8 = lat_q8_;
             d.kv_lora = g.kv_lora;
             d.ik_raw = ik;
             d.k_norm_w = Ly.k_norm_w;
@@ -2232,15 +2236,26 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
             d.ig_raw = ig;
             d.ig_cache = state_ + dsa_ig_[(size_t) mtp_il_];
             d.idx_key = g.idx_key;
-            d.p0 = (int) p0;
-            d.T = Tv;
+            d.ring = ik_ring_;
             d.eps = g.norm_eps;
-            gb::dsa_prep(d, s);
+            // in pieces the indexer's key / gate ring holds with the open pool before them (a one-GPU chunk is up to
+            // 32K positions, the ring ~8K): each piece's rows are pooled before the next one overwrites the ring
             const int kp = g.idx_kpool;
-            const int pool_lo = (int) ((p0 + kp) / kp - 1), pool_hi = (int) ((p0 + Tv) / kp - 1);
-            if (pool_hi >= pool_lo)
-                gb::dsa_pool(state_ + dsa_ik_[(size_t) mtp_il_], state_ + dsa_ig_[(size_t) mtp_il_], Ly.ape,
-                             state_ + dsa_pool_[(size_t) mtp_il_], g.idx_key, kp, pool_lo, pool_hi - pool_lo + 1, s);
+            const int piece = std::max(kp, ik_ring_ - 64);
+            for (int t0 = 0; t0 < Tv; t0 += piece) {
+                const int tn = std::min(piece, Tv - t0);
+                d.kv_raw = kv + (size_t) t0 * g.kv_lora;
+                d.ik_raw = ik + (size_t) t0 * g.idx_key;
+                d.ig_raw = ig + (size_t) t0 * g.idx_key;
+                d.p0 = (int) p0 + t0;
+                d.T = tn;
+                gb::dsa_prep(d, s);
+                const int pool_lo = (int) ((p0 + t0 + kp) / kp - 1), pool_hi = (int) ((p0 + t0 + tn) / kp - 1);
+                if (pool_hi >= pool_lo)
+                    gb::dsa_pool(state_ + dsa_ik_[(size_t) mtp_il_], state_ + dsa_ig_[(size_t) mtp_il_], Ly.ape,
+                                 state_ + dsa_pool_[(size_t) mtp_il_], g.idx_key, kp, pool_lo, pool_hi - pool_lo + 1, s,
+                                 ik_ring_);
+            }
             S->mark("mtp_cache", s);
         }
     }

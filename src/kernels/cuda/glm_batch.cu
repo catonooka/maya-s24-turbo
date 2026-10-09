@@ -65,6 +65,22 @@ __device__ __forceinline__ float block_sum(float v, float* sh) {
 // the DSA latent cache is FP16 (uint16_t bits): read / written in F32
 __device__ __forceinline__ float lat_f(uint16_t v) { return __half2float(__ushort_as_half(v)); }
 __device__ __forceinline__ uint16_t lat_h(float v) { return __half_as_ushort(__float2half(v)); }
+// the INT8 latent records (STRATA_GLM_KV_INT8; glm_fast.hpp lat8_rec_bytes): kv codes, then an FP16 scale per 32
+__device__ __forceinline__ const uint8_t* lat8_rec(const uint16_t* lat, int kv, int cell) {
+    return (const uint8_t*) lat + (size_t) (kv + kv / 16) * cell;
+}
+// values [4 c4, 4 c4 + 4) of a record as FP16 (what an FP16 row's uint2 would hold)
+__device__ __forceinline__ uint2 lat8_h4(const uint8_t* rec, int kv, int c4) {
+    const char4 q = ((const char4*) rec)[c4];
+    const float d = __half2float(((const __half*) (rec + kv))[(4 * c4) >> 5]);
+    const __half2 a = __floats2half2_rn((float) q.x * d, (float) q.y * d);
+    const __half2 b = __floats2half2_rn((float) q.z * d, (float) q.w * d);
+    return make_uint2(*(const unsigned*) &a, *(const unsigned*) &b);
+}
+__device__ __forceinline__ uint4 lat8_h8(const uint8_t* rec, int kv, int c8) {
+    const uint2 lo = lat8_h4(rec, kv, 2 * c8), hi = lat8_h4(rec, kv, 2 * c8 + 1);
+    return make_uint4(lo.x, lo.y, hi.x, hi.y);
+}
 __device__ __forceinline__ float dsigmoid(float x) { return 1.0f / (1.0f + __expf(-x)); }
 
 std::atomic<int> g_errors{0};
@@ -464,7 +480,20 @@ __global__ void __launch_bounds__(512) dsa_prep_kernel(const DsaPrepArgs a) {
         const float v = tid < a.kv_lora ? a.kv_raw[(size_t) t * a.kv_lora + tid] : 0.0f;
         const float ss = block_sum(v * v, sred);
         const float inv = rsqrtf(ss / (float) a.kv_lora + a.eps);
-        if (tid < a.kv_lora) a.lat[(size_t) a.kv_lora * p + tid] = lat_h(v * inv * a.kv_norm[tid]);
+        if (tid < a.kv_lora) {   // (kv_lora % 32 == 0: whole warps)
+            const float y = v * inv * a.kv_norm[tid];
+            if (a.lat_q8) {
+                uint8_t* rec = (uint8_t*) lat8_rec(a.lat, a.kv_lora, p);
+                float amax = fabsf(y);
+                for (int o = 16; o > 0; o >>= 1) amax = fmaxf(amax, __shfl_xor_sync(0xffffffffu, amax, o));
+                const __half d16 = __float2half(amax / 127.0f);
+                const float d = __half2float(d16);
+                ((int8_t*) rec)[tid] = (int8_t) (d > 0.0f ? max(-127, min(127, __float2int_rn(y / d))) : 0);
+                if ((tid & 31) == 0) ((__half*) (rec + a.kv_lora))[tid >> 5] = d16;
+            } else {
+                a.lat[(size_t) a.kv_lora * p + tid] = lat_h(y);
+            }
+        }
         return;
     }
     const int K = a.idx_key;
@@ -474,19 +503,19 @@ __global__ void __launch_bounds__(512) dsa_prep_kernel(const DsaPrepArgs a) {
     const float mu = s1 / (float) K;
     const float inv = rsqrtf(s2 / (float) K - mu * mu + a.eps);
     if (tid < K) {
-        a.ik_cache[(size_t) K * p + tid] = (v - mu) * inv * a.k_norm_w[tid] + a.k_norm_b[tid];
-        a.ig_cache[(size_t) K * p + tid] = a.ig_raw[(size_t) t * K + tid];
+        a.ik_cache[(size_t) K * (p % a.ring) + tid] = (v - mu) * inv * a.k_norm_w[tid] + a.k_norm_b[tid];
+        a.ig_cache[(size_t) K * (p % a.ring) + tid] = a.ig_raw[(size_t) t * K + tid];
     }
 }
 
 __global__ void dsa_pool_kernel(const float* __restrict__ ik, const float* __restrict__ ig, const float* __restrict__ ape,
-                                float* __restrict__ pooled, int K, int kpool, int pool0) {
+                                float* __restrict__ pooled, int K, int kpool, int pool0, int ring) {
     const int pi = pool0 + blockIdx.x, tid = threadIdx.x;
     if (tid >= K) return;
     float lg[16];
     float mx = -INFINITY;
     for (int m = 0; m < kpool && m < 16; ++m) {
-        lg[m] = ig[(size_t) tid + (size_t) K * (pi * kpool + m)] + ape[tid + K * m];
+        lg[m] = ig[(size_t) tid + (size_t) K * ((pi * kpool + m) % ring)] + ape[tid + K * m];
         mx = fmaxf(mx, lg[m]);
     }
     float den = 0.0f;
@@ -495,7 +524,7 @@ __global__ void dsa_pool_kernel(const float* __restrict__ ik, const float* __res
         den += lg[m];
     }
     float acc = 0.0f;
-    for (int m = 0; m < kpool && m < 16; ++m) acc += (lg[m] / den) * ik[(size_t) tid + (size_t) K * (pi * kpool + m)];
+    for (int m = 0; m < kpool && m < 16; ++m) acc += (lg[m] / den) * ik[(size_t) tid + (size_t) K * ((pi * kpool + m) % ring)];
     pooled[(size_t) tid + (size_t) K * pi] = acc;
 }
 
@@ -646,7 +675,7 @@ constexpr size_t kF32Smem = (size_t) MB_CH * 512 * sizeof(uint16_t) + (size_t) M
 static_assert(kF32Smem <= 48 * 1024, "the F32 prompt attention must fit the default 48 KB of shared memory");
 __global__ void __launch_bounds__(256) mla_attn_kernel(const float* __restrict__ q_abs, const uint16_t* __restrict__ lat,
                                                        const int* __restrict__ cells_all, const int* __restrict__ n_sel_arr,
-                                                       int n_sel_max, int n_head, float scale, float* __restrict__ ctx) {
+                                                       int n_sel_max, int n_head, float scale, float* __restrict__ ctx, bool q8) {
     constexpr int KV = 512;
     extern __shared__ float sm[];
     uint16_t* sL = (uint16_t*) sm;   // MB_CH x KV, FP16
@@ -679,7 +708,9 @@ __global__ void __launch_bounds__(256) mla_attn_kernel(const float* __restrict__
         for (int i = tid; i < MB_CH * KV / 4; i += blockDim.x) {
             const int s = i / (KV / 4), c4 = i - s * (KV / 4);
             const int cell = s_cell[s];
-            ((uint2*) sL)[i] = cell >= 0 ? ((const uint2*) (lat + (size_t) KV * cell))[c4] : make_uint2(0u, 0u);
+            ((uint2*) sL)[i] = cell < 0 ? make_uint2(0u, 0u)
+                               : q8 ? lat8_h4(lat8_rec(lat, KV, cell), KV, c4)
+                                    : ((const uint2*) (lat + (size_t) KV * cell))[c4];
         }
         __syncthreads();
         for (int s = 0; s < MB_CH; ++s) {
@@ -757,7 +788,7 @@ constexpr size_t kTcSmem = (size_t) TC_HG * 512 * 4 + (size_t) TC_HG * 512 * 2 +
 __global__ void __launch_bounds__(256) mla_attn_tc_kernel(const float* __restrict__ q_abs, const uint16_t* __restrict__ lat,
                                                           const int* __restrict__ cells_all,
                                                           const int* __restrict__ n_sel_arr, int n_sel_max, int n_head,
-                                                          float scale, float* __restrict__ ctx) {
+                                                          float scale, float* __restrict__ ctx, bool q8) {
     using namespace nvcuda;
     constexpr int KV = 512;
     extern __shared__ __align__(128) unsigned char tc_sm[];
@@ -789,7 +820,9 @@ __global__ void __launch_bounds__(256) mla_attn_tc_kernel(const float* __restric
         for (int k = 0; k < PRE; ++k) {
             const int i = tid + k * 256, s = i / (KV / 8), c8 = i - s * (KV / 8);
             const int cell = c0 + s < ns ? cl[c0 + s] : -1;
-            pre[k] = cell >= 0 ? ((const uint4*) (lat + (size_t) KV * cell))[c8] : make_uint4(0u, 0u, 0u, 0u);
+            pre[k] = cell < 0 ? make_uint4(0u, 0u, 0u, 0u)
+                     : q8 ? lat8_h8(lat8_rec(lat, KV, cell), KV, c8)
+                          : ((const uint4*) (lat + (size_t) KV * cell))[c8];
         }
     };
     issue(0);
@@ -876,7 +909,7 @@ constexpr size_t kTcRegSmem = (size_t) TC_HG * 512 * 2 + (size_t) TC_CH * 512 * 
 __global__ void __launch_bounds__(256) mla_attn_tc_reg_kernel(const float* __restrict__ q_abs, const uint16_t* __restrict__ lat,
                                                               const int* __restrict__ cells_all,
                                                               const int* __restrict__ n_sel_arr, int n_sel_max, int n_head,
-                                                              float scale, float* __restrict__ ctx) {
+                                                              float scale, float* __restrict__ ctx, bool q8) {
     using namespace nvcuda;
     constexpr int KV = 512;
     extern __shared__ __align__(128) unsigned char tc_sm[];
@@ -909,7 +942,9 @@ __global__ void __launch_bounds__(256) mla_attn_tc_reg_kernel(const float* __res
         for (int k = 0; k < PRE; ++k) {
             const int i = tid + k * 256, s = i / (KV / 8), c8 = i - s * (KV / 8);
             const int cell = c0 + s < ns ? cl[c0 + s] : -1;
-            pre[k] = cell >= 0 ? ((const uint4*) (lat + (size_t) KV * cell))[c8] : make_uint4(0u, 0u, 0u, 0u);
+            pre[k] = cell < 0 ? make_uint4(0u, 0u, 0u, 0u)
+                     : q8 ? lat8_h8(lat8_rec(lat, KV, cell), KV, c8)
+                          : ((const uint4*) (lat + (size_t) KV * cell))[c8];
         }
     };
     issue(0);
@@ -1054,7 +1089,7 @@ __global__ void __launch_bounds__(256) mla_attn_mma_kernel(const float* __restri
                                                            const uint16_t* __restrict__ lat,
                                                            const int* __restrict__ cells_all,
                                                            const int* __restrict__ n_sel_arr, int n_sel_max, int n_head,
-                                                           float scale, float* __restrict__ ctx) {
+                                                           float scale, float* __restrict__ ctx, bool q8) {
     extern __shared__ __align__(16) unsigned char mt_sm[];
     __half* sQ = (__half*) mt_sm;                 // MT_H x MT_LD
     __half* sL = sQ + MT_H * MT_LD;               // MT_C x MT_LD
@@ -1103,7 +1138,8 @@ __global__ void __launch_bounds__(256) mla_attn_mma_kernel(const float* __restri
             const int r = i / (MT_KV / 8), c8 = i - r * (MT_KV / 8);
             const int cell = s_cell[r];
             uint4 v = make_uint4(0u, 0u, 0u, 0u);
-            if (cell >= 0) v = ((const uint4*) (lat + (size_t) MT_KV * cell))[c8];
+            if (cell >= 0)
+                v = q8 ? lat8_h8(lat8_rec(lat, MT_KV, cell), MT_KV, c8) : ((const uint4*) (lat + (size_t) MT_KV * cell))[c8];
             *(uint4*) (sL + r * MT_LD + 8 * c8) = v;
         }
         __syncthreads();
@@ -1213,7 +1249,7 @@ __global__ void __launch_bounds__(256) mla_attn_wmma_kernel(const _Float16* __re
                                                             const uint16_t* __restrict__ lat,
                                                             const int* __restrict__ cells_all,
                                                             const int* __restrict__ n_sel_arr, int n_sel_max,
-                                                            int n_head, float scale, float* __restrict__ ctx) {
+                                                            int n_head, float scale, float* __restrict__ ctx, bool q8) {
     namespace wm = rocwmma;
     constexpr int KV = 512;
     extern __shared__ __align__(128) unsigned char hw_sm[];
@@ -1242,7 +1278,9 @@ __global__ void __launch_bounds__(256) mla_attn_wmma_kernel(const _Float16* __re
         for (int k = 0; k < PRE; ++k) {
             const int i = tid + k * 256, s = i / (KV / 8), c8 = i - s * (KV / 8);
             const int cell = c0 + s < ns ? cl[c0 + s] : -1;
-            pre[k] = cell >= 0 ? ((const uint4*) (lat + (size_t) KV * cell))[c8] : make_uint4(0u, 0u, 0u, 0u);
+            pre[k] = cell < 0 ? make_uint4(0u, 0u, 0u, 0u)
+                     : q8 ? lat8_h8(lat8_rec(lat, KV, cell), KV, c8)
+                          : ((const uint4*) (lat + (size_t) KV * cell))[c8];
         }
     };
     issue(0);
@@ -1673,9 +1711,10 @@ void dsa_prep(const DsaPrepArgs& a, cudaStream_t s) {
 }
 
 void dsa_pool(const float* ik_cache, const float* ig_cache, const float* ape, float* pooled, int idx_key, int kpool,
-              int pool0, int n, cudaStream_t s) {
+              int pool0, int n, cudaStream_t s, int ring) {
     if (n <= 0) return;
-    dsa_pool_kernel<<<n, ((idx_key + 31) / 32) * 32, 0, s>>>(ik_cache, ig_cache, ape, pooled, idx_key, kpool, pool0);
+    dsa_pool_kernel<<<n, ((idx_key + 31) / 32) * 32, 0, s>>>(ik_cache, ig_cache, ape, pooled, idx_key, kpool, pool0,
+                                                             ring);
     check("dsa_pool");
 }
 
@@ -1707,7 +1746,7 @@ void dsa_select(const float* score, int score_ld, int p0, int kpool, int top_poo
 }
 
 void mla_attn(const float* q_abs, const uint16_t* lat, const int* cells, const int* n_sel, int n_sel_max, int n_head,
-              int kv_lora, float scale, int T, float* ctx, cudaStream_t s) {
+              int kv_lora, float scale, int T, float* ctx, cudaStream_t s, bool lat_q8) {
     if (T <= 0) return;
     if (kv_lora != 512 || n_head % MB_HG != 0) {
         std::fprintf(stderr, "glm_batch mla_attn: kv_lora %d / n_head %d unsupported\n", kv_lora, n_head);
@@ -1758,17 +1797,17 @@ void mla_attn(const float* q_abs, const uint16_t* lat, const int* cells, const i
     if (tc_ok[dev] > 0 && !f32_only) {
         if (tc_ok[dev] == 3)
             mla_attn_mma_kernel<<<dim3((unsigned) T, (unsigned) (n_head / MT_H)), 256, kMtSmem, s>>>(
-                q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx);
+                q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx, lat_q8);
         else if (tc_ok[dev] == 2)
-            mla_attn_tc_reg_kernel<<<grid, 256, kTcRegSmem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx);
+            mla_attn_tc_reg_kernel<<<grid, 256, kTcRegSmem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx, lat_q8);
         else
-            mla_attn_tc_kernel<<<grid, 256, kTcSmem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx);
+            mla_attn_tc_kernel<<<grid, 256, kTcSmem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx, lat_q8);
         check("mla_attn_tc");
         if (check_tc) {
             const size_t n = (size_t) T * n_head * 512;
             float* ref = nullptr;
             if (cudaMalloc(&ref, n * sizeof(float)) == cudaSuccess) {
-                mla_attn_kernel<<<grid, 256, kF32Smem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ref);
+                mla_attn_kernel<<<grid, 256, kF32Smem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ref, lat_q8);
                 std::vector<float> A(n), B(n);
                 cudaStreamSynchronize(s);
                 cudaMemcpy(A.data(), ctx, n * sizeof(float), cudaMemcpyDeviceToHost);
@@ -1794,13 +1833,13 @@ void mla_attn(const float* q_abs, const uint16_t* lat, const int* cells, const i
         return;
     }
 #endif
-    mla_attn_kernel<<<grid, 256, kF32Smem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx);
+    mla_attn_kernel<<<grid, 256, kF32Smem, s>>>(q_abs, lat, cells, n_sel, n_sel_max, n_head, scale, ctx, lat_q8);
     check("mla_attn");
 }
 
 #if defined(STRATA_USE_HIP)
 void mla_attn_f16q(const uint16_t* q16, const uint16_t* lat, const int* cells, const int* n_sel, int n_sel_max,
-                   int n_head, int kv_lora, float scale, int T, float* ctx, cudaStream_t s) {
+                   int n_head, int kv_lora, float scale, int T, float* ctx, cudaStream_t s, bool lat_q8) {
     if (T <= 0) return;
     if (kv_lora != 512 || n_head % HW_HG != 0) {
         std::fprintf(stderr, "glm_batch mla_attn_f16q: kv_lora %d / n_head %d unsupported\n", kv_lora, n_head);
@@ -1808,7 +1847,8 @@ void mla_attn_f16q(const uint16_t* q16, const uint16_t* lat, const int* cells, c
     }
     // kHwSmem is below the 64 KiB a workgroup may take without opting in
     const dim3 grid((unsigned) T, (unsigned) (n_head / HW_HG));
-    mla_attn_wmma_kernel<<<grid, 256, kHwSmem, s>>>((const _Float16*) q16, lat, cells, n_sel, n_sel_max, n_head, scale, ctx);
+    mla_attn_wmma_kernel<<<grid, 256, kHwSmem, s>>>((const _Float16*) q16, lat, cells, n_sel, n_sel_max, n_head, scale, ctx,
+                                                    lat_q8);
     check("mla_attn_wmma");
 }
 #endif

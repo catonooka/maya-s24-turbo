@@ -349,6 +349,17 @@ public:
     int fast_sample(strata::kernels::SamplerParams& sp, std::string& err);   // this half's logits, sampled on its stream
     int64_t ram_budget_ = -1;                              // bytes of pinned RAM tier for this half (-1: derive)
     float* snap_ = nullptr;                                // the saved KDA states + conv histories (this half)
+    // the DSA indexer's key / gate caches (ik, ig) are read only to pool each kpool-position block, so the fast path
+    // keeps a RING of ik_ring_ positions (a prompt sub-batch, <= 8192, + one open pool; the NextN block's cache fill goes
+    // in pieces of the ring) - 8 KB/position/layer, 1 GB per card saved at 128K; a snapshot keeps the open pool's rows
+    // (snap_pool_: per DSA layer kpool-1 ik rows, then kpool-1 ig rows), since later positions overwrite their slots
+    int ik_ring_ = 0;
+    // the fast path's latent cache in INT8 records (--kv int8 / STRATA_GLM_KV_INT8=1; glm_fast.hpp lat8_rec_bytes):
+    // 544 bytes a position and layer against FP16's 1024
+    bool lat_q8_ = false;
+    float* snap_pool_ = nullptr;
+    std::vector<int> dsa_layers() const;                   // this half's DSA layers (NextN block first), slot order
+    void snap_pool_copy(bool restore);
     int64_t snap_pos_ = -1;
     std::string pack_dir_;
     bool fast_warm(std::string& err);                      // load-time: stream every expert into the tiers
