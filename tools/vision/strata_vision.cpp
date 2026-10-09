@@ -142,7 +142,7 @@ int main(int argc, char** argv) {
                     warm_tokens = (int) mtmd_input_chunk_get_n_tokens(ch);
             }
         }
-        std::fprintf(stderr, "strata-vision: warmed up at %d image tokens\n", warm_tokens);
+        std::fprintf(stderr, "maya-vision: warmed up at %d image tokens\n", warm_tokens);
         mtmd_input_chunks_free(chunks);
         if (bm) mtmd_bitmap_free(bm);
         // --measure without the picture's work buffers would report the weights alone, and the engine would lend

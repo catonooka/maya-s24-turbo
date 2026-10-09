@@ -72,9 +72,7 @@ def hints(*keys) -> Text:
 def splash() -> Text:
     tagline = Text.assemble(("Set up GLM-5.3-Flash ", INK), ("on your own GPUs.", f"italic {ACCENT_TEXT}"))
     lines = [gradient(row, "bold") for row in big("maya.")] + [
-        tagline, Text("─" * tagline.cell_len, LINE), Text("https://github.com/mw00/project-maya", f"italic {INK_SOFT}"),
-        Text.assemble(("[", FAINT), ("built on ", INK_SOFT), ("Strata", ACCENT_TEXT), (" and ", INK_SOFT),
-                      ("llama.cpp", ACCENT_TEXT), ("]", FAINT))]
+        tagline, Text("─" * tagline.cell_len, LINE), Text("https://github.com/mw00/project-maya", f"italic {INK_SOFT}")]
     return Text("\n", justify="center").join(lines)
 
 

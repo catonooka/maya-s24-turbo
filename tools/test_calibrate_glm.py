@@ -183,5 +183,18 @@ class Helpers(unittest.TestCase):
             self.assertEqual(CAL.host_thread_extras(root, hybrid), [3, 5])     # + a hybrid CPU's 6 P-core CPUs - 1
 
 
+class EngineError(unittest.TestCase):
+    def test_the_engine_own_last_line(self):
+        # the engine's lines say "maya ..." (v1.0.30); an older engine's "strata ..." are still its own
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "engine.log"
+            log.write_text("loading\nmaya generate: pack: out of memory\nsome library noise\n")
+            self.assertEqual(CAL.engine_error(str(log)), "maya generate: pack: out of memory")
+            log.write_text("loading\nstrata generate: pack: out of memory\nnoise\n")
+            self.assertEqual(CAL.engine_error(str(log)), "strata generate: pack: out of memory")
+            log.write_text("only noise\n")
+            self.assertEqual(CAL.engine_error(str(log)), "only noise")
+
+
 if __name__ == "__main__":
     unittest.main()

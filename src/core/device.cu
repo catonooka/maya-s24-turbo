@@ -80,7 +80,7 @@ DeviceInfo device_info(int ordinal) {
 #if defined(STRATA_USE_HIP)
         throw CudaError(std::string("no HIP device is present; this engine was compiled for ") + STRATA_HIP_ARCHS, -1);
 #else
-        throw CudaError("no CUDA device is present; Strata needs an NVIDIA GPU (RTX 20 series or newer)", -1);
+        throw CudaError("no CUDA device is present; this engine needs an NVIDIA GPU (RTX 20 series or newer)", -1);
 #endif
     }
     if (ordinal < 0 || ordinal >= count) {
@@ -119,7 +119,7 @@ DeviceInfo device_info(int ordinal) {
     if (d.cc_major * 10 + d.cc_minor < 75) {
         throw CudaError("device " + d.name + " reports compute capability " + std::to_string(d.cc_major) +
                             "." + std::to_string(d.cc_minor) +
-                            "; Strata needs compute capability 7.5 or newer (RTX 20 / 30 / 40 / 50 series)",
+                            "; this engine needs compute capability 7.5 or newer (RTX 20 / 30 / 40 / 50 series)",
                         -1);
     }
 #endif

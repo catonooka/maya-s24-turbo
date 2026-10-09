@@ -152,7 +152,7 @@ class Updater:
 
     def _update(self, svc, tag: str):
         with svc.fifo:                                  # the request in flight finishes first
-            print(f"[strata] updating Project Maya to {tag} ...", flush=True)
+            print(f"[maya] updating Project Maya to {tag} ...", flush=True)
             before = None
             try:
                 before = git(self.root, "rev-parse", "HEAD", timeout=20).stdout.strip()
@@ -165,10 +165,10 @@ class Updater:
                                        "update it by hand: git pull")
             except (OSError, subprocess.SubprocessError, RuntimeError) as e:
                 err = str(e)
-                print(f"[strata] the update did not happen: {err}", flush=True)
+                print(f"[maya] the update did not happen: {err}", flush=True)
                 self.state.update(state="failed", error=err, ended=time.time())
                 return
-            print(f"[strata] updated the files {before[:9] if before else ''} -> {tag}; Maya starts again (maya.py "
+            print(f"[maya] updated the files {before[:9] if before else ''} -> {tag}; Maya starts again (maya.py "
                   "compiles what changed in the engine, then loads the model) ...", flush=True)
             svc.close_for_restart()
             os._exit(UPDATE_EXIT)
