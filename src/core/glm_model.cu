@@ -2047,6 +2047,33 @@ static bool pack_shard_mmap(const std::string& path, strata::core::Glm5Model::Sh
 #endif
 }
 
+// Windows: while a file has a mapped view, every unbuffered read of it takes NTFS's cache-coherency path - the
+// decode's expert reads ran 3x as long (an expert in 24 parallel reads: 5.4 ms with the shards mapped, 1.8 ms
+// without; RTX 5090 Laptop, Intel RST RAID 0 of two NVMe drives, Maya-S24).  Once the load is done the fast path
+// reads the shards through h_direct only, and token_embd through pack_emb_src_: the table moves to the heap
+// (~0.7 GB for GLM-5.3-Flash's Q8_0 rows) and the views go.  Kept when a shard has no unbuffered handle (its reads
+// fall back to the view) or with STRATA_GLM_KEEP_MAP=1.
+void strata::core::Glm5Model::pack_release_views() {
+#ifdef _WIN32
+    const char* km = getenv("STRATA_GLM_KEEP_MAP");
+    if (km != nullptr && std::atoi(km) != 0) return;
+    for (const Shard& s : pack_shards_)
+        if (s.base != nullptr && s.h_direct == nullptr) return;
+    for (const Shard& s : pack_shards_)
+        if (pack_emb_src_ != nullptr && pack_emb_src_ >= s.base && pack_emb_src_ < s.base + s.size) {
+            const size_t bytes = (size_t) g_.n_vocab * ggml_row_size((ggml_type) pack_emb_type_, g_.n_embd);
+            pack_emb_copy_.assign(pack_emb_src_, pack_emb_src_ + bytes);
+            pack_emb_src_ = pack_emb_copy_.data();
+            break;
+        }
+    for (Shard& s : pack_shards_)
+        if (s.base != nullptr) {
+            UnmapViewOfFile(s.base);
+            s.base = nullptr;
+        }
+#endif
+}
+
 bool strata::core::Glm5Model::load_pack(const std::string& pack_dir, int64_t max_ctx, std::string& err, int dev,
                                         int l0, int l1) {
     dev_ = dev;
@@ -2648,6 +2675,7 @@ bool strata::core::Glm5Model::load_pack(const std::string& pack_dir, int64_t max
     host_hq_.resize(strata::kernels::cpu::kNativeHBytes);
     pack_ = true;
     loaded_ = true;
+    if (fast_mode_) pack_release_views();   // before fast_setup: its RAM tier sees the embedding's heap copy
     if (fast_mode_ && !fast_setup(err)) return false;
     reset();
     return true;

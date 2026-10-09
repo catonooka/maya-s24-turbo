@@ -131,10 +131,15 @@ private:
         for (;;) {
             const auto t0 = std::chrono::steady_clock::now();
             int spins = 0;
+            // a worker set_active left out sleeps at once: spinning, it held a CPU the active ones and the disk
+            // readers wanted, so the setup's calibration timed fewer threads on a CPU still full of spinners
+            // (24-core Ultra 9 275HX, no SMT, Windows: a decode's disk wait 16.8 ms with 24 threads, 8.1 ms with 16)
+            const bool idle = id + 1 >= active_.load(std::memory_order_acquire);
             while (gen_.load(std::memory_order_acquire) == seen) {
                 if (quit_.load(std::memory_order_relaxed)) return;
                 cpu_relax();
-                if ((++spins & 255) == 0 && std::chrono::steady_clock::now() - t0 > std::chrono::microseconds(spin_us_)) {
+                if (idle || ((++spins & 255) == 0 &&
+                             std::chrono::steady_clock::now() - t0 > std::chrono::microseconds(spin_us_))) {
                     std::unique_lock<std::mutex> lk(mu_);
                     sleeping_.fetch_add(1);
                     cv_.wait(lk, [&] { return quit_.load() || gen_.load() != seen; });

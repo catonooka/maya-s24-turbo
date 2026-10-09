@@ -416,6 +416,11 @@ void read_slice(const Glm5Model::Shard& sh, uint64_t off, size_t len, uint8_t* d
             }
         }
     }
+    if (sh.base == nullptr) {   // the views went after the load (pack_release_views): nothing to fall back to
+        std::fprintf(stderr, "glm fast: an expert read of %s failed (error %lu) - STRATA_GLM_KEEP_MAP=1 keeps the "
+                             "mapping to fall back to\n", sh.path.c_str(), (unsigned long) GetLastError());
+        std::abort();
+    }
     std::memcpy(dst, sh.base + off, len);
 #endif
 }
@@ -1399,6 +1404,13 @@ bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
         int cores = physical_cores();
         if (cores <= 0) cores = (int) std::thread::hardware_concurrency() / 2;
         threads = cores;
+        // cores without SMT siblings (Intel's Arrow Lake, E-core parts): a thread a core spins on EVERY CPU, and the
+        // disk readers, the service and the main thread wait for a time slice - two thirds of them leave the rest free
+        // (24-core Ultra 9 275HX, Windows, 33 GB RAM tier, the same 36.6 disk reads a token: 24 threads 2.1 tok/s and
+        // a disk wait 16.8 ms, 20 3.5 tok/s, 16 3.8 tok/s and 8.1 ms, 12 3.8 tok/s; shard views released: 24 threads
+        // 5.7 tok/s, 16 7.6)
+        if (const int logical = (int) std::thread::hardware_concurrency(); logical > 0 && cores >= logical)
+            threads = logical * 2 / 3;
         // one GPU: at most one NUMA node's worth, less 4 - a spinning pool on both sockets syncs across them, and the
         // CPUs left free keep the main thread's event wait, the service and warm-up threads off the spinning ones
         // (2-socket Xeon, 88 vCPUs, Q3_K experts: 88 threads 531 us an expert, 44 216 us, 44 with the RAM tier
