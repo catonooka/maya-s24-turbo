@@ -73,6 +73,15 @@ int main(int argc, char** argv) {
     const std::string gguf = argc > 2 ? argv[2] : "data/glm5-synth.gguf";
     const std::string dumps = argc > 3 ? argv[3] : "data/glm5-synth-dumps";
     const std::vector<int32_t> prompt = {1, 2, 3, 4, 5, 6, 7, 8};
+    // the data paths are relative to the repo root (the CTest form runs there): from the build folder it ended with
+    // no message, 0xC0000409 on Windows (#54)
+    if (std::FILE* f = std::fopen(gguf.c_str(), "rb")) {
+        std::fclose(f);
+    } else {
+        std::fprintf(stderr, "glm_model_test: %s not found - run it from the repo root, or pass the file\n",
+                     gguf.c_str());
+        return 2;
+    }
 
     strata::core::Glm5Model model;
     std::string err;
