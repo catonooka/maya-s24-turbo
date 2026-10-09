@@ -116,9 +116,9 @@ ROCm 7): `./maya.sh --backend hip --gpu 0 --check` first (two cards: `--gpus 0,1
    Running tab shows the dashboard's address, when the model is ready and the last answer's speed (Ctrl+C stops it).
    Open the dashboard at `http://127.0.0.1:8080`.
 
-**Next time**, just run `./setup.sh` again: it starts right away, nothing is downloaded twice, on the same screen - its
-dashboard shows the Monitor's numbers (the speed, where the experts live, the GPUs, the requests), Tab its log. Ctrl+C
-stops it.
+**Next time**, just run `./setup.sh` again (or the model's `./run-maya-<model>.sh`): it starts right away, nothing is
+downloaded twice, on the same screen - its dashboard shows the Monitor's numbers (the speed, where the experts live, the
+GPUs, the requests), Tab its log. Ctrl+C stops it.
 
 **Updating:** the dashboard's **About** says when a new version is out, and its **Update** button does it: Maya
 downloads the new code (git), compiles only the engine files that changed and loads the same model again - the model

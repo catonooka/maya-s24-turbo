@@ -1282,8 +1282,9 @@ def parse_env(items) -> dict:
 
 
 def write_run_script(cfg_path: Path, port: int) -> Path:
-    cmd = [sys.executable, str(ROOT / "serve" / "server.py"), "--engine", "strata", "--config", str(cfg_path),
-           "--port", str(port)]
+    """run-<config>.sh (.bat): this config's start through maya.py - on its screen in a terminal (its loading and
+    dashboard), else (--plain, or no terminal: a service) the server's text as it prints."""
+    cmd = [sys.executable, str(HERE / "maya.py"), "--config", str(cfg_path), "--port", str(port)]
     if WIN:
         script = ROOT / f"run-{cfg_path.stem}.bat"
         script.write_text(f'@echo off\r\nrem starts the Project Maya dashboard and API (written by maya.py; {ME} does '
@@ -1606,7 +1607,7 @@ def after_server(rc: int, a) -> int:
         return rc
     again = [sys.executable, str(HERE / "maya.py"), "--yes"]
     for flag, v in (("--backend", a.backend), ("--port", a.port), ("--host", a.host), ("--api-key", a.api_key),
-                    ("--gpu", a.gpu), ("--gpus", a.gpus)):
+                    ("--gpu", a.gpu), ("--gpus", a.gpus), ("--config", getattr(a, "config", None))):
         if v is not None:
             again += [flag, str(v)]
     say()
@@ -2035,12 +2036,10 @@ def main() -> int:
     ap.add_argument("--calibrate", action="store_true",
                     help="tune the engine's CPU lane for this PC (the PCIe share and the CPU threads, ~10-15 minutes), "
                          "then start the model (with --no-start: only tune)")
-    ap.add_argument("--config", type=Path, help="installed JSON config for --bench or --report "
-                                              "(default: most recently used)")
+    ap.add_argument("--config", type=Path, help="the installed JSON config to start (its run-maya-<model>.sh does), or "
+                                              "for --bench or --report (default: most recently used)")
     a = ap.parse_args()
     if a.config is not None:
-        if not (a.bench or a.report):
-            ap.error("--config is used with --bench or --report")
         if not a.config.is_file():
             ap.error(f"config not found: {a.config}")
         if a.backend and read_json(a.config).get("backend", "cuda") != a.backend:
@@ -2064,7 +2063,7 @@ def main() -> int:
             fail("Maya is not set up here yet", f"run {ME} first")
         return bench(have[0], version)
 
-    have = configs()
+    have = configs() if a.config is None else [a.config.resolve()]   # (--config: that one, no question)
     if a.backend:
         have = [p for p in have if read_json(p).get("backend", "cuda") == a.backend]
     else:

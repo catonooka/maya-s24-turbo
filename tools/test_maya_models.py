@@ -82,6 +82,31 @@ class RestartAfterUpdate(unittest.TestCase):
         execv.assert_not_called()
 
 
+class RunScript(unittest.TestCase):
+    """run-maya-<model>.sh starts its config through maya.py - on the screen in a terminal, as ./maya.sh does - not
+    the server alone in the terminal."""
+
+    def test_the_script_starts_its_config_through_maya_py(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(maya, "ROOT", Path(d)), patch.object(maya, "WIN", False):
+            cfg = Path(d) / "maya-maya-l.json"
+            script = maya.write_run_script(cfg, 8091).read_text()
+        self.assertIn(f"{maya.HERE / 'maya.py'} --config {cfg} --port 8091 \"$@\"", script)
+        self.assertNotIn("server.py", script)
+
+    def test_config_starts_that_one_without_the_question(self):
+        with tempfile.TemporaryDirectory() as d:
+            mine, other = Path(d) / "maya-maya-l.json", Path(d) / "maya-maya-s.json"
+            for p in (mine, other):
+                p.write_text("{}")
+            with patch.object(maya, "configs", return_value=[other, mine]), patch.object(maya, "say"), \
+                    patch.object(maya.sys, "argv", ["maya.py", "--config", str(mine), "--port", "8091"]), \
+                    patch.object(maya, "ask", side_effect=AssertionError("no question: --config names it")), \
+                    patch.object(maya, "start", return_value=0) as start:
+                self.assertEqual(maya.main(), 0)
+        self.assertEqual(start.call_args.args[0], mine.resolve())
+        self.assertEqual(start.call_args.args[1].port, 8091)
+
+
 class LabelledNames(unittest.TestCase):
     """Hugging Face groups a repo's files by the quant label in their names: the downloads carry one since v1.0.19,
     and a setup's files under the names before it stay in use (its run config points at them)."""
