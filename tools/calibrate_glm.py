@@ -12,6 +12,10 @@ Both are measured through ONE running engine - per-request `strata_tune` keys (p
 engine start reads the whole expert set from disk (minutes).  Decode speed only: a prompt balances its CPU and PCIe
 shares itself, layer by layer.
 
+Every measurement answers prompts it has not answered before (PROMPTS), the way a chat's text is new to the expert
+tiers, and the engine works on a copy of this PC's expert usage file (usage_copy) - its own answers must not lead the
+next start's warm-up.
+
 A setting is kept only when it beats the engine's own by more than MIN_GAIN in an interleaved re-measurement - the
 expert tiers follow the text and the OS adds noise, so single measurements differ by a few percent.
 
@@ -20,8 +24,10 @@ expert tiers follow the text and the OS adds noise, so single measurements diffe
 from __future__ import annotations
 
 import json
+import shutil
 import statistics
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -37,11 +43,38 @@ PCIE_SHARES = (0.0, 0.1, 0.25, 0.5, 0.75)
 # its last three shares took ~8 of the tuning's 19 minutes)
 STOP_BELOW = 0.7
 MAX_NEW = 128
-PROMPTS = (
-    "Write a Python function that merges two sorted lists into one sorted list, with a docstring and two tests.",
-    "Explain in two paragraphs how a refrigerator moves heat from inside to outside.",
-    "List twelve European capitals with one sentence about each.",
-)
+# A fresh group of three - code, an explanation, a list - for every measurement.  The expert tiers follow the text they
+# serve: three prompts answered over and over left them holding just those answers' experts (Maya-L on 9 GPUs: 99.2%
+# VRAM hits and 2.6 experts a token on the CPU, 31.8 tok/s, where a chat on that engine had 95-96%, 13-16 on the CPU
+# and 24-25 tok/s), so the CPU lane's settings were measured with next to nothing on it.  A run takes ~20 groups.
+CODE = ("merges two sorted lists into one sorted list", "checks whether a string is a palindrome",
+        "counts the words in a text file", "returns the n-th Fibonacci number with memoization",
+        "parses a date like 2024-03-15 into day, month and year", "removes duplicates from a list and keeps the order",
+        "finds the longest common prefix of a list of strings", "converts a Roman numeral to an integer",
+        "rotates a matrix by 90 degrees", "validates an email address with a regular expression",
+        "groups a list of words by their first letter", "computes the median of a list of numbers",
+        "flattens a nested list of any depth", "checks whether two strings are anagrams",
+        "returns the prime numbers below n", "reverses the words in a sentence",
+        "reads a CSV file and sums one of its columns", "converts Celsius to Fahrenheit for a list of values",
+        "finds the second largest number in a list", "splits a list into chunks of a given size")
+EXPLAIN = ("a refrigerator moves heat from inside to outside", "vaccines train the immune system",
+           "a bill becomes a law in a parliament", "GPS finds a position on Earth", "bread dough rises",
+           "a bank decides on a loan", "tides follow the Moon", "a compiler turns source code into a program",
+           "plants turn sunlight into sugar", "an electric motor turns current into motion",
+           "inflation changes what money buys", "a search engine ranks web pages", "volcanoes form",
+           "noise-cancelling headphones work", "the heart moves blood through the body",
+           "a hash table finds a key quickly", "rainbows form", "a jet engine makes thrust",
+           "public key encryption keeps a message secret", "coffee is decaffeinated")
+LISTS = ("European capitals", "chemical elements", "famous painters", "programming languages", "African countries",
+         "musical instruments", "planets and moons of the solar system", "Olympic sports", "kitchen herbs",
+         "inventions of the 20th century", "dog breeds", "Shakespeare plays", "rivers of Asia", "board games",
+         "computer scientists", "types of clouds", "Greek gods", "cheeses of France", "bridges around the world",
+         "mathematicians")
+PROMPTS = tuple(p for c, e, l in zip(CODE, EXPLAIN, LISTS) for p in (
+    f"Write a Python function that {c}, with a docstring and two tests.",
+    f"Explain in two paragraphs how {e}.",
+    f"List twelve {l} with one sentence about each."))
+GROUP = 3                                # prompts a measurement (the median of their rates)
 SHARE_ENV, THREADS_ENV = "STRATA_GLM_PCIE_SHARE", "STRATA_GLM_CPU_LANE"
 KEYS = (SHARE_ENV, THREADS_ENV)          # the environment settings a calibration owns (apply() sets or clears them)
 
@@ -126,15 +159,24 @@ def tune_keys(share, threads) -> dict:
 
 
 class Session:
-    """One running engine: decode tok/s for a setting (the median of the prompts' rates)."""
+    """One running engine: decode tok/s for a setting (the median of the rates of the next GROUP prompts - each
+    measurement its own, in turn through `ids_list`)."""
 
-    def __init__(self, engine, ids_list):
+    def __init__(self, engine, ids_list, group: int = GROUP):
         self.engine = engine
         self.ids_list = ids_list
+        self.group = max(1, min(group, len(ids_list)))
+        self.at = 0
+
+    def next_group(self) -> list:
+        n = len(self.ids_list)
+        out = [self.ids_list[(self.at + i) % n] for i in range(self.group)]
+        self.at = (self.at + self.group) % n
+        return out
 
     def rate(self, tune: dict | None = None) -> float:
         rates = []
-        for ids in self.ids_list:
+        for ids in self.next_group():
             sampling = {"temperature": 0}
             if tune:
                 sampling["strata_tune"] = tune
@@ -149,17 +191,37 @@ class Session:
             self.rate()
 
 
+def usage_copy(cfg: dict, tmp: Path) -> dict:
+    """The env that has the calibration's engine read and write a copy of this PC's expert usage file in `tmp`: the
+    engine saves the usage after every answer and the next start's warm-up loads the experts in that order, so ~60
+    answers to the tuning's prompts would lead it with their experts.  The file is the config's STRATA_GLM_USAGE or
+    the pack's expert_usage.txt (the engine's own default); "0" (no usage file) stays."""
+    env = cfg.get("env") or {}
+    own = str(env.get("STRATA_GLM_USAGE", ""))
+    if own == "0":
+        return {"STRATA_GLM_USAGE": "0"}
+    args = list(cfg.get("args") or [])
+    src = Path(own) if own else (Path(args[args.index("--glm-pack") + 1]) / "expert_usage.txt"
+                                 if "--glm-pack" in args[:-1] else None)
+    dst = tmp / "expert_usage.txt"
+    if src is not None and src.is_file():
+        shutil.copyfile(src, dst)
+    return {"STRATA_GLM_USAGE": str(dst)}
+
+
 def run(cfg: dict, say=print, start_engine=None) -> dict:
     """Measure on the engine `cfg` describes; returns {"settings": {env: value}, "report": {...}}.  The engine runs
-    with the config's environment less the settings a calibration owns, so the start's own choice is the baseline.
+    with the config's environment less the settings a calibration owns, so the start's own choice is the baseline,
+    and on a copy of the expert usage file (usage_copy).
     `start_engine(cfg)` returns a started engine (serve.server.StrataEngine, or a stand-in in tests)."""
-    base = {**cfg, "env": apply(cfg.get("env") or {}, {})}
     if start_engine is None:
         from serve.server import StrataEngine, child_env, engine_args
 
         def start_engine(c):
             return StrataEngine(c["exe"], engine_args(c), cwd=c.get("cwd"), log=c.get("log"), env=child_env(c))
-    return measure(base, prompt_ids(cfg), start_engine, say, host_thread_extras())
+    with tempfile.TemporaryDirectory(prefix="maya-calibrate-") as tmp:
+        base = {**cfg, "env": {**apply(cfg.get("env") or {}, {}), **usage_copy(cfg, Path(tmp))}}
+        return measure(base, prompt_ids(cfg), start_engine, say, host_thread_extras())
 
 
 def measure(cfg: dict, ids_list, start_engine, say=print, extra_threads=()) -> dict:

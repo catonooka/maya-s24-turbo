@@ -81,6 +81,7 @@ public:
     }
     void run(int n, const std::function<void(int)>& fn) {
         if (n <= 0) return;
+        std::lock_guard<std::mutex> one(run_mu_);   // a pool a split's parts share: one batch at a time
         const uint64_t g = (gen_.load(std::memory_order_relaxed) + 1) & 0xffffffffu;
         fn_ = &fn;
         total_.store(n, std::memory_order_relaxed);
@@ -137,7 +138,7 @@ private:
     }
     int spin_us_;
     std::vector<std::thread> th_;
-    std::mutex mu_;
+    std::mutex mu_, run_mu_;
     std::condition_variable cv_;
     const std::function<void(int)>* volatile fn_ = nullptr;
     std::atomic<int> total_{0}, done_{0}, sleeping_{0}, active_;
@@ -366,7 +367,8 @@ struct Glm5Model::FastState {
     // ---- the CPU LANE (STRATA_GLM_CPU_LANE=<threads>, 0 off): a route's RAM-tier experts split between the device's
     //      PCIe pulls and this pool, which computes its share from the pinned blobs meanwhile; the device adds the
     //      weighted sum (cpu_ans_h) before its down combine.  cpu_plan: how many of f RAM-tier experts go to the host.
-    std::unique_ptr<glmfast::Workers> cpu_pool;
+    //      A split of 3+ GPUs shares one pool across its parts (fast_cpu_lane_setup).
+    std::shared_ptr<glmfast::Workers> cpu_pool;
     int cpu_node = -1;                         // the NUMA node the pool is pinned to (-1: unpinned) ...
     std::vector<int> cpu_pin;                  // ... and its CPUs (the service thread runs there too)
     double cpu_c_ms = 0.0, cpu_p_ms = 0.0;   // the lane's calibration: an expert on the CPU, one over PCIe

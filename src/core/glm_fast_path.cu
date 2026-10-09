@@ -1299,6 +1299,20 @@ void Glm5Model::fast_cpu_experts(int il, int ne, const uint8_t* const* blob, con
     }
 }
 
+// The CPU lane's pool a split's parts share (fast_cpu_lane_setup): made by the first part, found by the later ones -
+// one model a process; a reload, or another count, makes a new one.
+static std::shared_ptr<glmfast::Workers> shared_cpu_pool(int threads) {
+    static std::mutex mu;
+    static std::weak_ptr<glmfast::Workers> held;
+    std::lock_guard<std::mutex> lk(mu);
+    std::shared_ptr<glmfast::Workers> p = held.lock();
+    if (p == nullptr || p->size() != threads) {
+        p = std::make_shared<glmfast::Workers>(threads - 1, 20000);
+        held = p;
+    }
+    return p;
+}
+
 // This process's physical cores (distinct package/core pairs among the CPUs it may run on); 0 when unknown.
 static int physical_cores() {
 #ifdef __linux__
@@ -1346,25 +1360,40 @@ bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
     FastState* F = fast_;
     const Glm5Geometry& g = g_;
     const char* lv = getenv(("STRATA_GLM_CPU_LANE" + std::to_string(dev_)).c_str());
+    const bool own_count = lv != nullptr;   // this card's own count: a pool of its own
     if (lv == nullptr) lv = getenv("STRATA_GLM_CPU_LANE");
+    // a split of 3+ GPUs runs its parts one after another - a decode token visits the cards in turn, and the pipelined
+    // speculative decode, which runs two at once, is a two-part one - so ONE pool serves every part, sized as one
+    // GPU's (Strata: one expert pool for the process).  A pool per part, cores / parts each, left most of the CPU idle -
+    // and as idle workers spin 20 ms after a batch, more threads a part would have spun against the card at work.
+    // Maya-L on 9 GPUs, 88 vCPUs, fresh prompts (95.8% VRAM hits): 9 threads a card 0.74 ms a RAM-tier expert, 25.7
+    // tok/s; one pool of 40 0.32 ms, 30.7 tok/s; an 8K prompt, whose chunks take the pool in turn, 1265 -> 1466 tok/s.
+    // STRATA_GLM_CPU_SHARED=0: a pool per part (A/B); 1: one pool for a two-GPU split too.
+    const char* shv = getenv("STRATA_GLM_CPU_SHARED");
+    const bool shared = n_parts_ >= 2 && !own_count &&
+                        (shv != nullptr && shv[0] != '\0' ? std::atoi(shv) != 0 : n_parts_ >= 3);
     int threads = 0;
     if (lv != nullptr) {
         threads = std::max(0, std::min(64, std::atoi(lv)));
     } else {
-        threads = physical_cores();
-        if (threads <= 0) threads = (int) std::thread::hardware_concurrency() / 2;
+        int cores = physical_cores();
+        if (cores <= 0) cores = (int) std::thread::hardware_concurrency() / 2;
+        threads = cores;
         // one GPU: at most one NUMA node's worth, less 4 - a spinning pool on both sockets syncs across them, and the
         // CPUs left free keep the main thread's event wait, the service and warm-up threads off the spinning ones
         // (2-socket Xeon, 88 vCPUs, Q3_K experts: 88 threads 531 us an expert, 44 216 us, 44 with the RAM tier
         // interleaved 152 us - ~85 of the ~105 GB/s this host reads; a pool per socket, tried, did not add to that)
-        if (n_parts_ == 1)
+        if (n_parts_ == 1 || shared)
             if (const int node = numa_node_cpus(); node > 0 && threads > node - 4) threads = node - 4;
-        threads /= std::max(1, n_parts_);   // a split's parts share the CPU, one pool each
+        if (shared)
+            threads = std::min(threads, cores - (n_parts_ - 1));   // a core for each other part's service thread
+        else
+            threads /= std::max(1, n_parts_);   // a two-part split's parts can run at once: one pool each
         if (threads < 2) threads = 0;   // one core is the service thread's
     }
-    // a split: each part's pool on CPUs of its own (part_cpus: whole NUMA nodes while there are enough, runs of whole
-    // cores of a shared one otherwise), at most those CPUs less the part's share of the 4 a node keeps free, like one
-    // GPU's.  Unpinned, the parts' pools (half the vCPUs each) shared the cores: a part works while the other's idle
+    // a split whose parts have a pool each (two GPUs, or STRATA_GLM_CPU_SHARED=0): each part's pool on CPUs of its own
+    // (part_cpus: whole NUMA nodes while there are enough, runs of whole cores of a shared one otherwise), at most those
+    // CPUs less the part's share of the 4 a node keeps free, like one GPU's - the shared pool is one GPU's, unpinned.  Unpinned, the parts' pools (half the vCPUs each) shared the cores: a part works while the other's idle
     // workers spin, and the 2-socket Xeon's 3090 + 5060 Ti split took 0.28 ms an expert where one GPU's pool took 0.15
     // (and with MTP drafting both parts run at once).  The RAM tier stays interleaved (one socket reading only its own
     // memory: 54 GB/s, interleaved 77).  By default only on a host with two NUMA nodes or more, where it measured
@@ -1374,7 +1403,7 @@ bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
     int pin_node = -1;
     const char* pin_env = getenv("STRATA_GLM_CPU_PIN");
     const bool pin = pin_env != nullptr && pin_env[0] ? std::atoi(pin_env) != 0 : numa_nodes().size() >= 2;
-    if (n_parts_ >= 2 && threads > 0 && pin) {
+    if (n_parts_ >= 2 && !shared && threads > 0 && pin) {
         std::vector<int> gpu_node;
         for (int d : split_devs_) gpu_node.push_back(gpu_numa_node(d));
         int spare = 4;
@@ -1427,9 +1456,13 @@ bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
     F->cpu_ff.assign((size_t) 8 * g.n_ff_exp, 0.0f);
     F->cpu_dn.assign((size_t) 8 * g.n_embd, 0.0f);
     // the service thread is the pool's last worker; idle workers spin 20 ms (a decode's routes come ~1 ms apart)
-    F->cpu_pool.reset(new glmfast::Workers(threads - 1, 20000, pin_cpus));
-    F->cpu_node = pin_node;
-    F->cpu_pin = pin_cpus;
+    if (shared) {
+        F->cpu_pool = shared_cpu_pool(threads);
+    } else {
+        F->cpu_pool.reset(new glmfast::Workers(threads - 1, 20000, pin_cpus));
+        F->cpu_node = pin_node;
+        F->cpu_pin = pin_cpus;
+    }
     // ---- calibration, each lane alone: the CPU after 100 ms of the same work (an idle CPU's clocks take tens of ms to
     //      ramp up - a decode keeps them up), then the mean of 16 runs
     std::vector<float> x((size_t) g.n_embd), out((size_t) g.n_embd);
@@ -1537,7 +1570,8 @@ bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
     }
     std::fprintf(stderr, "glm fast: CUDA%d CPU lane: %d threads%s, an expert %.3f ms on the CPU vs %.3f ms over PCIe -> "
                          "of 0..8 RAM-tier experts the CPU takes%s\n", dev_, threads,
-                 pin_cpus.empty() ? ""
+                 shared ? " (one pool, shared by the split's GPUs)"
+                 : pin_cpus.empty() ? ""
                  : (" on " + std::to_string(pin_cpus.size()) + " CPUs of its own" +
                     (pin_node >= 0 ? " (NUMA node " + std::to_string(pin_node) + ")" : std::string())).c_str(),
                  c_ms, p_ms, tab.c_str());
