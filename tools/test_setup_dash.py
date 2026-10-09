@@ -283,7 +283,8 @@ class Start(unittest.IsolatedAsyncioTestCase):
 
             def serve(cmd, env, info):
                 with open(log, "a") as f:
-                    f.write("glm fast: CUDA8 tiers warm: 1440 experts (19.3 GB)\nstrata generate: pack: out of memory\n")
+                    f.write("glm fast: CUDA8 tiers warm: 1440 experts (19.3 GB)\n"
+                            "strata generate: pack: out of memory\n")
                 return 1
             failed = []
             ui = SimpleNamespace(serve=serve, fail=lambda m, h: failed.append((m, h)), say=lambda m: True)
