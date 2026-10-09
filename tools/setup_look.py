@@ -124,6 +124,7 @@ class Card(Vertical):
         for _ in range(self.LINES):
             row = Static()
             row.display = False                         # (until it has a line)
+            row.auto_links = False                      # (no links: else the mouse over a line draws it again)
             yield row
 
     def show(self, text: Text) -> None:
@@ -249,7 +250,11 @@ class StopScreen(ModalScreen):
 
 
 class Output(RichLog):
-    """The output box: back at its last line when its size changes (a question opens or closes below it)."""
+    """The output box: back at its last line when its size changes (a question opens or closes below it).  No links in
+    it: the mouse over a line would draw it again (and a terminal that underlines URLs blinks them)."""
+
+    def on_mount(self) -> None:
+        self.auto_links = False
 
     def on_resize(self, event: events.Resize) -> None:
         super().on_resize(event)
