@@ -16,7 +16,7 @@ What the first run does (each step is skipped when it is already done):
   1. checks the PC: NVIDIA GPU(s) of compute capability 7.0+, driver, CUDA toolkit (nvcc), the C++ compiler (g++;
      on Windows Visual Studio 2022's Build Tools), CMake, RAM, CPU; HIP checks AMD gfx1100/gfx1201/gfx1151 and ROCm 7 instead
   2. asks: which GPUs (one, or several that split the layers), how much context, which model to download (Maya-S,
-     Maya-M or GSQ-RCO 3.5-bit)
+     Maya-S24, Maya-M or Maya-L)
   3. Python packages into .venv, llama.cpp's source at the pinned commit (it lists them and asks first)
   4. compiles the engine (`build/strata`, or `build-hip/strata`) for your GPU(s): 10-30 minutes, once
   5. the model: GGUF files you already have (--gguf-dir), or a download it shows you first - the exact commands
@@ -76,7 +76,7 @@ SAMPLING = {"temperature": 1.0, "top_p": 0.95}     # the dashboard's and the API
 EFFORT = "medium"                                  # thinking level for requests that name none
 HF = "https://huggingface.co/{repo}/resolve/{revision}/{path}"
 # The models the installer can download: Project Maya's own quants, made from Z.ai's FP8 release (their model card
-# has the measurements against it), and GSQ-RCO 3.5-bit, a community quant measured with Maya on one RTX 3090.
+# has the measurements against it).
 # Another glm5-next GGUF can be used with --gguf-dir (experimental).  "folder": the files' folder in the repo ("" =
 # its top).  "sha256" per file name: every download is verified.  "vision": the image encoder's files (the mmproj,
 # made from the official vision tower, and the tokenizer it reads its markers with) - from "repo" / "revision" when
@@ -141,17 +141,22 @@ MODELS = {
                            "3627575df16bd152db0f3fd7e488d270b33f3a9e6c7fa3b1b8ac381faafde882",
                        "GLM-5.3-Flash-vocab.gguf":
                            "8f53cb1bd2e631c14ef413e3284735d9e53f3c508d07a6f609e705b487105912"}}},
-    "GSQ-RCO-3.5bit": {
-        "about": "GSQ-RCO 3.5-bit, a community quant (pfeifferj, with IST-DASLab's GSQ and RCO methods, not a Project "
-                 "Maya quant): Q3_K/Q2_K experts, Q8_0 dense weights, no MTP draft block; on one RTX 3090 with the "
-                 "rest in ~120 GB of RAM about 20 tokens/s decode and 480-970 tokens/s prefill",
-        "repo": "pfeifferj/GLM-5.3-Flash-GSQ-RCO-GGUF", "revision": "892aabe2e45835f58f3f24bf03dc5427d345e230",
-        "folder": "", "file": "GLM-5.3-Flash-GSQ-RCO-3.5bit.gguf", "shards": 1, "download_gb": 137.1,
-        "sha256": {"GLM-5.3-Flash-GSQ-RCO-3.5bit.gguf":
-                       "12c32d32c284337d0e9da759dbd559fb41567a4b1c57ede0259057e6f8658f1b"},
-        # Maya's image files: the vision tower is the same in every GLM-5.3-Flash quant
+    "Maya-L": {
+        "about": "Maya-L, Project Maya's largest quant: error-feedback-rounded IQ3_S gate/up experts, IQ4_XS down "
+                 "projections (Q5_K in the most sensitive layers), Q6_K attention, the MTP draft block, made from "
+                 "Z.ai's FP8 release",
+        "repo": "peasantsmith/GLM-5.3-Flash-Maya-GGUF", "revision": "main", "folder": "Maya-L",
+        "file": "GLM-5.3-Flash-Maya-L-{i:05d}-of-{n:05d}.gguf", "shards": 4, "download_gb": 156.3,
+        "sha256": {
+            "GLM-5.3-Flash-Maya-L-00001-of-00004.gguf":
+                "5fc82a6c9af4c6898e8d45cf32964f9a7b10640caf51e82be735d2d50e9f3d45",
+            "GLM-5.3-Flash-Maya-L-00002-of-00004.gguf":
+                "351d59366afb7be7dfc3fb7af91281f7ccf00760b17dc45f82090325a7b34f64",
+            "GLM-5.3-Flash-Maya-L-00003-of-00004.gguf":
+                "3685962fdfeaf130b74f98d3ce703ee33d818aa9991725932cb305b7c48db8af",
+            "GLM-5.3-Flash-Maya-L-00004-of-00004.gguf":
+                "1af62cd72de6460c85369d988abbb790d6ec3a97507df51faf9bf32aa2b600d0"},
         "vision": {
-            "repo": "peasantsmith/GLM-5.3-Flash-Maya-GGUF", "revision": "main",
             "folder": "vision", "mmproj": "mmproj-GLM-5.3-Flash-F16.gguf", "vocab": "GLM-5.3-Flash-vocab.gguf",
             "download_gb": 1.14,
             "sha256": {"mmproj-GLM-5.3-Flash-F16.gguf":
@@ -1726,7 +1731,7 @@ def main() -> int:
                                        "several models; it must be writable - the pack is written inside it "
                                        "(without this option the setup lists the ones it finds in ~/models*)")
     ap.add_argument("--models-dir", help="where downloaded models go, each in a folder named after it, e.g. "
-                                         "<DIR>/GSQ-RCO-3.5bit/ (default: Maya-data/models next to this folder); use "
+                                         "<DIR>/Maya-L/ (default: Maya-data/models next to this folder); use "
                                          "a fast NVMe SSD with ~100 GB free")
     ap.add_argument("--gpu", type=int, help="run on this one GPU (CUDA: nvidia-smi; HIP: KFD topology order)")
     ap.add_argument("--gpus", help=f"split the model's layers across these GPUs (up to {MAX_GPUS}), e.g. 0,1 or "
