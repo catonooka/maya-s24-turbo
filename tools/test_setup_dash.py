@@ -150,6 +150,44 @@ class Screen(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipIf(T is None, "Textual is not installed (./maya.sh --setup installs it)")
+class Loading(unittest.TestCase):
+    """The model's start in the loading box: the engine log's warm-up of each GPU's experts as one share (by GB; the
+    GPUs not started yet count as the mean), from where the log stood when the start began."""
+
+    def watch(self, lines, gpus=(3, 0, 1)):
+        log = Path(tempfile.mkdtemp()) / "maya-maya-l.log"
+        log.write_text("glm fast: CUDA0 warming the expert tiers 100% (25.0 of 25.0 GB, 50 s)\n")   # an earlier start's
+        w = D.LoadWatch(str(log), list(gpus))
+        with open(log, "a", encoding="utf-8") as f:
+            f.write("".join(line + "\n" for line in lines))
+        w.read()
+        return w
+
+    def test_the_share_across_the_gpus(self):
+        self.assertEqual(self.watch([]).fraction(), 0.0)          # (the earlier start's 100% does not count)
+        w = self.watch(["glm fast: CUDA0 warming the expert tiers 50% (10.0 of 20.0 GB, 9 s)"])
+        self.assertAlmostEqual(w.fraction(), 10 / 60)              # 20 GB known; the other two: 20 each
+        w = self.watch(["glm fast: CUDA0 tiers warm: 2016 experts (20.0 GB) in 50 s (0.50 GB/s)",
+                        "glm fast: CUDA1 warming the expert tiers 50% (5.0 of 10.0 GB, 4 s)"])
+        self.assertAlmostEqual(w.fraction(), 25 / 45)              # 20 + 5 of 20 + 10 + the mean, 15
+        out = text(D.loading(w, 60))
+        for want in ("25.0 of about 45 GB of experts warm", "Warming the experts on GPU 0 (part 2 of 3)", "GPU 3",
+                     "✓ 20.0 GB", "5.0 of 10.0 GB", "waiting"):
+            self.assertIn(want, out)
+        w.reset()                                                   # (a reload: from 0% again)
+        self.assertEqual(w.fraction(), 0.0)
+
+    def test_before_the_warm_up_after_it_and_without_a_log(self):
+        self.assertIn("Reading the model's weights", text(D.loading(self.watch([]), 60)))
+        w = self.watch([f"glm fast: CUDA{k} tiers warm: 1152 experts (13.4 GB) in 30 s (0.45 GB/s)" for k in range(3)])
+        self.assertEqual(w.fraction(), 1.0)
+        self.assertIn("almost ready", text(D.loading(w, 60)))
+        blind = D.LoadWatch(None, [0])
+        self.assertIsNone(blind.fraction())
+        self.assertIn("so far", text(D.loading(blind, 60)))
+
+
+@unittest.skipIf(T is None, "Textual is not installed (./maya.sh --setup installs it)")
 class Start(unittest.IsolatedAsyncioTestCase):
     """./maya.sh on an installed Maya: the real engine (server.py --engine strata) on the screen - its dashboard and
     log, without the setup's steps or its log; --plain (or no terminal): in the terminal as before."""
@@ -178,6 +216,41 @@ class Start(unittest.IsolatedAsyncioTestCase):
         plain.assert_called_once()
         screen.assert_not_called()
         self.assertFalse(maya.setup_screen(SimpleNamespace(plain=True, yes=False), asks=False))
+
+    async def test_the_loading_box_until_ready_and_a_failure_on_the_log_page(self):
+        server = "import sys, time\ntime.sleep(1.5)\nprint('ready: http://127.0.0.1:9/v1')\ntime.sleep(2)\nsys.exit(3)"
+        info = {"model": "glm-5.3-flash", "dashboard": "http://127.0.0.1:9/", "api": "http://127.0.0.1:9/v1",
+                "log": None, "key": "", "gpus": [0]}
+
+        def body():
+            rc = S.UI.serve([sys.executable, "-c", server], dict(os.environ, PYTHONUNBUFFERED="1"), info)
+            S.fail(f"Maya stopped: its server ended with exit code {rc}", "the reason is in its output")
+        bridge = Bridge(None)
+        S.UI = bridge
+        app = T.SetupApp(bridge, body, "1.0", "./maya.sh", None, steps=False)
+        try:
+            async with app.run_test(size=(120, 40)) as pilot:
+                async def until(cond):
+                    t0 = time.time()
+                    while not cond():
+                        self.assertLess(time.time() - t0, 20)
+                        await pilot.pause(0.05)
+                await until(lambda: app.serving is not None)
+                await pilot.pause(1.1)
+                self.assertTrue(app.query_one("#dash-load").display)       # loading: the box, not the numbers
+                self.assertFalse(app.query_one("#dash-gpus").display)
+                await until(lambda: app.state[T.SERVE] == "ready")
+                await pilot.pause(1.1)
+                self.assertFalse(app.query_one("#dash-load").display)
+                self.assertTrue(app.query_one("#dash-gpus").display)
+                await until(lambda: app.pending is not None)               # the server ended: the failure ...
+                self.assertEqual(app.view, T.LOG)                          # ... on the log's page, in sight
+                self.assertTrue(app.query_one("#page").display)
+                await pilot.press("enter")
+            self.assertEqual(app.return_value[0], "fail")
+        finally:
+            S.UI = None
+            bridge.log.close()
 
     async def test_only_maya_s_tabs_and_starting_maya_before_it_runs(self):
         server = "import time\nprint('ready: http://127.0.0.1:9/v1')\ntime.sleep(30)"

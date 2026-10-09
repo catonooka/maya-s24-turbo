@@ -243,7 +243,8 @@ class SetupApp(App):
         self.serving = {**info, "state": "Loading the model", "since": time.monotonic(), "speed": None}
         log = Path(info["log"]).name if info.get("log") else ""
         self.query_one("#output").border_subtitle = Text(f"engine log: {log}" if log else "", f"italic {FAINT}")
-        self.query_one(Dashboard).follow(info["dashboard"] + "metrics", info.get("key") or "")
+        self.query_one(Dashboard).follow(info["dashboard"] + "metrics", info.get("key") or "", info.get("log"),
+                                         info.get("gpus") or [])
         self.show_view(None)
 
     def ev_live(self, line: str) -> None:
@@ -254,7 +255,8 @@ class SetupApp(App):
         if line.startswith("ready:") or "the model runs with" in line or "engine is running again" in line:
             s["state"], s["since"], self.state[SERVE] = "ready", time.monotonic(), "ready"
             self.draw_tabs()
-        elif "reloading the model" in line or "the engine had stopped" in line:
+        elif "reloading the model" in line or "the engine had stopped" in line:   # (a load again: from 0%)
+            self.query_one(Dashboard).load.reset()
             s["state"], s["since"], self.state[SERVE] = ("Reloading the model" if "reloading" in line else
                                                          "Starting the engine again"), time.monotonic(), "run"
         elif m:
@@ -293,6 +295,8 @@ class SetupApp(App):
                            [None], 0, [])
 
     def show_question(self, fut, kind, question, intro, options, values, default, outro) -> None:
+        if self.serving is not None and self.view is None:   # (the dashboard shows: the log's page has the box)
+            self.show_view(LOG)
         self.pending = (fut, values, kind)
         self.abouts = [" ".join(x for x in (o[2], " ".join(outro)) if x) for o in options]
         box = self.query_one("#ask")

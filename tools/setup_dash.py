@@ -1,9 +1,12 @@
 """The dashboard on Maya's screen once it runs (setup_tui.py): the web Monitor's numbers (serve/web/app.js, render) from
 the server's GET /metrics, read once a second - the throughput, where the experts live, the GPUs, the hardware and the
-recent requests - in binsider's boxes and the dashboard's colours (setup_look.py)."""
+recent requests - in binsider's boxes and the dashboard's colours (setup_look.py).  While the model loads, a box of its
+own instead: how far the start is (the engine log's warm-up of each GPU's experts), which GPU, how long."""
 from __future__ import annotations
 
 import json
+import os
+import re
 import threading
 import time
 import urllib.request
@@ -25,7 +28,12 @@ DIGITS = {"0": (0x3E, 0x63, 0x73, 0x7B, 0x6F, 0x67, 0x3E, 0x00), "1": (0x0C, 0x0
           "4": (0x38, 0x3C, 0x36, 0x33, 0x7F, 0x30, 0x78, 0x00), "5": (0x3F, 0x03, 0x1F, 0x30, 0x30, 0x33, 0x1E, 0x00),
           "6": (0x1C, 0x06, 0x03, 0x1F, 0x33, 0x33, 0x1E, 0x00), "7": (0x3F, 0x33, 0x30, 0x18, 0x0C, 0x0C, 0x0C, 0x00),
           "8": (0x1E, 0x33, 0x33, 0x1E, 0x33, 0x33, 0x1E, 0x00), "9": (0x1E, 0x33, 0x33, 0x3E, 0x30, 0x18, 0x0E, 0x00),
-          ".": (0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C, 0x00), "-": (0x00, 0x00, 0x00, 0x3F, 0x00, 0x00, 0x00, 0x00)}
+          ".": (0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C, 0x00), "-": (0x00, 0x00, 0x00, 0x3F, 0x00, 0x00, 0x00, 0x00),
+          "%": (0x00, 0x63, 0x33, 0x18, 0x0C, 0x66, 0x63, 0x00)}
+# the GLM engine's start, in its log: each GPU's expert tiers warmed up in turn - "glm fast: CUDA2 warming the expert
+# tiers 40% (5.4 of 13.4 GB, 11 s)", then "glm fast: CUDA2 tiers warm: 1152 experts (13.4 GB) in 29 s"
+WARMING = re.compile(r"glm fast: (\S+?)(\d+) warming the expert tiers \d+% \(([\d.]+) of ([\d.]+) GB")
+WARMED = re.compile(r"glm fast: (\S+?)(\d+) tiers warm: \d+ experts \(([\d.]+) GB\)")
 BLOCKS = "▁▂▃▄▅▆▇█"
 TIERS = (("ram_fetch", "From RAM", INFO_TEXT), ("disk", "From SSD", WARN), ("promo", "Promoted", ACCENT))   # per token
 FINISH = {"stop": ("Done", OK), "length": ("Max tokens", INK_SOFT), "cancel": ("Stopped", WARN),
@@ -300,6 +308,86 @@ def banners(m: dict, fails: int) -> Text:
     return Text("\n").join(Text.assemble(("! ", f"bold {tone}"), (msg, tone)) for msg, tone in out)
 
 
+class LoadWatch:
+    """How far the model's start is, from the engine log (read from where it stood when the start began): the warm-up
+    of each GPU's expert tiers - the bulk of a start, one GPU after the other - in GB.  `gpus`: the start's, in the
+    order the engine numbers its parts (its CUDA0 is the first)."""
+
+    def __init__(self, path, gpus):
+        self.path, self.gpus = path, list(gpus) or [0]
+        try:
+            self.pos = os.path.getsize(path) if path else 0
+        except OSError:
+            self.pos = 0
+        self.reset()
+
+    def reset(self) -> None:
+        """A start (or a reload) begins: nothing warm yet."""
+        self.parts, self.t0 = {}, time.monotonic()      # the part's number -> [GB warm, GB in all]
+
+    def read(self) -> None:
+        """The log's new lines (on the screen's thread, once a second: a few KB)."""
+        try:
+            with open(self.path, "rb") as f:
+                f.seek(self.pos)
+                chunk = f.read()
+        except (OSError, TypeError):
+            return
+        cut = chunk.rfind(b"\n") + 1
+        self.pos += cut
+        for line in chunk[:cut].decode("utf-8", "replace").splitlines():
+            if m := WARMING.search(line):
+                self.parts[int(m.group(2))] = [float(m.group(3)), float(m.group(4))]
+            elif m := WARMED.search(line):
+                self.parts[int(m.group(2))] = [float(m.group(3))] * 2
+
+    def fraction(self):
+        """The share of the start done (None: no engine log to tell); the GPUs not started yet count as the mean."""
+        if not self.path:
+            return None
+        if not self.parts:
+            return 0.0
+        known = [total for _, total in self.parts.values()]
+        whole = sum(known) + sum(known) / len(known) * max(0, len(self.gpus) - len(known))
+        return min(1.0, sum(done for done, _ in self.parts.values()) / max(whole, 1e-9))
+
+
+def loading(w: LoadWatch, width: int):
+    """The box while the model loads: the share in big, what the engine does now, the time, and each GPU's part."""
+    frac, took = w.fraction(), time.monotonic() - w.t0
+    n, parts = len(w.gpus), w.parts
+
+    def gpu(k):
+        return f"GPU {w.gpus[k]}" if k < n else f"part {k + 1}"
+    now = [k for k in sorted(parts) if parts[k][0] < parts[k][1]]   # (the GPU warming now; before it starts: the next)
+    if not parts:
+        what = "reading the model's weights"
+    elif len(parts) >= n and not now:
+        what = "the engine's last checks - almost ready"
+    else:
+        k = now[-1] if now else max(parts) + 1
+        what = f"warming the experts on {gpu(k)}" + (f" (part {k + 1} of {n})" if n > 1 else "")
+    left = f" · about {clock(took * (1 - frac) / frac)} left" if frac and 0.03 < frac < 1 and took > 10 else ""
+    warm = sum(done for done, _ in parts.values())
+    total = warm / frac if frac else None               # (the GPUs not started yet: as the mean of those that have)
+    side = [Text(f"{fmt(warm, 1)} of about {fmt(total)} GB of experts warm" if total else "Starting the engine",
+                 f"bold {INK}"), Text(what[:1].upper() + what[1:], INK_SOFT),
+            Text(f"{clock(took)} so far{left}", MUTED), Text("")]
+    if frac is None:                                    # (no engine log: the time only)
+        return Group(*side[:3])
+    lines = [Text.assemble(gradient(row, "bold"), "    ", s) for row, s in zip(big(f"{round(frac * 100)}%"), side)]
+    rows = Table.grid(padding=(0, 2))
+    for k in range(max(n, len(parts))):
+        done, whole = parts.get(k, (0.0, 0.0))
+        state = Text("waiting", FAINT) if k not in parts else \
+            Text.assemble(("✓ ", OK), (f"{fmt(whole, 1)} GB", INK)) if done >= whole else \
+            Text(f"{fmt(done, 1)} of {fmt(whole, 1)} GB", INK)
+        rows.add_row(Text(gpu(k), INK if k in parts else MUTED), bar(done / whole if whole else 0.0, 24), state)
+    return Group(*lines, Text(""), bar(frac, width), Text(""), rows, Text(""),
+                 Text("The engine reads the experts into RAM and VRAM: the PC can be slow until the model is ready.",
+                      f"italic {MUTED}"))
+
+
 class Dashboard(VerticalScroll):
     """The boxes above, filled from GET /metrics once a second while they show."""
 
@@ -309,6 +397,8 @@ class Dashboard(VerticalScroll):
                 scrollbar-background: $background; }
     Dashboard Static { height: auto; }
     #dash-banner { margin-bottom: 1; }
+    #dash-load { width: 90; max-width: 100%; border: solid $maya-line; padding: 1 2; margin-bottom: 1;
+                 border-title-align: center; }
     #dash-card { width: 76; max-width: 100%; border: solid $maya-line; padding: 0 1; margin-bottom: 1;
                  text-wrap: nowrap; text-overflow: ellipsis; }
     #dash-row { height: auto; }
@@ -324,6 +414,8 @@ class Dashboard(VerticalScroll):
         yield Static(id="dash-banner")
         with Center():
             yield Static(id="dash-card")
+        with Center():
+            yield Static(id="dash-load")
         with Horizontal(id="dash-row"):
             yield Static(id="dash-speed")
             yield Static(id="dash-tiers")
@@ -332,15 +424,18 @@ class Dashboard(VerticalScroll):
         yield Static(id="dash-reqs")
 
     def on_mount(self) -> None:
-        self.metrics, self.fails, self.drawn = None, 0, None
-        for box, name in (("speed", "Throughput"), ("tiers", "Where the experts live"), ("gpus", "GPUs"),
-                          ("hw", "Hardware"), ("reqs", "Recent requests")):
+        self.metrics, self.fails, self.drawn, self.load = None, 0, None, LoadWatch(None, [])
+        for box, name in (("load", "Loading the model"), ("speed", "Throughput"), ("tiers", "Where the experts live"),
+                          ("gpus", "GPUs"), ("hw", "Hardware"), ("reqs", "Recent requests")):
             self.query_one(f"#dash-{box}").border_title = title(name)
         self.query_one("#dash-banner").display = False
         self.set_interval(1.0, self.draw)
 
-    def follow(self, url: str, key: str = "") -> None:
-        """GET /metrics once a second from now on, in a thread: the screen never waits for the server."""
+    def follow(self, url: str, key: str = "", log=None, gpus=()) -> None:
+        """GET /metrics once a second from now on, in a thread: the screen never waits for the server.  log, gpus: the
+        engine log and the start's GPUs, for the loading box (LoadWatch)."""
+        self.load = LoadWatch(log, gpus)
+
         def poll():
             req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"} if key else {})
             while True:
@@ -353,8 +448,20 @@ class Dashboard(VerticalScroll):
         threading.Thread(target=poll, name="dashboard", daemon=True).start()
 
     def draw(self) -> None:
+        if not self.display:
+            return
+        starting = (getattr(self.app, "serving", None) or {}).get("state") != "ready"   # (no numbers before it is)
+        for box in ("#dash-row", "#dash-gpus", "#dash-hw", "#dash-reqs"):
+            self.query_one(box).display = not starting
+        self.query_one("#dash-load").display = starting
+        if starting:
+            self.load.read()
+            self.query_one("#dash-banner").display = False
+            width = min(84, self.size.width - 12)
+            self.query_one("#dash-load", Static).update(loading(self.load, width))
+            return
         m = self.metrics
-        if not self.display or m is None or (m is self.drawn and self.fails < 3):
+        if m is None or (m is self.drawn and self.fails < 3):
             return
         self.drawn = m
         try:
