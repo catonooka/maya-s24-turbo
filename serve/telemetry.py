@@ -21,12 +21,40 @@ HISTORY = 60
 
 
 # ------------------------------------------------------------------------------------------------ NVML
+def gpu_pids():
+    """Every process with a compute context on any NVIDIA GPU (NVML), or None when that can't be read (no NVIDIA driver,
+    an AMD card, an old driver)."""
+    first = _Nvml(0)
+    if not first.ok():
+        return None
+    count = ctypes.c_uint()
+    try:
+        fn = getattr(first.lib, "nvmlDeviceGetCount_v2", None) or first.lib.nvmlDeviceGetCount
+        if fn(ctypes.byref(count)) != 0:
+            return None
+    except (AttributeError, OSError):
+        return None
+    out = set()
+    for i in range(count.value):
+        p = (first if i == 0 else _Nvml(i)).pids()
+        if p is None:
+            return None
+        out |= p
+    return out
+
+
 class _Nvml:
     class Util(ctypes.Structure):
         _fields_ = [("gpu", ctypes.c_uint), ("memory", ctypes.c_uint)]
 
     class Mem(ctypes.Structure):
         _fields_ = [("total", ctypes.c_ulonglong), ("free", ctypes.c_ulonglong), ("used", ctypes.c_ulonglong)]
+
+    class Proc1(ctypes.Structure):                       # nvmlProcessInfo_v1_t
+        _fields_ = [("pid", ctypes.c_uint), ("used", ctypes.c_ulonglong)]
+
+    class Proc2(ctypes.Structure):                       # nvmlProcessInfo_v2_t (the _v2 and _v3 calls)
+        _fields_ = [("pid", ctypes.c_uint), ("used", ctypes.c_ulonglong), ("gi", ctypes.c_uint), ("ci", ctypes.c_uint)]
 
     def __init__(self, index=0):
         self.lib = self.dev = None
@@ -64,6 +92,22 @@ class _Nvml:
             return v.value if getattr(self.lib, fn)(self.dev, *args, ctypes.byref(v)) == 0 else None
         except (AttributeError, OSError):
             return None
+
+    def pids(self):
+        """The processes with a compute context on this GPU, or None when NVML can't say."""
+        for fn, st in (("nvmlDeviceGetComputeRunningProcesses_v3", self.Proc2),
+                       ("nvmlDeviceGetComputeRunningProcesses_v2", self.Proc2),
+                       ("nvmlDeviceGetComputeRunningProcesses", self.Proc1)):
+            f = getattr(self.lib, fn, None)
+            if f is None:
+                continue
+            n, buf = ctypes.c_uint(256), (st * 256)()
+            try:
+                if f(self.dev, ctypes.byref(n), buf) == 0:
+                    return {buf[i].pid for i in range(n.value)}
+            except OSError:
+                pass
+        return None
 
     def name(self):
         buf = ctypes.create_string_buffer(96)

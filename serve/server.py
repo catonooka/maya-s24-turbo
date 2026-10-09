@@ -57,6 +57,29 @@ try:                        # Project Maya's release (the dashboard's About; the
     MAYA_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() or None
 except OSError:
     MAYA_VERSION = None
+def wait_gpu_release(pid: int, timeout: float = 60.0):
+    """An engine that has ended still holds its GPU memory for a few seconds - the driver frees tens of GB of VRAM and
+    its pinned RAM tier after the process is gone - and an engine started at once finds the cards full (the split
+    search measures them before anything loads: the context reload's new engine got 0.09 GB and failed).  Waits until
+    no GPU lists the process any more (NVML), or a few seconds where NVML can't say (AMD)."""
+    try:
+        from serve.telemetry import gpu_pids
+    except ImportError:
+        gpu_pids = None
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        pids = gpu_pids() if gpu_pids else None
+        if pids is None:
+            time.sleep(max(0.0, 5.0 - (time.time() - t0)))
+            return
+        if pid not in pids:
+            if time.time() - t0 > 1:
+                print(f"[strata] the GPUs freed the engine's memory in {time.time() - t0:.0f} s", flush=True)
+            return
+        time.sleep(0.5)
+    print(f"[strata] the GPUs still list the old engine after {timeout:.0f} s; starting anyway", flush=True)
+
+
 CONTEXT_MIN = 4096          # the dashboard's Context size: the smallest it offers ...
 CONTEXT_FALLBACK_MAX = 262144   # ... and the largest when the model file does not say what it was trained for
 # the engine log's lines a report carries (maya.py's --report reads the same ones)
@@ -284,7 +307,8 @@ class StrataEngine:
         self.spawn = (exe, args, cwd, log, env)
 
     def stop(self, timeout: float = 60.0):
-        """Ask the engine to end (QUIT: it frees its GPU memory itself), and end it if it does not in time."""
+        """Ask the engine to end (QUIT: it frees its GPU memory itself), and end it if it does not in time - then wait
+        until the GPUs have that memory back."""
         try:
             self.proc.stdin.write("QUIT\n")
             self.proc.stdin.flush()
@@ -296,6 +320,7 @@ class StrataEngine:
             except (OSError, subprocess.TimeoutExpired):
                 pass
         self.ended = True
+        wait_gpu_release(self.proc.pid)
 
     def _pump(self):
         for line in self.proc.stdout:
@@ -375,8 +400,10 @@ class StrataEngine:
         """Start the engine again (the same command) after it died; the new process has its own line queue."""
         try:
             self.proc.kill()
-        except OSError:
+            self.proc.wait(timeout=20)
+        except (OSError, subprocess.TimeoutExpired):
             pass
+        wait_gpu_release(self.proc.pid)
         info = dict(self.info)
         self.ended = False
         self.__init__(*self.spawn)
