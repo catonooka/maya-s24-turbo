@@ -1083,5 +1083,45 @@ class TestCarryEmbeddings(unittest.TestCase):
         self.assertEqual(seen, ["req-1.sve"])
 
 
+class VisionFootprint(unittest.TestCase):
+    """The on-demand encoder's measurement: a failed or malformed one, or a damaged vision-memory.json, is no
+    measurement (the encoder runs on the CPU), never a server that does not start."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        d = Path(self.tmp.name)
+        (d / "mmproj.gguf").write_bytes(b"x")
+        self.cache = d / "vision-memory.json"
+        self.vcfg = {"exe": "strata-vision", "mmproj": str(d / "mmproj.gguf"), "model": "vocab.gguf",
+                     "max_tokens": 1024}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def measure(self, returncode, stdout):
+        from unittest import mock
+        from serve.server import vision_footprint
+        done = mock.Mock(returncode=returncode, stdout=stdout)
+        with mock.patch("serve.server.subprocess.run", return_value=done) as run:
+            got = vision_footprint(self.vcfg, {}, self.cache, 0)
+        return got, run.call_count
+
+    def test_a_failed_warm_up_is_no_measurement(self):
+        self.cache.write_text("[]")                    # not the dict it writes
+        self.assertEqual(self.measure(1, "ERR the vision encoder's warm-up encoded nothing\n"), (None, 1))
+
+    def test_a_malformed_mem_line_is_no_measurement(self):
+        self.assertEqual(self.measure(0, "MEM 12\n"), (None, 1))
+        self.assertEqual(self.measure(0, "MEM a b c\n"), (None, 1))
+
+    def test_a_damaged_cache_entry_is_measured_again(self):
+        self.measure(0, "MEM 1000 2000 100000\n")      # the key it writes
+        key = next(iter(json.loads(self.cache.read_text())))
+        self.cache.write_text(json.dumps({key: {"bytes": "1", "total": 100000}}))
+        self.assertEqual(self.measure(0, "MEM 1000 2000 100000\n"), ((1024, 3000 + (256 << 20)), 1))
+        self.assertEqual(self.measure(0, ""), ((1024, 3000 + (256 << 20)), 0))   # now from the cache
+
+
 if __name__ == "__main__":
     unittest.main()

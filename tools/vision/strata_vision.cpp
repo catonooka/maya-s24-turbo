@@ -145,6 +145,13 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "strata-vision: warmed up at %d image tokens\n", warm_tokens);
         mtmd_input_chunks_free(chunks);
         if (bm) mtmd_bitmap_free(bm);
+        // --measure without the picture's work buffers would report the weights alone, and the engine would lend
+        // the encoder too little: no MEM line then (the server keeps the encoder on the CPU)
+        if (measure && warm_tokens == 0) {
+            std::printf("ERR the vision encoder's warm-up encoded nothing; no measurement\n");
+            std::fflush(stdout);
+            return 1;
+        }
     }
     if (measure) {   // ... and after the weights and the largest picture's work buffers
         size_t free1 = 0, total1 = 0;
@@ -153,6 +160,7 @@ int main(int argc, char** argv) {
         std::fflush(stdout);
         mtmd_free(ctx);
         llama_model_free(text);
+        llama_backend_free();
         return 0;
     }
     std::printf("READY %d\n", n_embd);

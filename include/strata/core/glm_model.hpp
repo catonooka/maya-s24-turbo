@@ -253,7 +253,9 @@ public:
     cudaError_t pack_moe_tail(std::string& err, const std::vector<int>& ids,
                               const std::vector<float>& rw, float* A, int layer);
     // token_embd stays QUANTIZED in the pack arena; step() dequantizes the one row it needs per
-    // token from the host mapping (2.2 GB of F32 embedding the expert pool now gets instead)
+    // token from the host mapping (2.2 GB of F32 embedding the expert pool now gets instead).  A row's
+    // bytes come from ggml_row_size, which knows every GGUF type: iq_row_bytes knows only the device
+    // kernels' and gave 0 for F16 / BF16 / Q2_K / Q4_1 / Q5_1, so every token read row 0
     const uint8_t* pack_emb_src_ = nullptr;
     int pack_emb_type_ = -1;
 

@@ -727,18 +727,33 @@ bool Glm5Model::prefill_setup(std::string& err) {
     cublasSetStream(S->blas, F->cs);
     cublasSetMathMode(S->blas, CUBLAS_DEFAULT_MATH);
     S->mq = std::make_unique<mmq::Context>();
+    // an event that did not create (a GPU the expert pool filled) stays null and the prompt runs token by token:
+    // the staging below records and waits on every one of them, and a null event there is no event at all
+    bool events_ok = true;
+    const auto create_event = [&](cudaEvent_t& e, unsigned flags) {
+        if (events_ok && cudaEventCreateWithFlags(&e, flags) != cudaSuccess) {
+            e = nullptr;
+            events_ok = false;
+        }
+    };
     for (int b = 0; b < PrefillState::NG; ++b) {
-        cudaEventCreateWithFlags(&S->ev_ready[b], cudaEventDisableTiming);
-        cudaEventCreateWithFlags(&S->ev_free[b], cudaEventDisableTiming);
+        create_event(S->ev_ready[b], cudaEventDisableTiming);
+        create_event(S->ev_free[b], cudaEventDisableTiming);
     }
-    for (auto& e : S->ev_land) cudaEventCreateWithFlags(&e, cudaEventDisableTiming);
-    cudaEventCreateWithFlags(&S->ev_hop, cudaEventDisableTiming);
+    for (auto& e : S->ev_land) create_event(e, cudaEventDisableTiming);
+    create_event(S->ev_hop, cudaEventDisableTiming);
     if (S->NP > 0) {
-        S->ev_pdone.resize((size_t) (S->NP + PrefillState::kPreEv - 1) / PrefillState::kPreEv);
-        for (auto& e : S->ev_pdone) cudaEventCreateWithFlags(&e, cudaEventDisableTiming);
-        cudaEventCreate(&S->ev_pready);   // (timed: the controller reads when the copies landed)
-        cudaEventCreate(&S->ev_pstart);
-        cudaEventCreateWithFlags(&S->ev_pfree, cudaEventDisableTiming);
+        S->ev_pdone.assign((size_t) (S->NP + PrefillState::kPreEv - 1) / PrefillState::kPreEv, nullptr);
+        for (auto& e : S->ev_pdone) create_event(e, cudaEventDisableTiming);
+        create_event(S->ev_pready, 0);   // (timed, flags 0: the controller reads when the copies landed)
+        create_event(S->ev_pstart, 0);
+        create_event(S->ev_pfree, cudaEventDisableTiming);
+    }
+    if (!events_ok) {
+        cudaGetLastError();
+        std::fprintf(stderr, "glm prefill: CUDA%d staging events did not create - token by token\n", dev_);
+        prefill_destroy();
+        return true;
     }
     S->last_cnt.assign((size_t) g.n_layers, {});
     S->trace = getenv("STRATA_GLM_PREFILL_TRACE") != nullptr;
@@ -1134,7 +1149,8 @@ void Glm5Model::prefill_destroy() {
     if (S->ev_out) cudaEventDestroy(S->ev_out);
     if (S->ev_c0) cudaEventDestroy(S->ev_c0);
     if (S->ev_c1) cudaEventDestroy(S->ev_c1);
-    for (auto e : S->ev_pdone) cudaEventDestroy(e);
+    for (auto e : S->ev_pdone)
+        if (e) cudaEventDestroy(e);
     if (S->ev_pready) cudaEventDestroy(S->ev_pready);
     if (S->ev_pstart) cudaEventDestroy(S->ev_pstart);
     if (S->ev_pfree) cudaEventDestroy(S->ev_pfree);
@@ -2371,7 +2387,7 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
                 err = "glm prefill: no embedding dequantizer for the draft block";
                 return false;
             }
-            const size_t row_b = strata::kernels::iq_row_bytes(pack_emb_type_, E);
+            const size_t row_b = ggml_row_size((ggml_type) pack_emb_type_, E);
             cudaStreamSynchronize(s);   // emb_h: the host writes it now
             for (int t = 0; t < Tv; ++t)
                 tt->to_float(pack_emb_src_ + (size_t) next_ids[t] * row_b, S->emb_h + (size_t) t * E, E);
@@ -2528,7 +2544,7 @@ bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err
     }
     const auto t0 = std::chrono::steady_clock::now();
     const int E = g.n_embd;
-    const size_t row_b = strata::kernels::iq_row_bytes(pack_emb_type_, E);
+    const size_t row_b = ggml_row_size((ggml_type) pack_emb_type_, E);
     int Tc = pf_->T_bound;
     for (Glm5Model* m = split_next_.get(); m != nullptr; m = m->split_next_.get()) Tc = std::min(Tc, m->pf_->T_bound);
     const int64_t pos_start = pos_;

@@ -1330,10 +1330,10 @@ bool Glm5Model::step_issue(int32_t token, int64_t& p, std::string& err) {
                 err = "pack: no dequantizer for the quantized token_embd";
                 return false;
             }
-            tt->to_float(pack_emb_src_ + (size_t) token * strata::kernels::iq_row_bytes(pack_emb_type_, g.n_embd),
+            tt->to_float(pack_emb_src_ + (size_t) token * ggml_row_size((ggml_type) pack_emb_type_, g.n_embd),
                          emb_host.data(), g.n_embd);
             if (getenv("STRATA_GLM_EMB_PROBE") && token < 3) {
-                const size_t rb = strata::kernels::iq_row_bytes(pack_emb_type_, g.n_embd);
+                const size_t rb = ggml_row_size((ggml_type) pack_emb_type_, g.n_embd);
                 const uint8_t* rp = pack_emb_src_ + (size_t) token * rb;
                 std::fprintf(stderr, "emb probe: token %d type %d row_bytes %zu src+0: %02x %02x %02x %02x "
                                      "vals %.6f %.6f %.6f %.6f\n",
