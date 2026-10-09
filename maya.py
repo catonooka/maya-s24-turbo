@@ -1541,6 +1541,8 @@ def server_command(cfg_path: Path, a) -> tuple:
     env = dict(os.environ, MAYA_RESTART_ON_UPDATE="1")  # (the dashboard may update Maya)
     if S.UI is not None:                               # (the setup's screen shows the same in its card, and reads
         env["PYTHONUNBUFFERED"] = "1"                  # the server's output from a pipe)
+        found = S.amd_gpus() if cfg.get("backend") == "hip" else S.gpus()
+        info["vram"] = {g["index"]: g["vram_gb"] for g in found}   # (its load: a GPU not started yet, by its VRAM)
         return cmd, env, info
     say()
     say("  " + "-" * 100)

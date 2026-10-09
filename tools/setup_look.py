@@ -110,6 +110,35 @@ def card(rows: list) -> Text:
     return Text("\n").join(Text.assemble((f"{k}: ", ACCENT_TEXT), v) for k, v in rows)
 
 
+class Card(Vertical):
+    """The card on the screen: a line each, drawn again only when it changes - a terminal underlines a URL it finds,
+    and the dashboard's and the API's, written anew with the spinner's line at every tick, flashed."""
+    DEFAULT_CSS = """
+    Card { height: auto; }
+    Card > Static { height: auto; text-wrap: nowrap; text-overflow: ellipsis; }
+    """
+    LINES = 6
+
+    def compose(self) -> ComposeResult:
+        self.shown: list = [None] * self.LINES
+        for _ in range(self.LINES):
+            row = Static()
+            row.display = False                         # (until it has a line)
+            yield row
+
+    def show(self, text: Text) -> None:
+        lines = (list(text.split("\n")) + [None] * self.LINES)[:self.LINES]
+        for k, (row, line) in enumerate(zip(self.query(Static), lines)):
+            if line != self.shown[k]:
+                self.shown[k] = line
+                row.display = line is not None
+                row.update(line or "")
+
+    @property
+    def plain(self) -> str:
+        return "\n".join(line.plain for line in self.shown if line is not None)
+
+
 def setup_card(app, spin: str) -> Text:
     """The card while the setup runs (setup_tui.SetupApp): its step, what runs now, the progress - or, for a
     start without a setup, what runs before Maya does (a compile after an update)."""
@@ -162,8 +191,7 @@ SETUP_CSS = """
     #splash { width: 100%; height: auto; margin-bottom: 1; text-align: center; }
     .short #splash, .tight.asking #splash, .short.asking #card { display: none; }
     #lower { height: 1fr; align-horizontal: center; }
-    #card { width: 76; max-width: 100%; height: auto; border: solid $maya-line; padding: 0 1; margin-bottom: 1;
-            text-wrap: nowrap; text-overflow: ellipsis; }
+    #card { width: 76; max-width: 100%; height: auto; border: solid $maya-line; padding: 0 1; margin-bottom: 1; }
     #output { width: 100%; max-width: 120; height: 1fr; min-height: 3; border: solid $maya-line; padding: 0 1;
               border-title-align: center; border-subtitle-align: right; background: $background;
               scrollbar-size-vertical: 1; scrollbar-color: $maya-edge; scrollbar-background: $background; }

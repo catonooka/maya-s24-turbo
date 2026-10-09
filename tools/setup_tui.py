@@ -30,7 +30,8 @@ from textual.widgets.option_list import Option
 from setup_bridge import TAIL, Bridge, curl_meter, describe
 from setup_dash import Dashboard
 from setup_look import (ACCENT, ACCENT_TEXT, DANGER, EDGE, FAINT, INK, LINE, MUTED, OK, OK_TEXT, SETUP_CSS, THEME,
-                        TINT, WARN, Output, StopScreen, clock, hints, serving_card, setup_card, splash, styled, title)
+                        TINT, WARN, Card, Output, StopScreen, clock, hints, serving_card, setup_card, splash, styled,
+                        title)
 
 # maya.py's steps (setup.step) as tabs, the tuning after them, then Maya running (Bridge.serve): its dashboard, its log
 STEPS = {1: "This PC", 2: "Choices", 3: "Packages", 4: "Engine", 5: "Model", 6: "Pack", 7: "Images", 8: "Config",
@@ -87,7 +88,7 @@ class SetupApp(App):
             with Vertical(id="page"):                   # the setup's page: logo, card, output, a question
                 yield Static(splash(), id="splash")
                 with Center():
-                    yield Static(id="card")
+                    yield Card(id="card")
                 with Vertical(id="lower"):
                     yield Output(id="output", wrap=True, min_width=20, max_lines=5000)
                     with Vertical(id="ask"):
@@ -244,7 +245,7 @@ class SetupApp(App):
         log = Path(info["log"]).name if info.get("log") else ""
         self.query_one("#output").border_subtitle = Text(f"engine log: {log}" if log else "", f"italic {FAINT}")
         self.query_one(Dashboard).follow(info["dashboard"] + "metrics", info.get("key") or "", info.get("log"),
-                                         info.get("gpus") or [])
+                                         info.get("gpus") or [], info.get("vram"))
         self.show_view(None)
 
     def ev_live(self, line: str) -> None:
@@ -405,11 +406,11 @@ class SetupApp(App):
         if self.state.get(self.cur) == "run":
             self.draw_tabs()
         if self.serving is None or self.pending:
-            self.query_one("#card", Static).update(setup_card(self, SPIN[self.frame % len(SPIN)]))
+            self.query_one("#card", Card).show(setup_card(self, SPIN[self.frame % len(SPIN)]))
         else:                                           # (the log's page and the dashboard show the same card)
             text = serving_card(self.serving, SPIN[self.frame % len(SPIN)])
-            self.query_one("#card", Static).update(text)
-            self.query_one("#dash-card", Static).update(text)
+            self.query_one("#card", Card).show(text)
+            self.query_one("#dash-card", Card).show(text)
 
     def draw_tabs(self) -> None:
         spin = SPIN[self.frame % len(SPIN)]

@@ -20,7 +20,7 @@ from textual.containers import Center, Horizontal, VerticalScroll
 from textual.widgets import Static
 
 from setup_look import (ACCENT, ACCENT2, ACCENT_TEXT, DANGER, FAINT, INFO_TEXT, INK, INK_SOFT, MUTED, OK, QUADRANTS,
-                        WARN, bar, clock, gradient, mix, title)
+                        WARN, Card, bar, clock, gradient, mix, title)
 
 # font8x8's digits (public domain, as the logo's letters), for the throughput in big
 DIGITS = {"0": (0x3E, 0x63, 0x73, 0x7B, 0x6F, 0x67, 0x3E, 0x00), "1": (0x0C, 0x0E, 0x0C, 0x0C, 0x0C, 0x0C, 0x3F, 0x00),
@@ -311,10 +311,10 @@ def banners(m: dict, fails: int) -> Text:
 class LoadWatch:
     """How far the model's start is, from the engine log (read from where it stood when the start began): the warm-up
     of each GPU's expert tiers - the bulk of a start, one GPU after the other - in GB.  `gpus`: the start's, in the
-    order the engine numbers its parts (its CUDA0 is the first)."""
+    order the engine numbers its parts (its CUDA0 is the first); `vram`: each one's GB of VRAM, by its number."""
 
-    def __init__(self, path, gpus):
-        self.path, self.gpus = path, list(gpus) or [0]
+    def __init__(self, path, gpus, vram=None):
+        self.path, self.gpus, self.vram = path, list(gpus) or [0], dict(vram or {})
         try:
             self.pos = os.path.getsize(path) if path else 0
         except OSError:
@@ -341,15 +341,27 @@ class LoadWatch:
             elif m := WARMED.search(line):
                 self.parts[int(m.group(2))] = [float(m.group(3))] * 2
 
+    def total(self) -> tuple:
+        """(the GB the start warms in all, whether it is known): each part's as the engine said; one not started yet
+        as the parts so far per GB of their VRAM, times its own (a 16 GB card after the 3090: 2/3 of its part, not
+        all of it) - without the VRAMs, as their mean."""
+        known = {k: whole for k, (_, whole) in self.parts.items()}
+        waiting = [k for k in range(len(self.gpus)) if k not in known]
+        vram = [self.vram.get(self.gpus[k]) if k < len(self.gpus) else None for k in [*known, *waiting]]
+        if not waiting or not known:
+            return sum(known.values()), not waiting
+        if all(vram):
+            per = sum(known.values()) / sum(vram[:len(known)])
+            return sum(known.values()) + per * sum(vram[len(known):]), False
+        return sum(known.values()) * (1 + len(waiting) / len(known)), False
+
     def fraction(self):
-        """The share of the start done (None: no engine log to tell); the GPUs not started yet count as the mean."""
+        """The share of the start done (None: no engine log to tell)."""
         if not self.path:
             return None
         if not self.parts:
             return 0.0
-        known = [total for _, total in self.parts.values()]
-        whole = sum(known) + sum(known) / len(known) * max(0, len(self.gpus) - len(known))
-        return min(1.0, sum(done for done, _ in self.parts.values()) / max(whole, 1e-9))
+        return min(1.0, sum(done for done, _ in self.parts.values()) / max(self.total()[0], 1e-9))
 
 
 def loading(w: LoadWatch, width: int):
@@ -368,9 +380,9 @@ def loading(w: LoadWatch, width: int):
         k = now[-1] if now else max(parts) + 1
         what = f"warming the experts on {gpu(k)}" + (f" (part {k + 1} of {n})" if n > 1 else "")
     left = f" · about {clock(took * (1 - frac) / frac)} left" if frac and 0.03 < frac < 1 and took > 10 else ""
-    warm = sum(done for done, _ in parts.values())
-    total = warm / frac if frac else None               # (the GPUs not started yet: as the mean of those that have)
-    side = [Text(f"{fmt(warm, 1)} of about {fmt(total)} GB of experts warm" if total else "Starting the engine",
+    warm, (total, known) = sum(done for done, _ in parts.values()), w.total()
+    of = f"{fmt(total, 1)}" if known else f"about {fmt(total)}"
+    side = [Text(f"{fmt(warm, 1)} of {of} GB of experts warm" if total else "Starting the engine",
                  f"bold {INK}"), Text(what[:1].upper() + what[1:], INK_SOFT),
             Text(f"{clock(took)} so far{left}", MUTED), Text("")]
     if frac is None:                                    # (no engine log: the time only)
@@ -399,8 +411,7 @@ class Dashboard(VerticalScroll):
     #dash-banner { margin-bottom: 1; }
     #dash-load { width: 90; max-width: 100%; border: solid $maya-line; padding: 1 2; margin-bottom: 1;
                  border-title-align: center; }
-    #dash-card { width: 76; max-width: 100%; border: solid $maya-line; padding: 0 1; margin-bottom: 1;
-                 text-wrap: nowrap; text-overflow: ellipsis; }
+    #dash-card { width: 76; max-width: 100%; height: auto; border: solid $maya-line; padding: 0 1; margin-bottom: 1; }
     #dash-row { height: auto; }
     #dash-speed, #dash-tiers, #dash-gpus, #dash-hw, #dash-reqs { border: solid $maya-line; padding: 0 1;
                  margin-bottom: 1; border-title-align: center; border-subtitle-align: right; }
@@ -413,7 +424,7 @@ class Dashboard(VerticalScroll):
     def compose(self) -> ComposeResult:
         yield Static(id="dash-banner")
         with Center():
-            yield Static(id="dash-card")
+            yield Card(id="dash-card")
         with Center():
             yield Static(id="dash-load")
         with Horizontal(id="dash-row"):
@@ -431,10 +442,10 @@ class Dashboard(VerticalScroll):
         self.query_one("#dash-banner").display = False
         self.set_interval(1.0, self.draw)
 
-    def follow(self, url: str, key: str = "", log=None, gpus=()) -> None:
-        """GET /metrics once a second from now on, in a thread: the screen never waits for the server.  log, gpus: the
-        engine log and the start's GPUs, for the loading box (LoadWatch)."""
-        self.load = LoadWatch(log, gpus)
+    def follow(self, url: str, key: str = "", log=None, gpus=(), vram=None) -> None:
+        """GET /metrics once a second from now on, in a thread: the screen never waits for the server.  log, gpus, vram:
+        the engine log, the start's GPUs and their VRAM, for the loading box (LoadWatch)."""
+        self.load = LoadWatch(log, gpus, vram)
 
         def poll():
             req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"} if key else {})

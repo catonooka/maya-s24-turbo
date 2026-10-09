@@ -154,10 +154,10 @@ class Loading(unittest.TestCase):
     """The model's start in the loading box: the engine log's warm-up of each GPU's experts as one share (by GB; the
     GPUs not started yet count as the mean), from where the log stood when the start began."""
 
-    def watch(self, lines, gpus=(3, 0, 1)):
+    def watch(self, lines, gpus=(3, 0, 1), vram=None):
         log = Path(tempfile.mkdtemp()) / "maya-maya-l.log"
         log.write_text("glm fast: CUDA0 warming the expert tiers 100% (25.0 of 25.0 GB, 50 s)\n")   # an earlier start's
-        w = D.LoadWatch(str(log), list(gpus))
+        w = D.LoadWatch(str(log), list(gpus), vram)
         with open(log, "a", encoding="utf-8") as f:
             f.write("".join(line + "\n" for line in lines))
         w.read()
@@ -176,6 +176,20 @@ class Loading(unittest.TestCase):
             self.assertIn(want, out)
         w.reset()                                                   # (a reload: from 0% again)
         self.assertEqual(w.fraction(), 0.0)
+
+    def test_a_gpu_not_started_yet_counts_by_its_vram(self):  # (Maya-L on the 3090 + 8x 16 GB: 148.3 GB, never 225)
+        gpus, vram = [3, 0, 1, 2, 4, 5, 6, 7, 8], {3: 24.0, **{g: 16.0 for g in (0, 1, 2, 4, 5, 6, 7, 8)}}
+        w = self.watch(["glm fast: CUDA0 tiers warm: 2016 experts (25.0 GB) in 50 s (0.50 GB/s)"], gpus, vram)
+        total, known = w.total()
+        self.assertAlmostEqual(total, 25 + 8 * 16 * 25 / 24)       # the 3090's 25 GB per its 24 GB, on each 16 GB
+        self.assertFalse(known)
+        self.assertIn("25.0 of about 158 GB of experts warm", text(D.loading(w, 60)))
+        sizes = (25.0, 13.4, 13.4, 16.8, 13.4, 16.8, 13.4, 16.8, 19.3)
+        w = self.watch([f"glm fast: CUDA{k} tiers warm: 1152 experts ({gb} GB) in 30 s (0.45 GB/s)"
+                        for k, gb in enumerate(sizes)], gpus, vram)
+        self.assertAlmostEqual(w.total()[0], 148.3)
+        self.assertTrue(w.total()[1])
+        self.assertIn("148.3 of 148.3 GB of experts warm", text(D.loading(w, 60)))   # (all known: no "about")
 
     def test_before_the_warm_up_after_it_and_without_a_log(self):
         self.assertIn("Reading the model's weights", text(D.loading(self.watch([]), 60)))
@@ -293,7 +307,7 @@ class Start(unittest.IsolatedAsyncioTestCase):
         try:
             async with app.run_test(size=(120, 40)) as pilot:
                 await pilot.pause(0.2)
-                self.assertIn("Starting Maya", app.query_one("#card").content.plain)
+                self.assertIn("Starting Maya", app.query_one("#card").plain)
                 t0 = time.time()
                 while app.state[T.SERVE] != "ready":
                     self.assertLess(time.time() - t0, 20, "the stand-in server did not get ready")
