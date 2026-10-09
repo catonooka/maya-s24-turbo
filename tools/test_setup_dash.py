@@ -1,0 +1,214 @@
+"""tools/test_setup_dash.py - Maya's dashboard on its screen (setup_dash.py): the Monitor's numbers from a GET /metrics
+like the server's, the screen's switch from the setup to the dashboard and its log, and ./maya.sh's start on the screen
+(the real engine's server, no setup steps).  No GPU, no network; needs Textual (skipped without it)."""
+from pathlib import Path
+import io
+import os
+import sys
+import tempfile
+import time
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parent)]
+import maya  # noqa: E402
+import setup as S  # noqa: E402
+from setup_bridge import Bridge  # noqa: E402
+try:
+    from rich.console import Console
+    import setup_dash as D
+    import setup_tui as T
+except ImportError:
+    D = T = None
+
+NOW = time.time()
+GPU = {"util": 41, "mem_used": 14 * 2**30, "mem_total": 16 * 2**30, "temp": 61, "power": 88.0, "power_limit": 180.0,
+       "pcie_gen": 4, "pcie_gen_max": 5, "pcie_width": 8, "pcie_rx_mb": 3100.0}
+METRICS = {   # GET /metrics as the server sends it (serve/server.py, metrics) - two GPUs, an answer being written
+    "engine": {"model": "glm-5.3-flash", "max_context": 32768, "experts": 19456, "expert_slots": 5248, "ram_gb": 92.8},
+    "live": {"state": "generating", "queued": 0, "phase": "answering", "prompt_tokens": 2048, "generated": 312,
+             "max_tokens": 600, "elapsed_s": 11.0, "tok_s": 28.5, "prefill_tok_s_mean": 410.0},
+    "tiers": {"now": {"tok_s": 28.4, "ms_tok": 35.1, "vram_hit": 0.912, "ram_fetch": 0.62, "disk": 0.08,
+                      "promo": 0.21, "vram_used": 5210, "ram_used": 11850, "vram_gb": 40.2, "ram_gb": 91.4,
+                      "time": NOW},
+              "history": {"ram_fetch": [0.5, 0.7, 0.6], "disk": [0, 0.1, 0], "promo": [0.2, 0.3, 0.2]}},
+    "requests": [{"time": NOW - 60, "duration_s": 17.2, "finish": "stop", "api": "openai", "prefill_tok_s": 382.9,
+                  "prompt_tokens": 1533, "reused": 0, "output_tokens": 234, "decode_tok_s": 18.5, "hit_rate": 0.92}],
+    "totals": {"since": NOW - 600, "requests": 1, "prompt_tokens": 1533, "reused": 0, "output_tokens": 234,
+               "prompt_ms": 4003.6, "decode_ms": 12586.5},
+    "hardware": {"gpu_util": 41, "gpu_mem_used": 28 * 2**30, "gpu_mem_total": 32 * 2**30, "gpu_temp": 61,
+                 "gpu_power": 176.0, "gpu_power_limit": 360.0, "gpu_pcie_gen_max": 5, "gpu_pcie_width": 8,
+                 "gpu_pcie_rx_mb": 6200.0, "cpu": 34.0, "ram_used": 140 * 2**30, "ram_total": 251 * 2**30,
+                 "disk_read_mb": 12.0, "disk_write_mb": 0.4,
+                 "gpus": [dict(GPU, index=0), dict(GPU, index=1, temp=88)]},
+    "hardware_static": {"gpu_name": "NVIDIA GeForce RTX 5060 Ti + NVIDIA GeForce RTX 3090", "cores": 88,
+                        "threads": 88},
+    "history": {"tok_s": [0, 12.0, 27.0, 28.5], "gpu_util": [10, 40, 41], "cpu": [30, 34], "ram_used": [1, 2]},
+    "reload": None, "time": NOW}
+
+
+def text(renderable, width: int = 120) -> str:
+    console = Console(file=io.StringIO(), width=width, record=True, color_system=None)
+    console.print(renderable)
+    return console.export_text()
+
+
+@unittest.skipIf(T is None, "Textual is not installed (./maya.sh --setup installs it)")
+class Boxes(unittest.TestCase):
+    """Each box from GET /metrics, as the web Monitor computes it (serve/web/app.js)."""
+
+    def setUp(self):
+        METRICS["tiers"]["now"]["time"] = time.time()   # (a fresh reading: older than 30 s is "the last answer's")
+
+    def test_throughput(self):
+        out = text(D.speed(METRICS, 56))
+        for want in ("tok/s", "writing now", "prefill 410", "Answering", "312 tokens", "35.1 ms", "91.2%",
+                     "2.4k / 32K", "Requests"):
+            self.assertIn(want, out)
+        self.assertEqual(len(D.big("28.5")), 4)          # (the speed in font8x8, as the logo)
+
+    def test_where_the_experts_live(self):
+        out = text(D.tiers(METRICS, 56))
+        for want in ("VRAM", "5,210", "40.2 GB", "Pinned RAM", "11,850", "SSD only", "2,396", "From RAM", "0.62"):
+            self.assertIn(want, out)
+        self.assertIn("live · 19,456 routed experts", D.tiers_sub(METRICS).plain)
+        self.assertIn("while it writes", text(D.tiers({"engine": {}}, 56)))    # (the mock engine: no tiers)
+
+    def test_gpus_hardware_requests_and_banners(self):
+        gpus = text(D.gpus(METRICS))
+        for want in ("RTX 5060 Ti", "RTX 3090", "41%", "14.0 / 16 GB", "88 / 180 W", "Gen5 x8", "3,100 MB/s"):
+            self.assertIn(want, gpus)
+        hw = text(D.hardware(METRICS, 116))
+        for want in ("GPU load", "41%", "28.0 / 32 GB", "5,248 experts cached", "CPU", "88 cores", "RAM",
+                     "92.8 GB pinned", "6.1 GB/s"):
+            self.assertIn(want, hw)
+        reqs = text(D.requests(METRICS, 116))
+        for want in ("Done", "OpenAI", "1,533", "234", "18.5", "92.0%", "17.2 s", "Since"):
+            self.assertIn(want, reqs)
+        self.assertIn("GPU 1 is at 88 °C", D.banners(METRICS, 0).plain)
+        self.assertIn("does not answer", D.banners(METRICS, 3).plain)
+
+    def test_an_empty_server_is_no_error(self):            # (before the first request, or a server just started)
+        empty = {"engine": {}, "live": {"state": "idle"}, "hardware": {}, "history": {}}
+        for box in (D.speed(empty, 40), D.tiers(empty, 40), D.gpus(empty), D.hardware(empty, 80),
+                    D.requests(empty, 80)):
+            text(box)
+
+    def test_one_gpu_and_a_request_without_its_prefill(self):  # (a one-card server: gpu_* only; older requests)
+        hw = {k: v for k, v in METRICS["hardware"].items() if k != "gpus"}
+        m = dict(METRICS, hardware=hw, hardware_static={"gpu_name": "NVIDIA GeForce RTX 3090"},
+                 requests=[dict(METRICS["requests"][0], prefill_tok_s=None, prompt_ms=4000.0)])
+        self.assertIn("RTX 3090", text(D.gpus(m)))
+        self.assertIn("28.0 / 32 GB", text(D.gpus(m)))
+        self.assertIn("383", text(D.requests(m, 116)))          # 1,533 tokens read in 4 s
+
+    def test_the_engines_facts_come_as_text(self):           # (its INFO line: "ram_gb": "107.8", as the server sends)
+        m = dict(METRICS, engine=dict(METRICS["engine"], ram_gb="107.8", vram_gb="12.3"))
+        self.assertIn("107.8 GB pinned", text(D.hardware(m, 116)))
+        self.assertIn("107.8 GB pinned for …", text(D.hardware(m, 96)))         # (a card too narrow: cut, marked)
+
+
+@unittest.skipIf(T is None, "Textual is not installed (./maya.sh --setup installs it)")
+class Screen(unittest.IsolatedAsyncioTestCase):
+    async def test_maya_running_shows_the_dashboard_and_tab_its_log(self):
+        server = "import time\nprint('ready: http://127.0.0.1:9/v1')\nprint('[strata] a log line')\ntime.sleep(30)"
+        info = {"model": "glm-5.3-flash", "quant": "Maya-L", "context": "32768", "dashboard": "http://127.0.0.1:9/",
+                "api": "http://127.0.0.1:9/v1", "log": None, "key": ""}
+        with tempfile.TemporaryDirectory() as d:
+            bridge = Bridge(Path(d) / "setup.log")
+            S.UI = bridge
+            env = dict(os.environ, PYTHONUNBUFFERED="1")
+            app = T.SetupApp(bridge, lambda: S.UI.serve([sys.executable, "-c", server], env, info), "1.0", "./maya.sh",
+                             Path(d) / "setup.log")
+            try:
+                async with app.run_test(size=(120, 40)) as pilot:
+                    t0 = time.time()
+                    while app.state[T.SERVE] != "ready":
+                        self.assertLess(time.time() - t0, 20, "the stand-in server did not get ready")
+                        await pilot.pause(0.05)
+                    dash = app.query_one(T.Dashboard)
+                    dash.metrics = METRICS                  # (as its poll would read it from the server)
+                    await pilot.pause(1.3)
+                    self.assertTrue(dash.display)
+                    self.assertFalse(app.query_one("#page").display)
+                    self.assertIs(dash.drawn, METRICS)
+                    await pilot.press("tab")                # the server's log
+                    await pilot.pause(0.2)
+                    self.assertEqual(app.view, T.LOG)
+                    self.assertTrue(app.query_one("#page").display)
+                    self.assertIn("[strata] a log line", "\n".join(x.text for x in app.query_one("#output").lines))
+                    await pilot.press("escape")             # back to the dashboard
+                    await pilot.pause(0.1)
+                    self.assertIsNone(app.view)
+                    self.assertTrue(dash.display)
+                    await pilot.press("ctrl+c", "ctrl+c")
+                bridge.finish(10)
+            finally:
+                S.UI = None
+                bridge.log.close()
+
+
+@unittest.skipIf(T is None, "Textual is not installed (./maya.sh --setup installs it)")
+class Start(unittest.IsolatedAsyncioTestCase):
+    """./maya.sh on an installed Maya: the real engine (server.py --engine strata) on the screen - its dashboard and
+    log, without the setup's steps or its log; --plain (or no terminal): in the terminal as before."""
+
+    async def test_a_start_runs_the_engine_on_the_screen(self):
+        got, served = {}, []
+        cmd = [sys.executable, "serve/server.py", "--engine", "strata", "--config", "maya-test.json"]
+        ui = SimpleNamespace(serve=lambda c, env, info: served.append((c, info)) or 0)
+
+        def run(body, version, log_path, me, steps=True):
+            got.update(log=log_path, steps=steps)
+            return body()
+        with patch.object(maya, "setup_screen", return_value=True), patch("setup_tui.run", side_effect=run), \
+                patch.object(maya, "server_command", return_value=(cmd, {}, {"dashboard": "http://127.0.0.1:9/"})), \
+                patch.object(maya.S, "UI", ui), patch.object(maya.subprocess, "call") as plain:
+            self.assertEqual(maya.start(Path("maya-test.json"), SimpleNamespace(plain=False, yes=True)), 0)
+        self.assertEqual(served[0][0], cmd)
+        self.assertEqual(got, {"log": None, "steps": False})   # (the setup's log stays the setup's)
+        plain.assert_not_called()
+
+    def test_plain_starts_in_the_terminal(self):
+        with patch.object(maya, "setup_screen", return_value=False), \
+                patch.object(maya, "server_command", return_value=(["server"], {}, {})), \
+                patch.object(maya.subprocess, "call", return_value=0) as plain, patch("setup_tui.run") as screen:
+            self.assertEqual(maya.start(Path("maya-test.json"), SimpleNamespace(plain=True, yes=False)), 0)
+        plain.assert_called_once()
+        screen.assert_not_called()
+        self.assertFalse(maya.setup_screen(SimpleNamespace(plain=True, yes=False), asks=False))
+
+    async def test_only_maya_s_tabs_and_starting_maya_before_it_runs(self):
+        server = "import time\nprint('ready: http://127.0.0.1:9/v1')\ntime.sleep(30)"
+        info = {"model": "glm-5.3-flash", "quant": "Maya-L", "context": "32768", "dashboard": "http://127.0.0.1:9/",
+                "api": "http://127.0.0.1:9/v1", "log": None, "key": ""}
+
+        def body():
+            time.sleep(0.5)                                     # (what runs before Maya: an engine update's compile)
+            return S.UI.serve([sys.executable, "-c", server], dict(os.environ, PYTHONUNBUFFERED="1"), info)
+        bridge = Bridge(None)
+        S.UI = bridge
+        app = T.SetupApp(bridge, body, "1.0", "./maya.sh", None, steps=False)
+        try:
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause(0.2)
+                self.assertIn("Starting Maya", app.query_one("#card").content.plain)
+                t0 = time.time()
+                while app.state[T.SERVE] != "ready":
+                    self.assertLess(time.time() - t0, 20, "the stand-in server did not get ready")
+                    await pilot.pause(0.05)
+                app.draw_tabs()
+                tabs = app.query_one("#tabs").content.plain
+                self.assertIn("Dashboard", tabs)
+                self.assertNotIn("This PC", tabs)
+                self.assertTrue(app.query_one("#dash").display)
+                await pilot.press("ctrl+c", "ctrl+c")
+            bridge.finish(10)
+        finally:
+            S.UI = None
+            bridge.log.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

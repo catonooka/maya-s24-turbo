@@ -11,6 +11,12 @@ On Windows START-MAYA.bat takes the same options.  Both make the private Python 
 setup.sh does) and run this file.  It reuses Strata's installer (setup.py) for the PC checks,
 pip, llama.cpp's source and resumable downloads.
 
+In a terminal the setup runs on a screen of its own (tools/setup_tui.py): the steps, what runs now with a progress
+bar, and the questions as menus - then Maya runs on the same screen, and every later start too: its dashboard (the
+Monitor's numbers from the engine's GET /metrics), its server's output, Ctrl+C stops it.  Its library, Textual, comes
+with Maya (third_party/wheels) and goes into .venv from there - nothing is downloaded.  --plain or a pipe: plain text,
+and Maya in the terminal as before; --yes: the setup in plain text.
+
 What the first run does (each step is skipped when it is already done):
 
   1. checks the PC: NVIDIA GPU(s) of compute capability 7.0+, driver, CUDA toolkit (nvcc), the C++ compiler (g++;
@@ -249,6 +255,23 @@ def pick_cmake():
     return None
 
 
+def choose(question: str, intro: list, options: list, default: int, yes: bool, outro: list = ()) -> int:
+    """The answer's index among `options`, each (label, note or None, about or None): a menu on the setup's screen
+    (tools/setup_tui.py; `about` shows under the highlighted one), else the numbered list and the number typed."""
+    if S.UI is not None and not yes:
+        pick = S.UI.choose(question, intro, options, default, outro)
+        if pick is not None:
+            return pick
+    say()
+    for line in intro:
+        say("  " + line)
+    for i, (label, note, _) in enumerate(options, 1):
+        say(f"  {i}) {label}" + (f"   ({note})" if note else ""))
+    for line in outro:
+        say("     " + line)
+    return int(ask(question, [str(i) for i in range(1, len(options) + 1)], str(default + 1), yes)) - 1
+
+
 def gpu_label(g) -> str:
     if g.get("vendor") == "amd":
         return f"GPU {g['index']} ({g['name']}, {g['vram_gb']:.0f} GB, {g['arch']})"
@@ -420,21 +443,24 @@ def choose_gpus(a, found) -> list:
     if len(best) == 1:
         return best
     opts = ([best[:MAX_GPUS]] if len(best) > 2 else []) + [best[:2], best[:1]]
-    say()
-    say("  Maya can run on one GPU, or split the model's layers across several: each then caches the experts of its")
-    say("  own layers, so together they hold more of them (V100s: ~50 tok/s benchmark on two, ~24 on one).")
-    for i, gs in enumerate(opts, 1):
+    labels = []
+    for gs in opts:
         if len(gs) > 2:
-            label = (f"all {len(gs)} together: GPUs " + ", ".join(str(g["index"]) for g in gs) +
-                     f" ({sum(g['vram_gb'] for g in gs):.0f} GB of VRAM)")
+            labels.append(f"all {len(gs)} together: GPUs " + ", ".join(str(g["index"]) for g in gs) +
+                          f" ({sum(g['vram_gb'] for g in gs):.0f} GB of VRAM)")
         elif len(gs) == 2:
-            label = f"{gpu_label(gs[0])} + {gpu_label(gs[1])} together"
+            labels.append(f"{gpu_label(gs[0])} + {gpu_label(gs[1])} together")
         else:
-            label = f"{gpu_label(gs[0])} only"
-        say(f"  {i}) {label}" + ("   (recommended)" if i == 1 else ""))
-    if len(best) > 2:
-        say("     (--gpus picks any others, e.g. --gpus 0,2,5; a model with a draft block drafts tokens on two GPUs or more)")
-    return opts[int(ask("Which GPUs?", [str(i) for i in range(1, len(opts) + 1)], "1", a.yes or a.check)) - 1]
+            labels.append(f"{gpu_label(gs[0])} only")
+    pick = choose("Which GPUs?",
+                  ["Maya can run on one GPU, or split the model's layers across several: each then caches the experts "
+                   "of its", "own layers, so together they hold more of them (V100s: ~50 tok/s benchmark on two, ~24 "
+                   "on one)."],
+                  [(label, "recommended" if i == 0 else None, None) for i, label in enumerate(labels)], 0,
+                  a.yes or a.check,
+                  ["(--gpus picks any others, e.g. --gpus 0,2,5; a model with a draft block drafts tokens on two GPUs "
+                   "or more)"] if len(best) > 2 else [])
+    return opts[pick]
 
 
 def check_pc(a) -> dict:
@@ -554,13 +580,11 @@ def choose_context(a, prev_ctx) -> int:
     if a.context:
         return a.context
     default = prev_ctx if prev_ctx in CONTEXTS else DEFAULT_CONTEXT
-    say()
-    say("  Context length = how much text the model sees at once (the chat, files, tool output). A longer one takes")
-    say("  VRAM from the expert cache, so answers get a little slower:")
-    for i, c in enumerate(CONTEXTS, 1):
-        say(f"  {i}) {c // 1024}K tokens" + ("   (recommended)" if c == DEFAULT_CONTEXT else ""))
-    pick = ask("Context?", [str(i) for i in range(1, len(CONTEXTS) + 1)], str(CONTEXTS.index(default) + 1), a.yes)
-    return CONTEXTS[int(pick) - 1]
+    pick = choose("Context?", ["Context length = how much text the model sees at once (the chat, files, tool output). "
+                               "A longer one takes", "VRAM from the expert cache, so answers get a little slower:"],
+                  [(f"{c // 1024}K tokens", "recommended" if c == DEFAULT_CONTEXT else None, None) for c in CONTEXTS],
+                  CONTEXTS.index(default), a.yes)
+    return CONTEXTS[pick]
 
 
 def shard_names(m: dict, pattern: str | None = None) -> list:
@@ -621,16 +645,17 @@ def choose_model(a, models: Path, inst: dict) -> tuple:
         cards = []
     rec = "Maya-S24" if cards and all(g["vram_gb"] <= 24.5 for g in cards) and "Maya-S24" in MODELS else opts[0]
     default = inst["quant"] if inst.get("quant") in MODELS else rec
-    say()
-    say("  The model to download (GLM-5.3-Flash GGUF files you already have: --gguf-dir <file or folder>):")
-    for i, q in enumerate(opts, 1):
+    rows = []
+    for q in opts:
         m, d = MODELS[q], download_dir(models, q)
         have = all(p.exists() for p in local_shards(m, d))
-        label = f"downloaded, in {d}" if have else f"download {m['download_gb']:.1f} GB from Hugging Face"
-        say(f"  {i}) {q}: {label}" + (("   (recommended for cards of 24 GB or less)" if q == "Maya-S24" else
-                                      "   (recommended)") if q == rec else ""))
-    pick = ask("Model?", [str(i) for i in range(1, len(opts) + 1)], str(opts.index(default) + 1), a.yes)
-    return "download", opts[int(pick) - 1]
+        rows.append((f"{q}: " + (f"downloaded, in {d}" if have else f"download {m['download_gb']:.1f} GB from Hugging "
+                                                                     "Face"),
+                     ("recommended for cards of 24 GB or less" if q == "Maya-S24" else "recommended") if q == rec
+                     else None, m["about"]))
+    pick = choose("Model?", ["The model to download (GLM-5.3-Flash GGUF files you already have: --gguf-dir <file or "
+                             "folder>):"], rows, opts.index(default), a.yes)
+    return "download", opts[pick]
 
 
 # ------------------------------------------------------------------------------------------------ 3. tools
@@ -764,7 +789,7 @@ def cmake_steps(conf, build, env, bat_name: str) -> str | None:
     say(f"  > {bat}   (Visual Studio's environment, then:)")
     say("  > " + cmdline(conf))
     say("  > " + cmdline(build))
-    rc = subprocess.call(["cmd", "/c", str(bat)], env=env)
+    rc = run(["cmd", "/c", str(bat)], env=env, check=False, echo=False).returncode
     return None if rc == 0 else "compiling" if rc == 4 else "configuring"
 
 
@@ -1480,7 +1505,9 @@ def calibrate_config(cfg_path: Path) -> bool:
     return True
 
 
-def start(cfg_path: Path, a) -> int:
+def server_command(cfg_path: Path, a) -> tuple:
+    """The dashboard's server for an installed config: (its command, its environment, what the setup's screen shows of
+    it).  The engine is compiled again first when its source changed (an update)."""
     cfg = read_json(cfg_path)
     select_build_backend(cfg.get("backend", "cuda"))
     args = cfg.get("args") or []
@@ -1505,6 +1532,14 @@ def start(cfg_path: Path, a) -> int:
     if WIN or os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
         cmd.append("--open")                           # a desktop: the browser opens when the model is ready
     here = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+    ctx = args[args.index("--max-context") + 1] if "--max-context" in args[:-1] else None
+    info = {"model": cfg.get("model_name", MODEL_NAME), "quant": (cfg.get("installer") or {}).get("quant"),
+            "context": ctx, "dashboard": f"http://{here}:{port}/", "api": f"http://{here}:{port}/v1",
+            "log": cfg.get("log"), "key": (key or "").split(",")[0]}       # (its dashboard reads /metrics with it)
+    env = dict(os.environ, MAYA_RESTART_ON_UPDATE="1")  # (the dashboard may update Maya)
+    if S.UI is not None:                               # (the setup's screen shows the same in its card, and reads
+        env["PYTHONUNBUFFERED"] = "1"                  # the server's output from a pipe)
+        return cmd, env, info
     say()
     say("  " + "-" * 100)
     say(f"  Starting {cfg.get('model_name', MODEL_NAME)} ({cfg_path.name}).")
@@ -1519,11 +1554,36 @@ def start(cfg_path: Path, a) -> int:
     say("  (STRATA_GLM_RAM_HEADROOM_GB changes the 6) and warms its caches - the first answers are the slowest.")
     say("  Ctrl+C (or closing this terminal) stops it. Engine log: " + str(cfg.get("log", "")))
     say("  " + "-" * 100)
-    rc = subprocess.call(cmd, env=dict(os.environ, MAYA_RESTART_ON_UPDATE="1"))   # (the dashboard may update Maya)
+    return cmd, env, info
+
+
+def start(cfg_path: Path, a) -> int:
+    """Maya's server for an installed config: on a screen of its own in a terminal (tools/setup_tui.py: its
+    dashboard - the Monitor's numbers from the engine - and its log), else in the terminal as it prints."""
+    if setup_screen(a, asks=False):
+        import setup_tui
+        rc = setup_tui.run(lambda: serve_on_screen(cfg_path, a), maya_version(), None, ME, steps=False)
+        return after_server(rc, a)
+    cmd, env, _ = server_command(cfg_path, a)
+    return after_server(subprocess.call(cmd, env=env), a)
+
+
+def serve_on_screen(cfg_path: Path, a) -> int:
+    """Maya's server on the setup's screen (setup.UI): its exit code; one it did not choose stops there."""
+    cmd, env, info = server_command(cfg_path, a)
+    rc = S.UI.serve(cmd, env, info)
+    if rc not in (0, UPDATE_EXIT):
+        fail(f"Maya stopped: its server ended with exit code {rc}",
+             f"the reason is in its output; {ME} starts it again")
+    return rc
+
+
+def after_server(rc: int, a) -> int:
+    """The server ended: its exit code - or About > Updates moved this folder to a new release, and the new version
+    starts: its maya.py compiles what changed in the engine and loads the same model (the most recently used, so no
+    question)."""
     if rc != UPDATE_EXIT:
         return rc
-    # About > Updates moved this folder to a new release: start the new version - its maya.py compiles what changed
-    # in the engine and loads the same model (the most recently used, so no question)
     again = [sys.executable, str(HERE / "maya.py"), "--yes"]
     for flag, v in (("--backend", a.backend), ("--port", a.port), ("--host", a.host), ("--api-key", a.api_key),
                     ("--gpu", a.gpu), ("--gpus", a.gpus)):
@@ -1811,7 +1871,102 @@ def bench(cfg_path: Path, version: str) -> int:
     return 0
 
 
+# ------------------------------------------------------------------------------------------------ the setup
+TUI_WHEELS = ROOT / "third_party" / "wheels"       # the setup's screen: Textual (MIT) and what it needs, pure Python
+
+
+def setup_screen(a, asks: bool = True) -> bool:
+    """Whether the setup - or Maya, `asks` False: nothing to answer - runs on a screen of its own (tools/setup_tui.py):
+    in a terminal, not with --plain (nor a setup with --yes: nobody there to answer).  Its library comes with Maya
+    (TUI_WHEELS) and goes into .venv from there the first time: nothing is downloaded.  False: plain text, as before."""
+    if getattr(a, "plain", False) or (asks and getattr(a, "yes", False)) or os.environ.get("TERM") == "dumb" or \
+            not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    wheel = max(TUI_WHEELS.glob("textual-*.whl"), default=None)
+    if wheel is None:
+        return False
+    want = wheel.name.split("-")[1]
+    from importlib import invalidate_caches, metadata
+    try:
+        if metadata.version("textual") == want:
+            return True
+    except metadata.PackageNotFoundError:
+        pass
+    if sys.prefix == sys.base_prefix:                  # not Maya's .venv: nothing goes into a system Python
+        return False
+    say("  Preparing the setup's screen (Textual, from third_party/wheels: nothing is downloaded) ...")
+    r = subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", "--no-index",
+                        "--find-links", str(TUI_WHEELS), f"textual=={want}"], capture_output=True, text=True)
+    if r.returncode != 0:
+        why = (r.stderr or r.stdout).strip().splitlines()
+        warn("the setup's screen could not be installed, so the setup runs in plain text" +
+             (f" ({why[-1]})" if why else ""))
+        return False
+    invalidate_caches()
+    return True
+
+
+def set_up(a, prev: dict) -> Path | None:
+    """Steps 1-8, then the tuning: the config written, or None when the model was not downloaded.  `prev`: the
+    config of the setup before (its answers are the defaults)."""
+    inst = prev.get("installer") or {}
+    prev_args = prev.get("args") or []
+    prev_ctx = int(prev_args[prev_args.index("--max-context") + 1]) if "--max-context" in prev_args[:-1] else None
+    pc = check_pc(a)                                   # 1
+    step(2, "your choices")                            # 2
+    ctx = choose_context(a, prev_ctx)
+    ok(f"context: {ctx} tokens")
+    # the models folder: --models-dir, else the one set up before (a config from before the option has its data
+    # folder, whose models/ held the downloads), else Maya-data/models next to this folder
+    models = (Path(a.models_dir).expanduser().resolve() if a.models_dir else
+              Path(inst["models_dir"]) if inst.get("models_dir") else
+              Path(inst["data_dir"]) / "models" if inst.get("data_dir") else ROOT.parent / "Maya-data" / "models")
+    choice = choose_model(a, models, inst)
+    if choice[0] == "download":
+        ok(f"model: {choice[1]}, in {download_dir(models, choice[1])}")
+    else:
+        ok(f"model: {choice[1]} (yours)")
+    llama = tools_step(a)                              # 3
+    meta = build_step(a, pc, llama)                    # 4
+    got = model_step(a, models, choice)                # 5
+    if got is None:
+        return None
+    d, shards, quant = got
+    pack = pack_step(a, d, shards, llama)              # 6
+    vision = vision_step(a, pc, meta, llama, d, quant)  # 7
+    cfg_path = write_config(a, pc, meta, pack, quant, ctx, models, vision, choice)   # 8
+    # the tuning: asked for (--calibrate), or offered when nothing was tuned for this PC and model yet and someone
+    # answers (--yes and --no-start setups are not held up by it)
+    tuned = None
+    cfg = read_json(cfg_path)
+    offer = cfg.get("backend") != "hip" and saved_calibration(cfg) is None and not a.yes and not a.no_start
+    if a.calibrate or (offer and ask(
+            "Tune Maya for this PC now? It measures the split of the work between the CPU and the PCIe link and the "
+            "CPU threads (about 10-15 minutes; later: ./maya.sh --calibrate)", ["y", "n"], "y", a.yes) == "y"):
+        if S.UI is not None:                           # (the screen lists the tuning as a step of its own)
+            S.UI.step(9, "tuning Maya for this PC")
+        tuned = calibrate_config(cfg_path)
+    if tuned is False:
+        say()
+        warn("this PC is NOT tuned (the reason is above): ./maya.sh --calibrate tries again")
+    return cfg_path
+
+
+def set_up_and_serve(a, prev: dict) -> tuple | None:
+    """On the setup's screen: the setup, then Maya running on the same screen - its server's output there, Ctrl+C
+    stops it.  (The config, the server's exit code or None when it was not started), or None when the model was not
+    downloaded."""
+    cfg_path = set_up(a, prev)
+    if cfg_path is None or a.no_start:
+        return cfg_path and (cfg_path, None)
+    return cfg_path, serve_on_screen(cfg_path, a)
+
+
 # ------------------------------------------------------------------------------------------------ main
+def maya_version() -> str:
+    return (HERE / "VERSION").read_text(encoding="utf-8").strip() if (HERE / "VERSION").exists() else "?"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--backend", choices=["cuda", "hip"], help="GPU backend (HIP: experimental gfx1100/gfx1201/gfx1151 on Linux)")
@@ -1820,6 +1975,8 @@ def main() -> int:
     ap.add_argument("--no-start", action="store_true", help="set up, but do not start the dashboard")
     ap.add_argument("--yes", action="store_true",
                     help="take the recommended answers (the model download still needs --download-model)")
+    ap.add_argument("--plain", action="store_true",
+                    help="the setup in plain text, the answers typed (not on the setup's own screen)")
     ap.add_argument("--download-model", action="store_true",
                     help="download the model without asking (the commands and the size are still printed)")
     ap.add_argument("--model", choices=list(MODELS), help=f"which download (default: asked, {next(iter(MODELS))} "
@@ -1874,7 +2031,7 @@ def main() -> int:
         say("Starting through ./maya.sh, which runs Maya with its own Python environment (.venv) ...")
         sys.stdout.flush()
         os.execve("/bin/sh", ["/bin/sh", str(HERE / "maya.sh"), *sys.argv[1:]], dict(os.environ, MAYA_SH="1"))
-    version = (HERE / "VERSION").read_text(encoding="utf-8").strip() if (HERE / "VERSION").exists() else "?"
+    version = maya_version()
     say(f"Project Maya v{version} - GLM-5.3-Flash on your own GPU(s). Built on Strata (MIT) and ggml/llama.cpp "
         "(MIT).")
     if a.report:
@@ -1912,12 +2069,8 @@ def main() -> int:
     if not have and a.calibrate:
         say("Nothing is set up yet: the setup runs first, then the tuning.")
     prev = read_json(have[0]) if have else {}
-    inst = prev.get("installer") or {}
-    prev_args = prev.get("args") or []
-    prev_ctx = int(prev_args[prev_args.index("--max-context") + 1]) if "--max-context" in prev_args[:-1] else None
-
-    pc = check_pc(a)                                   # 1
     if a.check:
+        pc = check_pc(a)
         say()
         if a.backend == "hip":
             pick = (f"--gpus {','.join(str(g['index']) for g in pc['gpus'])}" if len(pc["gpus"]) == 2
@@ -1926,40 +2079,17 @@ def main() -> int:
         else:
             say(f"This PC can run Maya. Run {ME} without --check to set it up.")
         return 0
-    step(2, "your choices")                            # 2
-    ctx = choose_context(a, prev_ctx)
-    ok(f"context: {ctx} tokens")
-    # the models folder: --models-dir, else the one set up before (a config from before the option has its data
-    # folder, whose models/ held the downloads), else Maya-data/models next to this folder
-    models = (Path(a.models_dir).expanduser().resolve() if a.models_dir else
-              Path(inst["models_dir"]) if inst.get("models_dir") else
-              Path(inst["data_dir"]) / "models" if inst.get("data_dir") else ROOT.parent / "Maya-data" / "models")
-    choice = choose_model(a, models, inst)
-    if choice[0] == "download":
-        ok(f"model: {choice[1]}, in {download_dir(models, choice[1])}")
+    rc = None                                          # the server's exit code, when it ran on the setup's screen
+    if setup_screen(a):
+        import setup_tui
+        cfg_path, rc = setup_tui.run(lambda: set_up_and_serve(a, prev), version, ROOT / "maya-setup.log",
+                                     ME) or (None, None)
     else:
-        ok(f"model: {choice[1]} (yours)")
-    llama = tools_step(a)                              # 3
-    meta = build_step(a, pc, llama)                    # 4
-    got = model_step(a, models, choice)                # 5
-    if got is None:
+        cfg_path = set_up(a, prev)
+    if cfg_path is None:                               # the model was not downloaded (what to do next is above)
         return 0
-    d, shards, quant = got
-    pack = pack_step(a, d, shards, llama)              # 6
-    vision = vision_step(a, pc, meta, llama, d, quant)  # 7
-    cfg_path = write_config(a, pc, meta, pack, quant, ctx, models, vision, choice)   # 8
-    # the tuning: asked for (--calibrate), or offered when nothing was tuned for this PC and model yet and someone
-    # answers (--yes and --no-start setups are not held up by it)
-    tuned = None
-    cfg = read_json(cfg_path)
-    offer = cfg.get("backend") != "hip" and saved_calibration(cfg) is None and not a.yes and not a.no_start
-    if a.calibrate or (offer and ask(
-            "Tune Maya for this PC now? It measures the split of the work between the CPU and the PCIe link and the "
-            "CPU threads (about 10-15 minutes; later: ./maya.sh --calibrate)", ["y", "n"], "y", a.yes) == "y"):
-        tuned = calibrate_config(cfg_path)
-    if tuned is False:
-        say()
-        warn("this PC is NOT tuned (the reason is above): ./maya.sh --calibrate tries again")
+    if rc is not None:
+        return after_server(rc, a)
     if a.no_start:
         say()
         say(f"All set. Start it with {ME} (or " + (f"run-{cfg_path.stem}.bat" if WIN else f"./run-{cfg_path.stem}.sh")

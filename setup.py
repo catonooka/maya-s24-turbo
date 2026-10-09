@@ -30,24 +30,40 @@ PY_PACKAGES = ["numpy", "jinja2", "regex", "pyyaml", "tqdm", "requests", "cmake"
 
 
 # ------------------------------------------------------------------------------------------------ output
+# A screen of the setup's own while it runs (Project Maya's tools/setup_tui.py): these functions hand it what they
+# would print, ask and run.  Each of its methods returns something false when it did not take it (the screen has
+# closed): then it is printed as without it.
+UI = None
+
+
 def say(msg=""):
+    if UI is not None and UI.say(msg):
+        return
     print(msg, flush=True)
 
 
 def step(n, title):
+    if UI is not None and UI.step(n, title):
+        return
     say()
     say(f"=== Step {n}: {title} ===")
 
 
 def ok(msg):
+    if UI is not None and UI.ok(msg):
+        return
     say(f"  [ok] {msg}")
 
 
 def warn(msg):
+    if UI is not None and UI.warn(msg):
+        return
     say(f"  [!]  {msg}")
 
 
 def fail(msg, hint=None):
+    if UI is not None:
+        UI.fail(msg, hint)             # shown until it is read; the setup ends there (the lines below follow it)
     say(f"\n  [X]  {msg}")
     if hint:
         say(f"       {hint}")
@@ -55,9 +71,20 @@ def fail(msg, hint=None):
     sys.exit(1)
 
 
+def progress(msg=None, frac=None):
+    """A line that rewrites itself (a download's progress; frac: the share done, when known); None ends it."""
+    if UI is not None and UI.progress(msg, frac):
+        return
+    print("\n" if msg is None else f"\r  {msg}   ", end="", flush=True)
+
+
 def ask(question, choices, default, yes):
     if yes:
         return default
+    if UI is not None:
+        answer = UI.ask(question, choices, default)
+        if answer is not None:
+            return answer
     while True:
         try:
             a = input(f"{question} [{default}]: ").strip()
@@ -70,11 +97,15 @@ def ask(question, choices, default, yes):
         say(f"  please answer one of: {', '.join(choices)}")
 
 
-def run(cmd, cwd=None, env=None, check=True, quiet=False):
-    say("  > " + " ".join(str(c) for c in cmd))
-    r = subprocess.run([str(c) for c in cmd], cwd=cwd, env=env,
-                       stdout=subprocess.PIPE if quiet else None, stderr=subprocess.STDOUT if quiet else None,
-                       text=True)
+def run(cmd, cwd=None, env=None, check=True, quiet=False, echo=True):
+    if echo:
+        say("  > " + " ".join(str(c) for c in cmd))
+    # the setup's screen shows the output as it comes (all of it: a quiet command's too) and returns no stdout
+    r = UI.run([str(c) for c in cmd], cwd=cwd, env=env) if UI is not None else None
+    if r is None:
+        r = subprocess.run([str(c) for c in cmd], cwd=cwd, env=env,
+                           stdout=subprocess.PIPE if quiet else None, stderr=subprocess.STDOUT if quiet else None,
+                           text=True)
     if check and r.returncode != 0:
         if quiet and r.stdout:
             say(r.stdout[-4000:])
@@ -319,12 +350,12 @@ def download(url, dst: Path, what=None):
                         last = time.time()
                         size = f"{have / 1e9:6.2f} / {total / 1e9:.2f} GB ({100 * have / total:.0f}%)" if total \
                             else f"{have / 1e6:7.1f} MB"
-                        print(f"\r  {what or dst.name}: {size}   ", end="", flush=True)
-            print()
+                        progress(f"{what or dst.name}: {size}", have / total if total else None)
+            progress()
             if not total or have >= total:
                 break
         except OSError as e:
-            print()
+            progress()
             warn(f"download interrupted ({e}); retrying in 10 s ...")
             time.sleep(10)
     if total and part.stat().st_size != total:

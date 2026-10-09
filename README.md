@@ -108,12 +108,17 @@ ROCm 7): `./maya.sh --backend hip --gpu 0 --check` first (two cards: `--gpus 0,1
    ```
    (or [download it](https://github.com/mw00/project-maya/archive/refs/heads/main.zip) and unzip it).
 2. Run **`./setup.sh`** (the same as `./maya.sh`).
-3. Answer a few questions - or just press Enter each time for the recommended choice: which GPUs, how much context,
-   which model (Maya-S, Maya-S24, Maya-M or Maya-L), pictures. Then it downloads and builds everything (it shows each
-   download first; you can stop and it picks up where it left off) and **starts the model**. Open the dashboard at
-   `http://127.0.0.1:8080`.
+3. The setup runs on a screen of its own in the terminal - the steps as tabs along the top (Tab shows an earlier
+   step's output), below them what runs now with its progress and output. Answer a few questions with the arrow keys
+   and Enter - or just press Enter each time for the recommended choice: which GPUs, how much context, which model
+   (Maya-S, Maya-S24, Maya-M or Maya-L), pictures. Then it downloads and builds everything (it shows each download
+   first; Ctrl+C stops, and the next run picks up where it left off) and **starts the model** on the same screen: its
+   Running tab shows the dashboard's address, when the model is ready and the last answer's speed (Ctrl+C stops it).
+   Open the dashboard at `http://127.0.0.1:8080`.
 
-**Next time**, just run `./setup.sh` again: it starts right away, nothing is downloaded twice. Ctrl+C stops it.
+**Next time**, just run `./setup.sh` again: it starts right away, nothing is downloaded twice, on the same screen - its
+dashboard shows the Monitor's numbers (the speed, where the experts live, the GPUs, the requests), Tab its log. Ctrl+C
+stops it.
 
 **Updating:** the dashboard's **About** says when a new version is out, and its **Update** button does it: Maya
 downloads the new code (git), compiles only the engine files that changed and loads the same model again - the model
@@ -160,6 +165,7 @@ It takes 20-40 minutes plus the download:
 | `--rebuild`, `--repack` | compile the engine / build the pack again |
 | `--calibrate` | tune the engine's CPU lane for this PC (see [Tuning](#tuning)), then start; with `--no-start` only tune |
 | `--yes` | the recommended answers (the model download still needs `--download-model`) |
+| `--plain` | the setup in plain text with typed answers, and Maya in the terminal, not on their own screen (a pipe gets this too, and `--yes` a plain setup); the setup screen's whole output is in `maya-setup.log` |
 
 ## Using it
 
