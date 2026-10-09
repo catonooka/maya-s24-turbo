@@ -532,7 +532,8 @@ def check_pc(a) -> dict:
              "About > Advanced system settings > Performance > Advanced > Virtual memory - and restart")
     cpu, avx2, avx512 = S.cpu_info()
     if not avx2:
-        problems.append((f"the CPU ({cpu}) has no AVX2", "the engine's CPU expert lane and ggml need AVX2"))
+        warn(f"the CPU ({cpu}) has no AVX2: the engine runs, its CPU expert lane on ggml's own kernels (slower; "
+             "on 2x Xeon E5-2660 v2 it still added ~15% to 4-GPU decode). STRATA_GLM_CPU_LANE=0 turns it off")
     else:
         ok(f"CPU: {cpu} ({'AVX-512' if avx512 else 'AVX2'}, {os.cpu_count()} threads)")
 

@@ -67,7 +67,10 @@ struct EvenSigns {
         }
     }
 };
-static const EvenSigns even_signs;
+// Built on first use, not at program start: this file is compiled for AVX2, so a static initializer here would
+// run AVX2 code on every CPU, including ones without it (the kernels below are reached only on AVX2 CPUs).
+inline const EvenSigns& even_signs_table() { static const EvenSigns t; return t; }
+#define even_signs (even_signs_table())
 
 inline float hsum8(__m256 v) {
     const __m128 lo = _mm256_castps256_ps128(v), hi = _mm256_extractf128_ps(v, 1);
