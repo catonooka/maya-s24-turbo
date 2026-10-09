@@ -433,8 +433,7 @@ def choose_gpus(a, found) -> list:
             label = f"{gpu_label(gs[0])} only"
         say(f"  {i}) {label}" + ("   (recommended)" if i == 1 else ""))
     if len(best) > 2:
-        say("     (a model with a draft block - Maya-S - drafts tokens on exactly two GPUs; --gpus picks any others,")
-        say("     e.g. --gpus 0,2,5)")
+        say("     (--gpus picks any others, e.g. --gpus 0,2,5; a model with a draft block drafts tokens on two GPUs or more)")
     return opts[int(ask("Which GPUs?", [str(i) for i in range(1, len(opts) + 1)], "1", a.yes or a.check)) - 1]
 
 

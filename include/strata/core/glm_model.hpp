@@ -413,6 +413,13 @@ public:
     float* spec_hop_h_[2] = {nullptr, nullptr};            // pinned hop slots by position parity
     cudaEvent_t spec_ev_hop_[2] = {nullptr, nullptr};
     bool spec_kda_copy(bool restore);
+    // the speculative decode on a split of more than two parts: the HEAD GROUP is this part and the ones after it
+    // up to spec_head_last() (STRATA_GLM_SPEC_HEAD=<parts>, default half), the TAIL GROUP the rest; each group runs
+    // its parts one after another and the two groups overlap as the two halves of a two-part split do
+    Glm5Model* spec_head_last();
+    Glm5Model* spec_tail_last();
+    // this part's residual into the next part B (one host hop through this part's pinned hop_h), then B's layers at p
+    bool hop_to_next(Glm5Model* B, int64_t p, std::string& err);
     bool spec_head(int64_t p, int32_t token, std::string& err);
     bool spec_tail(Glm5Model* head, int64_t p, std::string& err);
     // ---- the batched prompt path (src/core/glm_prefill.cu)
