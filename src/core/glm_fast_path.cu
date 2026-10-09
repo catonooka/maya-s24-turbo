@@ -337,7 +337,7 @@ bool Glm5Model::fast_setup(std::string& err) {
             }
             return it->second;
         };
-        // a projection a GGUF keeps unquantized (BF16 - e.g. attn_kv_a_mqa in some GSQ-RCO files) where Maya's
+        // a projection a GGUF keeps unquantized (BF16 - e.g. attn_kv_a_mqa in some community GGUFs) where Maya's
         // quants quantize it: the BF16 copy; the jobs that take these pass the float activation as well
         const auto q_or_b16 = [&](const char* n, int64_t n_in, int64_t n_out) -> WSlot {
             const auto it = ws_map_.find(P + n);

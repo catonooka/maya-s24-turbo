@@ -19,7 +19,7 @@ dashboard started from Strata's and were reworked for Maya (a new dashboard, ima
 **AMD (experimental):** Linux on RX 7900 XT / XTX, R9700 / RX 9070 and Strix Halo (Radeon 8060S), one GPU or two (Strix Halo: one), text only - see
 [docs/AMD_MAYA.md](docs/AMD_MAYA.md).
 
-## The models: Maya-S, Maya-S24, Maya-M and GSQ-RCO 3.5-bit
+## The models: Maya-S, Maya-S24, Maya-M and Maya-L
 
 Maya installs **Maya-S**, Project Maya's own compact quant of GLM-5.3-Flash (96.5 GB,
 [on Hugging Face](https://huggingface.co/peasantsmith/GLM-5.3-Flash-Maya-GGUF)), made for PCs with a smaller memory
@@ -48,12 +48,12 @@ of the time; on the zero-shot tasks both keep 97.9% of the FP8 model's accuracy.
 up with `./setup.sh --setup --model Maya-M` (Windows: `START-MAYA.bat --setup --model Maya-M`).
 Details: [bench/results/MAYA-M.md](bench/results/MAYA-M.md).
 
-**GSQ-RCO 3.5-bit** (137.1 GB, [on Hugging Face](https://huggingface.co/pfeifferj/GLM-5.3-Flash-GSQ-RCO-GGUF)) is a
-community quant, not a Project Maya one: made by pfeifferj with IST-DASLab's GSQ and RCO methods, which choose each
-tensor's type under a size budget - Q3_K/Q2_K experts, Q8_0 dense weights - and without the MTP block. Its model card
-measures 60.6% on MMLU-Pro against 62.0% for Q8_0. On one RTX 3090 (24 GB) with the rest of the model in ~120 GB of RAM
-it decodes about 20 tokens/s and reads prompts at 480-970 tokens/s (7.8K-26.6K tokens). Set it up with
-`./maya.sh --setup --model GSQ-RCO-3.5bit`, or pick it in the setup's model question; images use Maya's vision files.
+**Maya-L** (156.3 GB) is the largest, made for PCs with the biggest memory pool: Maya-M's recipe one step up -
+IQ3_S gate/up experts, IQ4_XS down projections and Q5_K in the most sensitive layers - with Maya-M's FP8 statistics and
+error-feedback rounding. It is the closest to the FP8 model: **99.2% of its zero-shot accuracy** (the same score on
+HellaSwag and PIQA), a KL divergence of 0.188 against Maya-M's 0.329, and the same next token as the FP8 model 90% of
+the time. It needs that memory pool to be fast: MAYA_L_SPEED Set it up with `./setup.sh --setup --model Maya-L`
+(Windows: `START-MAYA.bat --setup --model Maya-L`). Details: [bench/results/MAYA-L.md](bench/results/MAYA-L.md).
 
 ## How fast is it?
 
@@ -82,9 +82,9 @@ Measured with Maya-S. A token is about ¾ of a word. `./maya.sh --bench` measure
 
 | | |
 | --- | --- |
-| **GPU** | NVIDIA, compute capability 7.0 or newer (V100 and newer); one GPU, or up to 16 that share the model (two split the layers in the middle; with more, each takes a share sized to its free VRAM). The engine fills whatever VRAM you have with the most-used experts: more VRAM is faster. Measured: 1 and 2x V100 32 GB; by users: 2x CMP 170HX (above), 1x RTX 3090 and nine GPUs (8x RTX 5060 Ti 16 GB + the 3090; about 28 tokens/s decode with GSQ-RCO 3.5-bit). **AMD (experimental):** RX 7900 XT / XTX, Radeon AI PRO R9700 / RX 9070 (one GPU or two) and Strix Halo / Radeon 8060S (one GPU), text only ([docs/AMD_MAYA.md](docs/AMD_MAYA.md)). |
+| **GPU** | NVIDIA, compute capability 7.0 or newer (V100 and newer); one GPU, or up to 16 that share the model (two split the layers in the middle; with more, each takes a share sized to its free VRAM). The engine fills whatever VRAM you have with the most-used experts: more VRAM is faster. Measured: 1 and 2x V100 32 GB; by users: 2x CMP 170HX (above), 1x RTX 3090 and nine GPUs (8x RTX 5060 Ti 16 GB + the 3090). **AMD (experimental):** RX 7900 XT / XTX, Radeon AI PRO R9700 / RX 9070 (one GPU or two) and Strix Halo / Radeon 8060S (one GPU), text only ([docs/AMD_MAYA.md](docs/AMD_MAYA.md)). |
 | **RAM** | It runs with **32 GB** (the 2x V100 machine in the speed table above has 30 GB). More RAM keeps more experts close and is faster; what does not fit is read from the SSD while it answers. |
-| **Disk** | **~100 GB free on a fast NVMe SSD** (Maya-S is 96.5 GB, its pictures encoder 1.1 GB, and the engine reads from the model while it answers; Maya-M needs ~120 GB, GSQ-RCO 3.5-bit ~140 GB). Not a hard disk. |
+| **Disk** | **~100 GB free on a fast NVMe SSD** (Maya-S is 96.5 GB, its pictures encoder 1.1 GB, and the engine reads from the model while it answers; Maya-M needs ~120 GB, Maya-L ~160 GB). Not a hard disk. |
 | **System** | Linux (x86-64, CPU with AVX2), NVIDIA driver, CUDA toolkit 12.x (CUDA 13 can be used for Turing and newer, but it no longer compiles for Volta/V100), g++, Python 3.10+. Windows 10/11: experimental, with Visual Studio 2022 Build Tools instead of g++ ([Windows](#windows)). Not WSL2. AMD: Linux with ROCm 7 instead of the NVIDIA driver and CUDA. |
 
 The installer checks all of this and prints the exact command for anything missing. It installs nothing
@@ -106,7 +106,7 @@ ROCm 7): `./maya.sh --backend hip --gpu 0 --check` first (two cards: `--gpus 0,1
    (or [download it](https://github.com/mw00/project-maya/archive/refs/heads/main.zip) and unzip it).
 2. Run **`./setup.sh`** (the same as `./maya.sh`).
 3. Answer a few questions - or just press Enter each time for the recommended choice: which GPUs, how much context,
-   which model (Maya-S, Maya-S24, Maya-M or GSQ-RCO 3.5-bit), pictures. Then it downloads and builds everything (it shows each
+   which model (Maya-S, Maya-S24, Maya-M or Maya-L), pictures. Then it downloads and builds everything (it shows each
    download first; you can stop and it picks up where it left off) and **starts the model**. Open the dashboard at
    `http://127.0.0.1:8080`.
 
@@ -120,12 +120,12 @@ It takes 20-40 minutes plus the download:
 
 1. checks the PC (GPUs, driver, CUDA toolkit, compiler, RAM, CPU);
 2. asks which GPUs to use (all of them by default, up to 16), how much context (32K recommended) and which model to
-   download: Maya-S (recommended; Maya-S24 on cards of 24 GB or less), Maya-M or GSQ-RCO 3.5-bit;
+   download: Maya-S (recommended; Maya-S24 on cards of 24 GB or less), Maya-M or Maya-L;
 3. installs its Python packages into `.venv` and gets llama.cpp's source at a pinned commit (it lists both and asks);
 4. compiles the engine for your GPU(s) (10-30 minutes, once);
 5. **the model**: it shows the source, the size (Maya-S: 96.5 GB) and the exact `curl` commands, and downloads only
    when you answer `y`; every file is checked against its published sha256. You can run the commands yourself
-   instead, or use files you already have: `./maya.sh --gguf-dir DIR` - other quants than these three are
+   instead, or use files you already have: `./maya.sh --gguf-dir DIR` - other quants than these four are
    experimental: they run, but Maya is not measured with them;
 6. builds the *pack* - the engine's index of the model files, about 1 GB, written into the model folder;
 7. **pictures**: compiles the image encoder (10-20 minutes, once) and fetches its files (1.1 GB, shown and asked
@@ -143,7 +143,7 @@ It takes 20-40 minutes plus the download:
 | `--setup` | set up again (other GPUs, context, model folder) |
 | `--check` | only check the PC |
 | `--gguf-dir DIR` | use GLM-5.3-Flash GGUF files you already have: their folder, or the `.gguf` file (the first one of a split model) when the folder holds several models. The folder must be writable: the pack goes inside it |
-| `--models-dir DIR` | where downloaded models go, each in a folder named after it - `DIR/GSQ-RCO-3.5bit/` holds that model's GGUF files (default `../Maya-data/models`); put it on the NVMe |
+| `--models-dir DIR` | where downloaded models go, each in a folder named after it - `DIR/Maya-L/` holds that model's GGUF files (default `../Maya-data/models`); put it on the NVMe |
 | `--download-model` | download the model without asking (the commands and size are still printed) |
 | `--no-vision` | text only: no image encoder |
 | `--gpu N` / `--gpus 0,1,2,3` | one GPU, or several (up to 16) that split the model's layers |
@@ -190,20 +190,6 @@ threads - more threads than the memory can feed only wait, and on a hybrid CPU t
 up. A setting is kept when it is more than 3% faster than the engine's own choice. The result goes into the config's
 `"env"` (`STRATA_GLM_PCIE_SHARE`, `STRATA_GLM_CPU_LANE`) and into `~/.config/project-maya/calibration.json` for this
 PC, model and context, so setting up again keeps it. Stop a running server first: the tuning needs the GPU(s).
-
-What it measured on one RTX 3090 (PCIe 3.0 x8) beside two Xeon Gold 6152 (88 threads, 2 NUMA nodes), GSQ-RCO 3.5-bit,
-32K context - output speed:
-
-| Setting | Decode |
-| --- | ---: |
-| the engine's own split (PCIe share 0.00: the CPU computes every RAM-tier expert) | 21.3 tok/s |
-| PCIe share 0.00 | 21.8 tok/s |
-| PCIe share 0.10 | 8.4 tok/s |
-| 40 CPU threads (the engine's own: one socket's CPUs less 4) | 21.5 tok/s |
-| 30 / 27 / 20 / 10 CPU threads | 20.1 / 20.0 / 18.5 / 12.2 tok/s |
-
-Nothing beat the engine's own choice by 3%, so it kept those (21.6 tok/s when it confirmed them): on an x8 link beside
-a many-core CPU the CPU takes every RAM-tier expert, and fewer threads only lose speed.
 
 These settings change what the engine chooses (put them in the config with `--env`, or into its `"env"` block):
 
