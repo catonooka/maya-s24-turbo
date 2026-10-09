@@ -82,5 +82,50 @@ class RestartAfterUpdate(unittest.TestCase):
         execv.assert_not_called()
 
 
+class LabelledNames(unittest.TestCase):
+    """Hugging Face groups a repo's files by the quant label in their names: the downloads carry one since v1.0.19,
+    and a setup's files under the names before it stay in use (its run config points at them)."""
+
+    def test_new_names_carry_the_label(self):
+        self.assertEqual(maya.shard_names(maya.MODELS["Maya-L"])[0], "GLM-5.3-Flash-Maya-L-IQ3_S-00001-of-00004.gguf")
+        self.assertEqual(maya.shard_names(maya.MODELS["Maya-M"])[2], "GLM-5.3-Flash-Maya-M-IQ2_S-00003-of-00003.gguf")
+        self.assertEqual(maya.shard_names(maya.MODELS["Maya-S24"])[1],
+                         "GLM-5.3-Flash-Maya-S24-IQ2_XXS-00002-of-00003.gguf")
+
+    def test_a_fresh_folder_downloads_the_new_names(self):
+        m = maya.MODELS["Maya-L"]
+        with tempfile.TemporaryDirectory() as d:
+            shards = maya.local_shards(m, Path(d))
+        self.assertEqual([s.name for s in shards], maya.shard_names(m))
+
+    def test_old_names_stay_and_download_from_the_new(self):
+        m = maya.MODELS["Maya-M"]
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "GLM-5.3-Flash-Maya-M-00001-of-00003.gguf").write_bytes(b"part")   # an interrupted old download
+            shards = maya.local_shards(m, d)
+            self.assertEqual([s.name for s in shards], maya.shard_names(m, "was"))
+            self.assertEqual(maya.hf_name(m, shards[1]), "GLM-5.3-Flash-Maya-M-IQ2_S-00002-of-00003.gguf")
+            self.assertIn(maya.hf_name(m, shards[1]), m["sha256"])        # checked against the published hash
+
+    def test_a_finished_old_download_is_found(self):
+        m = maya.MODELS["Maya-S24"]
+        with tempfile.TemporaryDirectory() as d:
+            models = Path(d)
+            (models / "Maya-S24").mkdir()
+            for n in maya.shard_names(m, "was"):
+                (models / "Maya-S24" / n).write_bytes(b"x")
+            self.assertEqual(maya.download_dir(models, "Maya-S24"), models / "Maya-S24")
+            self.assertTrue(all(p.exists() for p in maya.local_shards(m, models / "Maya-S24")))
+
+    def test_both_names_are_the_same_model(self):
+        for q in ("Maya-S24", "Maya-M", "Maya-L"):
+            m = maya.MODELS[q]
+            for key in ("file", "was"):
+                self.assertEqual(maya.quant_of(Path(maya.shard_names(m, key)[0])), q)
+        self.assertEqual(maya.quant_of(Path("GLM-5.3-Flash-Maya-S-v2-IQ2_XXS-00001-of-00003.gguf")),
+                         "Maya-S-v2-IQ2_XXS")
+
+
 if __name__ == "__main__":
     unittest.main()
