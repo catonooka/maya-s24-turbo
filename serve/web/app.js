@@ -208,7 +208,7 @@ async function loadHealth() {
     // the server's recommended settings for this model (its run config) replace the built-in Chat defaults, and
     // are what the Chat uses until its user applies settings of their own
     const d = health.defaults || {};
-    if (d.reasoning_effort) DEFAULTS.thinking = d.reasoning_effort;
+    if (THINKING.includes(d.reasoning_effort)) DEFAULTS.thinking = d.reasoning_effort;   // the server sends GLM's names
     if (d.temperature !== undefined) DEFAULTS.temperature = d.temperature;
     if (d.top_p !== undefined) DEFAULTS.top_p = d.top_p;
     if (d.temperature !== undefined || d.top_k !== undefined) DEFAULTS.top_k = d.top_k !== undefined ? d.top_k : 0;
@@ -372,6 +372,7 @@ function render(m) {
     setPill("idle", "Idle");
   }
   if (live.queued > 0 && !reloadWatch) setPill("queued", `${live.queued} queued`);
+  liveCtx();                                     // the context meter follows the answer being written
   if (tab === "monitor") {
     renderBanners(m);
     renderMonitor(live, hw, st, eng, h, last, m.requests || [], m.totals, m.requests_kept);
@@ -901,9 +902,15 @@ function previewHtml(code) {
 }
 
 // ------------------------------------------------------------------ Chats (many, kept in this browser)
+// thinking: GLM's own levels - none (Off), low, high, max.  The page before v1.0.18 saved Qwen-era names, where its
+// "Medium" was GLM's High and its "High" GLM's Max: they are translated once (thinking_v 2)
 const DEFAULTS = {thinking: "high", temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0, max: "", seed: "", show: true,
-                  mcp: true, system: "", sys_default: false};
+                  mcp: true, system: "", sys_default: false, thinking_v: 2};
+const THINKING = ["none", "low", "high", "max"];
+const glmLevel = (v, v2) => (v2 ? v : {medium: "high", high: "max", xhigh: "max"}[v] || v);
 let settings = {...DEFAULTS, ...store.get("sampling", {})};
+if (settings.thinking_v !== 2) { settings.thinking = glmLevel(settings.thinking, false); settings.thinking_v = 2; }
+if (!THINKING.includes(settings.thinking)) settings.thinking = "high";
 let chats = [];                       // {id, title, created, updated, messages, system}, newest first
 let current = null;                   // the open chat
 let messages = [];                    // current.messages
@@ -1219,15 +1226,16 @@ $("chat").addEventListener("toggle", (e) => {
   if (d.open && body.dataset.pending) { body.textContent = messages[+d.closest(".st-msg").dataset.i].reasoning; delete body.dataset.pending; }
 }, true);
 
-function apiMessages() {
+// the chat as the API sends it; `light`: pictures as placeholders (the context meter's count needs only where they are)
+function apiMessages(msgs = messages, light = false) {
   const out = [];
   if (current.system && current.system.trim()) out.push({role: "system", content: current.system.trim()});
-  for (const m of messages) {
+  for (const m of msgs) {
     if (m.role === "user") {
       const imgs = (m.images || []).filter((i) => i.url);
       const text = userText(m);
       out.push({role: "user", content: imgs.length ? [{type: "text", text},
-        ...imgs.map((i) => ({type: "image_url", image_url: {url: i.url}}))] : text});
+        ...imgs.map((i) => ({type: "image_url", image_url: {url: light ? "data:," : i.url}}))] : text});
     } else if (!m.error) {
       out.push(...assistantMessages(m));
     }
@@ -1260,33 +1268,71 @@ function setBusy(on) {
   refreshHint();
 }
 
-// the context meter: this chat's tokens against the model's context (the last answer's own count, plus an estimate for
-// what came after it and what is being typed)
-function chatTokens() {
-  let base = 0, k = messages.length - 1;
-  for (; k >= 0; k--) if (messages[k].role === "assistant" && messages[k].usage) { base = messages[k].usage.prompt + messages[k].usage.completion; break; }
-  let after = k < 0 ? (current.system || "") : "";
-  for (const m of messages.slice(k + 1)) after += m.role === "user" ? userText(m) : (m.text || "");
-  after += $("input").value + attachments.filter((a) => a.kind === "file").map((a) => a.text).join("");
-  const est = after ? Math.round(after.length / 3.5) : 0;
-  return {tokens: base + est, estimated: !base && est > 0};
+// the context meter: how much of the model's context this chat takes - while an answer is written, the request's own
+// prompt tokens plus the tokens written so far (the server's live count); otherwise the chat with what is being typed,
+// counted by the server with the model's own template and tokenizer (POST /api/tokens).  "≈" only when a count can't be
+// exact (pictures, or an older server: then a length estimate).
+const tokfmt = (n) => (n == null ? "–" : n < 1000 ? fmt(n) : `${fmt(n / 1024, n < 10240 ? 1 : 0)}K`);   // as 128K = 131,072
+let ctxShown = {key: null, tokens: null, approx: false};
+let ctxTimer = null, ctxSeq = 0;
+function draftChat() {
+  const base = editIndex != null ? messages.slice(0, editIndex) : messages;
+  const text = $("input").value.trim();
+  if (!text && !attachments.length) return base;
+  return [...base, {role: "user", text, images: attachments.filter((a) => a.kind === "image"),
+                    files: attachments.filter((a) => a.kind === "file")}];
 }
-let ctxTimer = null;
+function estimateTokens(msgs) {              // an older server without /api/tokens: about 3.5 characters a token
+  let chars = (current.system || "").length;
+  for (const m of msgs) chars += m.role === "user" ? userText(m).length : (m.text || "").length;
+  return Math.round(chars / 3.5) + 8 * msgs.length;
+}
+function showCtx(tokens, approx, why) {
+  const max = health.max_context, meter = $("ctx-meter");
+  if (!max || tokens == null) { meter.hidden = true; return; }
+  const pct = Math.min(100, (100 * tokens) / max);
+  meter.hidden = false;
+  $("ctx-ring").setAttribute("stroke-dasharray", `${Math.max(pct, 1.5).toFixed(1)} 100`);
+  meter.dataset.level = pct >= 95 ? "danger" : pct >= 80 ? "warn" : "";
+  $("ctx-text").textContent = `${approx ? "≈" : ""}${tokfmt(tokens)} / ${ctxfmt(max)}`;
+  meter.title = `${why}: ${fmt(tokens)} of the ${fmt(max)}-token context (${fmt(pct, pct < 10 ? 1 : 0)}%)` +
+    (approx ? " - approximate (pictures count once they are read)" : "") +
+    (pct >= 95 ? ". Nearly full: start a new chat, or raise the context size in Settings." : "");
+}
+// while an answer is written: the server's live count (every poll)
+function liveCtx() {
+  const live = lastMetrics && lastMetrics.live;
+  if (!busy || !live || live.state === "idle" || live.prompt_tokens == null) return false;
+  showCtx(live.prompt_tokens + (live.generated || 0), false, "This request");
+  return true;
+}
 function updateCtxMeter() {
   clearTimeout(ctxTimer);
-  ctxTimer = setTimeout(() => {
-    const max = health.max_context, meter = $("ctx-meter");
-    if (!max || (!messages.length && !$("input").value.trim())) { meter.hidden = true; return; }
-    const {tokens, estimated} = chatTokens();
-    const pct = Math.min(100, (100 * tokens) / max);
-    meter.hidden = false;
-    $("ctx-ring").setAttribute("stroke-dasharray", `${Math.max(pct, 1.5).toFixed(1)} 100`);
-    meter.dataset.level = pct >= 95 ? "danger" : pct >= 80 ? "warn" : "";
-    $("ctx-text").textContent = `${estimated ? "≈" : ""}${kfmt(tokens)} / ${ctxfmt(max)}`;
-    meter.title = `This chat holds about ${fmt(tokens)} of the ${fmt(max)}-token context` +
-      (estimated ? " (estimated until the next answer counts it)" : "") +
-      (pct >= 95 ? ". It is nearly full: start a new chat, or raise the context size in Settings." : "");
-  }, 120);
+  if (liveCtx()) return;
+  const msgs = draftChat();
+  if (!msgs.length) { ctxShown = {key: null, tokens: null, approx: false}; $("ctx-meter").hidden = true; return; }
+  if (ctxShown.tokens != null) showCtx(ctxShown.tokens, ctxShown.approx, "This chat");   // the last count meanwhile
+  ctxTimer = setTimeout(async () => {
+    const body = {messages: apiMessages(msgs, true), reasoning_effort: settings.thinking};
+    if (settings.mcp !== false && mcpInfo.tools > 0) body.strata_mcp = true;
+    const key = JSON.stringify(body);
+    if (key === ctxShown.key && ctxShown.tokens != null) return;
+    const seq = ++ctxSeq;
+    let tokens = null, approx = false;
+    try {
+      const r = await fetch("api/tokens", {method: "POST", headers: headers(true), body: key});
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      tokens = j.tokens;
+      approx = !!j.approximate;
+    } catch (e) {
+      tokens = estimateTokens(msgs);
+      approx = true;
+    }
+    if (seq !== ctxSeq || liveCtx()) return;      // typed on, or an answer started meanwhile
+    ctxShown = {key, tokens, approx};
+    showCtx(tokens, approx, "This chat");
+  }, 400);
 }
 
 function answerMeta(m, n, secs) {
@@ -1685,7 +1731,7 @@ function outputsCtx() {
 $("s-ctx").oninput = outputsCtx;
 async function confirmContext(n) {
   const e = ctxEstimate(n);
-  const {tokens} = chatTokens();
+  const tokens = ctxShown.tokens != null ? ctxShown.tokens : estimateTokens(messages);
   const parts = [`<p>The engine restarts with a <b>${esc(ctxfmt(n))}</b>-token context (now ${esc(ctxfmt(ctxInfo.context))}). ` +
                  "That takes about 1-3 minutes.</p>",
                  "<ul><li>Your chat stays here; the next answer reads it again.</li>" +
@@ -1831,7 +1877,8 @@ function outputs() {
   $("o-temp").textContent = t === 0 ? "0 · greedy" : t.toFixed(2);
   $("o-topp").textContent = (+$("s-topp").value).toFixed(2);
   const sel = [...$("s-thinking").children].find((b) => b.getAttribute("aria-checked") === "true");
-  $("o-thinking").textContent = sel ? {none: "answers right away", low: "short", medium: "medium", high: "thorough"}[sel.dataset.v] +
+  $("o-thinking").textContent = sel ? {none: "answers right away", low: "a short think", high: "thinks it through",
+                                       max: "the most thorough, the longest"}[sel.dataset.v] +
     (sel.dataset.v === DEFAULTS.thinking ? " (default)" : "") : "";
   $("o-topk").textContent = +$("s-topk").value > 0 ? $("s-topk").value : "off";
   $("o-minp").textContent = +$("s-minp").value > 0 ? (+$("s-minp").value).toFixed(2) : "off";

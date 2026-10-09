@@ -116,6 +116,19 @@ class Dashboard(unittest.TestCase):
         self.assertIn("STRATA_GLM_RAM_GB", text)
         self.assertNotIn("secret", text)
 
+    def test_token_count_matches_the_prompt(self):
+        msgs = [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hello there"},
+                {"role": "assistant", "content": "Hi! How can I help?"}, {"role": "user", "content": "count me"}]
+        s, _, b = self.req("POST", "/api/tokens", {"messages": msgs, "reasoning_effort": "high"})
+        j = json.loads(b)
+        from serve.frontend import openai_to_messages
+        m, tools, kw = openai_to_messages({"messages": msgs, "reasoning_effort": "high"})
+        ids, _, _ = self.svc.prepare(m, tools, kw)
+        self.assertEqual((s, j["tokens"], j["approximate"]), (200, len(ids), False))
+        s, _, b = self.req("POST", "/api/tokens", {"messages": msgs + [{"role": "user", "content": [
+            {"type": "text", "text": "and this"}, {"type": "image_url", "image_url": {"url": "data:,"}}]}]})
+        self.assertTrue(json.loads(b)["approximate"])
+
     def test_requests_record_their_api(self):
         self.req("POST", "/v1/chat/completions", {"model": "m", "messages": [{"role": "user", "content": "hi"}]})
         s, _, b = self.req("GET", "/metrics")

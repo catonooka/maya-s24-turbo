@@ -166,8 +166,10 @@ It takes 20-40 minutes plus the download:
   (any model name; any API key unless you set one). Anthropic's API: `http://127.0.0.1:8080/v1/messages`
   (Claude Code: `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`). Tool calls (function calling) work through both, streamed
   as the model writes them; a call the model only quotes in a code block stays text.
-- **Thinking:** off, low, medium (the default) or high, in the chat menu or the request's "reasoning effort". A
-  reasoning block is capped at 32K tokens, then the answer follows (`"thinking_budget"` in the config; 0 = no cap).
+- **Thinking:** GLM's own levels - Off, Low, High (the default) or Max (the most thorough, and the longest) - in the
+  chat's Settings or the request's reasoning effort (`none`, `low`, `high`, `max`; OpenAI's `medium` is High and
+  `xhigh` Max; Anthropic's `budget_tokens` under 2K is Low, under 8K High, else Max). A reasoning block is capped at
+  32K tokens, then the answer follows (`"thinking_budget"` in the config; 0 = no cap).
 - **Pictures:** attach one in the chat, or send `image_url` parts (OpenAI) / `image` blocks (Anthropic). The image
   encoder runs only while a new picture is read - a second or two to start, in GPU memory the model lends it - so
   the model keeps its whole GPU cache the rest of the time. On the first start Maya measures how much memory the

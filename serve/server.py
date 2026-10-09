@@ -49,7 +49,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT))   # run as a script (run-<model>.bat) as well as a module
 from serve.frontend import (CALL_START, ChatTemplate, Event, OutputParser, anthropic_to_messages,  # noqa: E402
-                            effort_kwargs, images_of, openai_to_messages)
+                            effort_kwargs, effort_level, images_of, openai_to_messages)
 from serve.mcp import McpCancelled, hub_from_config  # noqa: E402
 
 try:                        # Project Maya's release (the dashboard's About; the engine's INFO carries none)
@@ -1279,6 +1279,22 @@ class Service:
             max_new = max(1, room)          # --fit-max-tokens: a shorter completion beats a 400
         return ids, kwargs.get("enable_thinking", True) is not False, max_new
 
+    def count_tokens(self, req: dict) -> dict:
+        """POST /api/tokens: how many tokens this chat request's prompt takes - the same template, thinking level,
+        tools and tokenizer as prepare(), with nothing run (no image encoder: a picture counts as its marker, so the
+        count is approximate then).  The web app's context meter."""
+        messages, tools, kw = openai_to_messages(req)
+        kw = {k: v for k, v in kw.items() if k != "_force_tool"}
+        if req.get("strata_mcp") is True and self.mcp is not None:
+            own = {t.get("name") for t in tools or []}
+            tools = (tools or []) + self.mcp.template_tools(exclude=own) or None
+        if self.default_effort and "reasoning_effort" not in kw and "enable_thinking" not in kw:
+            kw = {**kw, **effort_kwargs(self.default_effort)}
+        prompt = self.template.render(messages, tools=tools, **kw)
+        images = len(images_of(messages))
+        return {"tokens": len(self.tok.encode(prompt, parse_special=True)), "images": images,
+                "approximate": images > 0, "max_context": self.engine.max_context}
+
     def _note(self, n, evs):
         with self.status_lock:
             s = self.status
@@ -2070,7 +2086,7 @@ def make_handler(svc: Service):
                 # the run config's recommended settings: the web app's Chat defaults until its user picks their own
                 rec = {k: v for k, v in svc.sampling_defaults.items() if k in ("temperature", "top_p", "top_k")}
                 if svc.default_effort:
-                    rec["reasoning_effort"] = svc.default_effort
+                    rec["reasoning_effort"] = effort_level(svc.default_effort) or svc.default_effort
                 self._json(200, {"status": "reloading" if svc.reloading() else "ok",
                                  "max_context": svc.engine.max_context, "model": svc.model,
                                  "images": svc.vision is not None, "api_key": bool(svc.api_key), "defaults": rec,
@@ -2144,6 +2160,9 @@ def make_handler(svc: Service):
                 req = json.loads(self._body() or b"{}")
                 if not isinstance(req, dict):
                     raise ValueError("the request body must be a JSON object")
+                if path == "/api/tokens":                    # the context meter: a prompt's size, nothing run
+                    self._json(200, svc.count_tokens(req))
+                    return
                 if path in ("/v1/chat/completions", "/v1/messages") and svc.reloading():
                     # a context change is reloading the model: say so, and when to try again
                     body = json.dumps({"error": {"type": "overloaded_error", "message": "the model is reloading with a "
@@ -2470,8 +2489,9 @@ def clean_shared_defaults(d) -> dict:
             continue
         number = isinstance(value, (int, float)) and not isinstance(value, bool)
         if key == "reasoning_effort":
-            if value not in ("none", "low", "medium", "high"):
-                raise ValueError("reasoning_effort: none, low, medium or high")
+            if effort_level(value) is None:
+                raise ValueError("reasoning_effort: none, low, high or max")
+            value = effort_level(value)
         elif key == "temperature":
             if not number or not 0 <= value <= 2:
                 raise ValueError("temperature: 0..2")

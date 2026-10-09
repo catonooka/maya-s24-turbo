@@ -221,11 +221,24 @@ class GlmThinkingLevels(unittest.TestCase):
             return t.render([{"role": "user", "content": "hi"}], **effort_kwargs(kwargs.get("effort")))
 
     def test_levels(self):
+        # GLM's own names: Off, Low, High, Max (no effort given: the template's Max)
         self.assertEqual(self.render(), "[gMASK]E=max<|assistant|><think>")
-        self.assertEqual(self.render(effort="low"), "[gMASK]E=low<|assistant|><think>")
-        self.assertEqual(self.render(effort="medium"), "[gMASK]E=high<|assistant|><think>")
-        self.assertEqual(self.render(effort="high"), "[gMASK]E=max<|assistant|><think>")
         self.assertEqual(self.render(effort="none"), "[gMASK]E=low<|assistant|><think></think>")
+        self.assertEqual(self.render(effort="low"), "[gMASK]E=low<|assistant|><think>")
+        self.assertEqual(self.render(effort="high"), "[gMASK]E=high<|assistant|><think>")
+        self.assertEqual(self.render(effort="max"), "[gMASK]E=max<|assistant|><think>")
+
+    def test_other_spellings(self):
+        # OpenAI's medium (GLM has none) is High; xhigh / maximum are Max; minimal is off
+        self.assertEqual(self.render(effort="medium"), "[gMASK]E=high<|assistant|><think>")
+        self.assertEqual(self.render(effort="xhigh"), "[gMASK]E=max<|assistant|><think>")
+        self.assertEqual(self.render(effort="minimal"), "[gMASK]E=low<|assistant|><think></think>")
+
+    def test_level_names_and_budgets(self):
+        from serve.frontend import budget_effort, effort_level
+        self.assertEqual([effort_level(v) for v in ("none", "low", "medium", "high", "max", "xhigh", False, "?")],
+                         ["none", "low", "high", "high", "max", "max", "none", None])
+        self.assertEqual([budget_effort(n)["reasoning_effort"] for n in (1024, 4096, 16384)], ["low", "high", "max"])
 
 
 class SpelledStopMarker(unittest.TestCase):

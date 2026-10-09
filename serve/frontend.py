@@ -42,9 +42,9 @@ class ChatTemplate:
         self.source = Path(path).read_text(encoding="utf-8")
         self.template = env.from_string(self.source)
         # GLM-5.x: the template knows reasoning_effort "low" and "high" only - anything else, an absent one included,
-        # is "Max", its most verbose - and it always opens <think> (no enable_thinking).  The levels the server speaks
-        # (low / medium / xhigh, or thinking off) map onto low / high / max, and off closes the think block the way
-        # the template writes a turn without reasoning.
+        # is "Max", its most verbose - and it always opens <think> (no enable_thinking).  The server's levels are
+        # GLM's own (low / high / max, or thinking off: the think block closed the way the template writes a turn
+        # without reasoning).  Another model's template gets them in its own words (Qwen: low / medium / xhigh).
         self.glm_effort = "reasoning_effort in ['low', 'high']" in self.source
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, add_generation_prompt: bool = True,
@@ -53,7 +53,9 @@ class ChatTemplate:
         if self.glm_effort:
             off = kwargs.pop("enable_thinking", True) is False
             level = kwargs.pop("reasoning_effort", None)
-            kwargs["reasoning_effort"] = "low" if off else {"low": "low", "medium": "high", "high": "high"}.get(level, "max")
+            kwargs["reasoning_effort"] = "low" if off else level if level in ("low", "high") else "max"
+        elif kwargs.get("reasoning_effort") in QWEN_EFFORT:
+            kwargs["reasoning_effort"] = QWEN_EFFORT[kwargs["reasoning_effort"]]
         out = self.template.render(messages=messages, tools=tools, add_generation_prompt=add_generation_prompt,
                                    **kwargs)
         if off and add_generation_prompt and out.endswith("<think>"):
@@ -73,10 +75,21 @@ def _text_of(content) -> str:
 
 IMAGE_PARTS = ("image_url", "input_image", "image")
 
-# Thinking levels.  The model's template knows low, medium and xhigh (its default; "high" means xhigh), and
-# enable_thinking=false for none.  Clients spell these many ways; everything maps onto those four.
+# Thinking levels: GLM-5.x's own - Off, Low, High and Max (its template's default, the most thorough).  Clients spell
+# them many ways and everything maps onto those four: OpenAI's "medium" (GLM has none) is High, "xhigh" is Max.
 EFFORT = {"none": None, "off": None, "minimal": None, "disabled": None, "false": None,
-          "low": "low", "medium": "medium", "high": "xhigh", "xhigh": "xhigh", "max": "xhigh", "maximum": "xhigh"}
+          "low": "low", "medium": "high", "high": "high", "xhigh": "max", "max": "max", "maximum": "max"}
+QWEN_EFFORT = {"low": "low", "high": "medium", "max": "xhigh"}   # the same levels in a Qwen3.x template's words
+
+
+def effort_level(value) -> str | None:
+    """A client's spelling -> the level's name (none / low / high / max); None when none is given or it is unknown."""
+    if value is None or value == "":
+        return None
+    if value is False:
+        return "none"
+    key = str(value).strip().lower()
+    return (EFFORT[key] or "none") if key in EFFORT else None
 
 
 def effort_kwargs(value) -> dict:
@@ -87,18 +100,18 @@ def effort_kwargs(value) -> dict:
         return {"enable_thinking": False}
     key = str(value).strip().lower()
     if key not in EFFORT:
-        raise ValueError(f"unknown reasoning effort {value!r}: use none, low, medium or high")
+        raise ValueError(f"unknown reasoning effort {value!r}: use none, low, high or max")
     level = EFFORT[key]
     return {"enable_thinking": False} if level is None else {"reasoning_effort": level}
 
 
 def budget_effort(tokens) -> dict:
-    """Anthropic's thinking budget (budget_tokens) -> a level: under 2K low, under 8K medium, else high."""
+    """Anthropic's thinking budget (budget_tokens) -> a level: under 2K Low, under 8K High, else Max."""
     try:
         n = int(tokens)
     except (TypeError, ValueError):
         return {}
-    return {"reasoning_effort": "low" if n < 2048 else "medium" if n < 8192 else "xhigh"}
+    return {"reasoning_effort": "low" if n < 2048 else "high" if n < 8192 else "max"}
 
 
 def _has_image(content) -> bool:

@@ -73,7 +73,7 @@ CONTEXTS = [8192, 32768, 65536, 131072]
 DEFAULT_CONTEXT = 32768
 MODEL_NAME = "glm-5.3-flash"
 SAMPLING = {"temperature": 1.0, "top_p": 0.95}     # the dashboard's and the API's defaults for requests that set none
-EFFORT = "medium"                                  # thinking level for requests that name none
+EFFORT = "high"                                    # thinking level for requests that name none (GLM's High)
 HF = "https://huggingface.co/{repo}/resolve/{revision}/{path}"
 # The models the installer can download: Project Maya's own quants, made from Z.ai's FP8 release (their model card
 # has the measurements against it), and GSQ-RCO 3.5-bit, a community quant measured with Maya on one RTX 3090.
