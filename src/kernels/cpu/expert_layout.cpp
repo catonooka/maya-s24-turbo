@@ -95,7 +95,7 @@ bool expert_layout_load(const std::string& pack_dir, int64_t n_layers, int64_t n
     while (std::getline(in, line)) {
         if (line.empty() || line[0] == '#') {
             if (!line.empty() && line[0] == '#') {
-                // v3 packs record their expert count in the header; a pruned model (GSQ-RCO Coder) ships
+                // v3 packs record their expert count in the header; a pruned model (the Qwen Coder) ships
                 // fewer experts than the canonical geometry the caller passes, which is a compile-time
                 // default, so the header wins.
                 const size_t at = line.find("(n_expert ");

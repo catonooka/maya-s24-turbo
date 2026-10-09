@@ -85,4 +85,4 @@ sampled token and the answer follows in the same decode, nothing read again.
 
 - Tool-call formats and memorized knowledge: more tool-call calibration, Q8_0 attention and shared experts.
 - Per-layer sensitivity for the down projections (IQ2_S / IQ3_XXS where it pays), and per-expert bits in the Maya pack.
-- Output-matching refinement of the quantized scales (the plan's GSQ-style step).
+- Output-matching refinement of the quantized scales (the plan's scale-refinement step).

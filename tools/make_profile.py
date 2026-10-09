@@ -9,7 +9,7 @@ The order: the base profile's ranking (default: the shipped data/expert-profile.
 traces used, most frequent first, then every pair still missing, interleaved across the layers.
 
     python tools/make_profile.py [TRACE ...] [--base data/expert-profile.bin | --no-base] [--out PATH]
-                                 [--n-expert 256]      (a pruned model: GSQ-RCO Coder keeps 256 of 512)
+                                 [--n-expert 256]      (a pruned model: the Qwen Coder keeps 256 of 512)
 
 A routing trace comes from a one-shot engine run with `--dump-routing FILE` (a prompt typical of your use; the
 routed experts of every layer and position are written).  Point the model config's `--expert-profile` at the result.

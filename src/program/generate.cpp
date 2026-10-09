@@ -2256,7 +2256,7 @@ int main(int argc, char** argv) {
     strata::core::ModelGeometry g;   // canonical defaults; the model file overrides the MoE shape below
     int64_t K = 10;
     if (!o.native_preset.empty()) {
-        // a pruned variant (GSQ-RCO Coder) ships fewer experts than the canonical 512x10; the model file
+        // a pruned variant (the Qwen Coder) ships fewer experts than the canonical 512x10; the model file
         // is the authority on its own MoE shape - everything else in the geometry is unchanged
         try {
             strata::GgufFile model_gguf(o.native_preset);

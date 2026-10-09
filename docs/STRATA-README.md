@@ -69,12 +69,12 @@ lower the RAM needed.
 **The version:**
 
 - **Qwen3.8-Flash-Next** - the original.
-- **[Coder](https://huggingface.co/ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF)** - ISTA-DASLab's coding
+- **Coder** - ISTA-DASLab's coding
   version: half of the experts removed, keeping the ones that code, tool use and images need (91% of the full model's
   SWE-bench Verified score, 99% of LiveCodeBench, by its authors). One size (IQ1_M: its experts stored like IQ3_S):
   shard 1 is **29.6 GB**, so it fits a PC with **32 GB of RAM**, runs 262K context on 64 GB, and reads long prompts
   the fastest of all. Weaker outside coding.
-- **[Swift 1.5](https://huggingface.co/ukisai/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-GGUF)** - a fine-tune by UkisAI
+- **Swift 1.5** - a fine-tune by UkisAI
   that thinks much shorter before answering, so you get the answer sooner, with about the same quality. Same speed per
   token, and about the same RAM as the same size of the original (no IQ3_S). Its own license applies (see its page).
 
@@ -206,8 +206,8 @@ Want the full picture? The [details](docs/DETAILS.md#how-it-works) explain every
 ## Credits
 
 - Model: [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) by the Qwen team; compressed versions by
-  [ISTA-DASLab](https://huggingface.co/ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF);
-  [Swift 1.5](https://huggingface.co/ukisai/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-GGUF) by UkisAI. Their licenses apply
+  [ISTA-DASLab](https://huggingface.co/ISTA-DASLab);
+  Swift 1.5 by [UkisAI](https://huggingface.co/ukisai). Their licenses apply
   to the model files.
 - Built with parts of [llama.cpp / ggml](https://github.com/ggml-org/llama.cpp) (MIT). Ideas from
   [Splash](https://github.com/incoai/splash), [ninfer](https://github.com/Neroued/ninfer) and
