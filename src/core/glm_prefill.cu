@@ -1243,6 +1243,13 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
 
     // GLM_CB_DIR seam dumps of the chunk's LAST row, under the token path's names (debug only, synchronous)
     static const char* cb_dir = getenv("GLM_CB_DIR");
+    // A single-device prompt chunk only conditions later tokens; decode computes the last prompt token and its
+    // logits separately. The terminal layer's outputs have no reader unless NextN is loaded. Keep its mixer/cache
+    // updates, but omit the output projection and FFN (including both mHC write halves). Split boundaries and seam
+    // dumps consume these rows, so keep their full path. STRATA_GLM_PREFILL_TAIL_SKIP=0 is the A/B baseline.
+    const char* tail_env = getenv("STRATA_GLM_PREFILL_TAIL_SKIP");
+    const bool tail_skip = l0_ == 0 && l1_ == g.n_layers && split_next_ == nullptr && mtp_il_ < 0 &&
+                           (cb_dir == nullptr || !cb_dir[0]) && (tail_env == nullptr || std::atoi(tail_env) != 0);
     const auto dump_row = [&](const std::string& name, const float* rows, int width, int row = -1) {
         if (cb_dir == nullptr || !cb_dir[0]) return;
         cudaStreamSynchronize(s);
@@ -1363,7 +1370,8 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
     const auto prestage = [&](int il) {
         S->pre_layer = -1;
         S->pre_e.clear();
-        if (S->pbuf == nullptr || T < kPreMinT || il >= l1_ || !F->L[(size_t) il].moe || F->layer_rc[(size_t) il] < 0)
+        if (S->pbuf == nullptr || T < kPreMinT || il >= l1_ || !F->L[(size_t) il].moe || F->layer_rc[(size_t) il] < 0 ||
+            (tail_skip && il == g.n_layers - 1))   // the skipped terminal FFN reads no experts
             return;
         const auto& Ly = F->L[(size_t) il];
         const auto& P = F->lp[(size_t) il];
@@ -1462,6 +1470,7 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
     for (auto& t : S->tr) t.on = false;
     for (int il = l0_; il < l1_; ++il) {
         const auto& Ly = F->L[(size_t) il];
+        const bool skip_output = tail_skip && il == g.n_layers - 1;
         if (S->trace) cudaEventRecord(S->tr[(size_t) il].start, s);
         hc_read(il == l0_ ? nullptr : S->ffn, Ly.hc_attn_fn, Ly.hc_attn_scale, Ly.hc_attn_base, Ly.attn_norm);
         S->mark("hc", s);
@@ -1493,7 +1502,7 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
                 gb::kda_rec(B.conv[0], B.conv[1], B.conv[2], B.g1, Ly.dt_bias, Ly.ssm_a, g.kda_lb, B.beta,
                             state_ + kda_S_[(size_t) il], B.g2, Ly.ssm_norm, g.norm_eps, g.n_head, tn, B.out16, s);
                 S->mark("kda_rec", s);
-                hgemm_q(Ly.out, E, DI, B.out16, DI, mixer, E, tn, 0.0f);
+                if (!skip_output) hgemm_q(Ly.out, E, DI, B.out16, DI, mixer, E, tn, 0.0f);
             } else {
                 Carve c{S->uni};
                 DsaBufs B = carve_dsa(c, (size_t) tn, g, S->max_pools);
@@ -1604,7 +1613,8 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
                         "mla out");
                 }
                 gb::f32_to_f16(B.attn, B.attn16, (int64_t) tn * g.n_head * g.v_head, s);
-                hgemm_q(Ly.out, E, g.n_head * g.v_head, B.attn16, g.n_head * g.v_head, mixer, E, tn, 0.0f);
+                if (!skip_output)
+                    hgemm_q(Ly.out, E, g.n_head * g.v_head, B.attn16, g.n_head * g.v_head, mixer, E, tn, 0.0f);
                 if (t0 + tn == T) {
                     const std::string Ls = std::to_string(il);
                     dump_row("dsa_qr-" + Ls, B.qr, g.q_lora, tn - 1);
@@ -1620,8 +1630,9 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
             }
         }
 
-        dump_row("mixer-" + std::to_string(il), S->mixer, E);
         S->mark(Ly.recr ? "kda" : "dsa", s);
+        if (skip_output) continue;   // every KDA/DSA cache update above still ran; these output rows feed nothing
+        dump_row("mixer-" + std::to_string(il), S->mixer, E);
         hc_read(S->mixer, Ly.hc_ffn_fn, Ly.hc_ffn_scale, Ly.hc_ffn_base, Ly.ffn_norm);
         S->mark("hc", s);
         dump_row("ffn_norm-" + std::to_string(il), S->x, E);
@@ -2343,8 +2354,10 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
         dump_row("ffn_out-" + std::to_string(il), S->ffn, E);
     }
     // the last layer's write half: R = post x ffn + comb . R
-    gb::hc_update(S->ffn, S->R, S->post, S->comb, nullptr, T, E, s);
-    S->mark("hc", s);
+    if (!tail_skip) {
+        gb::hc_update(S->ffn, S->R, S->post, S->comb, nullptr, T, E, s);
+        S->mark("hc", s);
+    }
     // ---- the NextN block's caches for these positions (the half that carries it): position p reads h_p and the
     //      embedding of the token at p + 1, so only the cache-writing half of the block runs - eh_proj, the attention
     //      norm, kv_a and the indexer's key/gate - no queries, no attention, no FFN
