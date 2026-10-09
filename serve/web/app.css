@@ -415,3 +415,6 @@ body:not([data-tab="chat"]) .chats__search, body:not([data-tab="chat"]) .chats__
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+/* the per-GPU values under a hardware card's total (two to four GPUs): they may take two lines */
+.st-metric__sub.is-each { white-space: normal; line-height: 1.35; }
+.st-metric__spark { margin-top: auto; }   /* the charts of a row stay level when one card's line wraps */

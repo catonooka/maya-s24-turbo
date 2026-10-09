@@ -432,11 +432,12 @@ function renderHero(live, h, last, eng, tiers, totals) {
   $("hero-req").textContent = totals && totals.requests != null ? fmt(totals.requests) : "–";
 }
 
-// more than one GPU: one row each
+// five GPUs or more: one row each (up to four, the hardware cards list every GPU's own value - each figure once)
+const GPU_TABLE_FROM = 5;
 function renderGpus(hw) {
   const gpus = hw.gpus || [];
-  $("gpus-card").hidden = gpus.length < 2;
-  if (gpus.length < 2) return;
+  $("gpus-card").hidden = gpus.length < GPU_TABLE_FROM;
+  if (gpus.length < GPU_TABLE_FROM) return;
   $("gpus-sub").textContent = `${gpus.length} cards`;
   $("gpus-body").innerHTML = gpus.map((g) => {
     const gen = g.pcie_gen_max || g.pcie_gen;
@@ -494,26 +495,35 @@ function renderMonitor(live, hw, st, eng, h, last, requests, totals, kept) {
   $("state-detail").textContent = detail;
   $("state-bar").style.width = `${pct}%`;
 
-  // the hardware cards (a model split across several cards shows their total / mean / hottest; the GPUs card has each)
-  const multi = (hw.gpus || []).length > 1;
-  const per = (f) => (hw.gpus || []).map((g) => `GPU ${g.index} ${f(g)}`).join(" · ");
+  // the hardware cards: the total (or the mean / the hottest) and its history; with two to four GPUs the line under it
+  // has every GPU's own value (from five, the GPUs table above has them and the cards keep their totals)
+  const gpus = hw.gpus || [];
+  const multi = gpus.length > 1, each = multi && gpus.length < GPU_TABLE_FROM;
+  const per = (f) => gpus.map((g) => `GPU ${g.index} ${f(g)}`.replace(/ /g, " ")).join(" · ");   // wraps between GPUs only
+  const rate = (mb) => (mb == null ? "–" : mb >= 1000 ? `${fmt(mb / 1024, 1)} GB/s` : `${fmt(mb, mb < 10 ? 1 : 0)} MB/s`);
   setMetric("gpu", hw.gpu_util == null ? null : fmt(hw.gpu_util), "%",
-            multi ? per((g) => (g.util == null ? "–" : `${fmt(g.util)}%`)) : st.gpu_name || "");
+            each ? per((g) => (g.util == null ? "–" : `${fmt(g.util)}%`)) : multi ? `mean of ${gpus.length} cards` : st.gpu_name || "");
   spark("sp-gpu", h.gpu_util, 100);
   setMetric("vram", hw.gpu_mem_used == null ? null : gb(hw.gpu_mem_used), hw.gpu_mem_total ? `/ ${gb(hw.gpu_mem_total, 0)} GB` : "GB",
-            (multi ? `${(hw.gpus || []).length} cards · ` : "") + (eng.expert_slots ? `${fmt(eng.expert_slots)} experts cached` : ""));
+            each ? per((g) => (g.mem_used == null ? "–" : `${gb(g.mem_used)} GB`))
+                 : (multi ? `${gpus.length} cards · ` : "") + (eng.expert_slots ? `${fmt(eng.expert_slots)} experts cached` : ""));
   spark("sp-vram", h.gpu_mem_used, hw.gpu_mem_total);
   setMetric("temp", hw.gpu_temp == null ? null : fmt(hw.gpu_temp), "°C",
-            multi ? `hottest of ${(hw.gpus || []).length} cards` : "");
+            each ? per((g) => (g.temp == null ? "–" : `${fmt(g.temp)}°`)) : multi ? `hottest of ${gpus.length} cards` : "");
   spark("sp-temp", h.gpu_temp, 90);
   setMetric("power", hw.gpu_power == null ? null : fmt(hw.gpu_power), "W",
-            hw.gpu_power_limit ? `of ${fmt(hw.gpu_power_limit)} W limit${multi ? ` (all ${(hw.gpus || []).length} cards)` : ""}` : "");
+            each ? per((g) => (g.power == null ? "–" : `${fmt(g.power)}${g.power_limit ? `/${fmt(g.power_limit)}` : ""} W`))
+                 : hw.gpu_power_limit ? `of ${fmt(hw.gpu_power_limit)} W limit${multi ? ` (all ${gpus.length} cards)` : ""}` : "");
   spark("sp-power", h.gpu_power, hw.gpu_power_limit);
   const gen = hw.gpu_pcie_gen_max || hw.gpu_pcie_gen;
+  const link = (g) => `Gen${g.pcie_gen_max || g.pcie_gen || "?"}${g.pcie_width ? ` x${g.pcie_width}` : ""}`;
+  const sameLink = gpus.every((g) => link(g) === link(gpus[0]));
   setMetric("pcie", gen ? `Gen${gen}` : null, hw.gpu_pcie_width ? `x${hw.gpu_pcie_width}` : "",
-            hw.gpu_pcie_rx_mb == null ? "" : `to GPU ${fmt(hw.gpu_pcie_rx_mb, hw.gpu_pcie_rx_mb < 10 ? 1 : 0)} MB/s` +
-            (hw.gpu_pcie_gen && gen && hw.gpu_pcie_gen < gen ? ` · idle Gen${hw.gpu_pcie_gen}` : ""));
+            each ? per((g) => `${sameLink ? "" : `${link(g)} `}${rate(g.pcie_rx_mb)}`)
+                 : hw.gpu_pcie_rx_mb == null ? "" : `to GPU ${rate(hw.gpu_pcie_rx_mb)}` +
+                   (hw.gpu_pcie_gen && gen && hw.gpu_pcie_gen < gen ? ` · idle Gen${hw.gpu_pcie_gen}` : ""));
   spark("sp-pcie", h.gpu_pcie_rx_mb);
+  for (const k of ["gpu", "vram", "temp", "power", "pcie"]) $(`ms-${k}`).classList.toggle("is-each", each);
   setMetric("cpu", hw.cpu == null ? null : fmt(hw.cpu), "%", st.threads ? `${st.cores ? `${st.cores} cores · ` : ""}${st.threads} threads` : "");
   spark("sp-cpu", h.cpu, 100);
   if (hw.disk_read_mb == null) {
