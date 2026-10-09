@@ -111,7 +111,7 @@ def card(rows: list) -> Text:
 
 
 def setup_card(app, spin: str) -> Text:
-    """The card while the setup runs (setup_tui.SetupApp): its step, what runs now, the time, the progress - or, for a
+    """The card while the setup runs (setup_tui.SetupApp): its step, what runs now, the progress - or, for a
     start without a setup, what runs before Maya does (a compile after an update)."""
     n = app.cur
     name = app.titles.get(n, "Starting" if app.steps else "Starting Maya")
@@ -121,9 +121,6 @@ def setup_card(app, spin: str) -> Text:
             Text("Waiting for your answer (below)", f"bold {WARN}")
     else:
         now = Text.assemble((spin + " ", ACCENT), (app.doing, INK) if app.doing else (app.last, MUTED))
-    t = app.times.get(n)
-    took = (f"{clock(time.monotonic() - t[0])} in this step · " if t else "") + \
-        f"{clock(time.monotonic() - app.t0)} in all"
     if app.bar:
         progress = Text.assemble(bar(app.bar[0]), (f" {app.bar[0] * 100:3.0f}%  ", INK), (app.bar[1], MUTED))
     elif app.steps:
@@ -132,7 +129,7 @@ def setup_card(app, spin: str) -> Text:
     else:
         progress = Text("–", MUTED)
     return card([("Step", Text(f"{n} of 8 · {name}" if 0 < n < 9 else name, INK)), ("Now", now),
-                 ("Time", Text(took, INK)), ("Progress", progress)])
+                 ("Progress", progress)])
 
 
 def serving_card(s: dict, spin: str) -> Text:

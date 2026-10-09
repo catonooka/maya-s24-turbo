@@ -62,7 +62,7 @@ class SetupApp(App):
         self.warned: set = set()
         self.cur = 0                                    # the step running now
         self.view = None                                # the step whose output the box shows (None: the live one)
-        self.frame, self.t0 = 0, time.monotonic()
+        self.frame = 0
         self.doing, self.doing_since, self.said_doing, self.last = "", 0.0, False, ""
         self.bar, self.bar_since = None, 0.0            # (share done, what to show) while a command tells it
         self.pending = None                             # the question shown: (future, values, kind)
