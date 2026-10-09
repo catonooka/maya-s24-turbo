@@ -1186,7 +1186,7 @@ static std::vector<int> glm_search_bounds(const std::string& pack_dir, int64_t m
                      c.bw / 1e9, c.free / 1073741824.0);
     std::fprintf(stderr, "glm split auto: the host reads RAM at %.0f GB/s (a part's CPU lane: %.0f); the routes from %s; "
                          "%s\n", host_bps / 1e9, miss_bps / 1e9,
-                 cover[3].empty() ? "Strata's coverage curve (no usage counts)" : "the usage counts",
+                 cover[3].empty() ? "the default coverage curve (no usage counts)" : "the usage counts",
                  pipelined ? "the pipelined decode: a token costs the slower part" : "a token costs the parts added");
     if (best.empty()) {
         if (best_any.empty()) return {};

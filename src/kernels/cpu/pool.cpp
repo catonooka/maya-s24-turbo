@@ -282,7 +282,7 @@ int ExpertPool::claim(uint32_t epoch) {
 
 uint32_t ExpertPool::begin_batch(int n) {
     if (n < 0 || n > 0xffff) {
-        std::fprintf(stderr, "strata: expert pool batch of %d jobs is out of range\n", n);
+        std::fprintf(stderr, "maya: expert pool batch of %d jobs is out of range\n", n);
         std::abort();
     }
     // Every job of the previous batch has completed (`wait_done`), and a claim of it can no longer succeed, so
@@ -305,7 +305,7 @@ void ExpertPool::wait_parked(const char* what) {
         const auto now = std::chrono::steady_clock::now();
         if (spins == 1024u) t0 = now;
         else if (now - t0 > kStall) {
-            std::fprintf(stderr, "strata: the CPU expert pool stalled %s (%u of %d workers parked) - stopping the engine "
+            std::fprintf(stderr, "maya: the CPU expert pool stalled %s (%u of %d workers parked) - stopping the engine "
                                  "so the server can start it again (issue #29)\n",
                          what, parked_.load(), n_);
             std::fflush(stderr);
@@ -327,7 +327,7 @@ void ExpertPool::wait_done(int n) {
         const auto now = std::chrono::steady_clock::now();
         if (spins == 1024u || d != seen) { t0 = now; seen = d; }     // progress restarts the clock
         else if (now - t0 > kStall) {
-            std::fprintf(stderr, "strata: the CPU expert pool stalled: %u of %d jobs done, %u of %d workers parked - "
+            std::fprintf(stderr, "maya: the CPU expert pool stalled: %u of %d jobs done, %u of %d workers parked - "
                                  "stopping the engine so the server can start it again (issue #29)\n",
                          d, n, parked_.load(), n_);
             std::fflush(stderr);

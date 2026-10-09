@@ -62,8 +62,8 @@ keeps the one whose caches would hold the most of the expert profile, hottest pa
 placement that leaves the fullest card the most room. The startup log prints the choice:
 
 ```
-strata generate: layer split auto: K=19 - the caches hold 11767 of 12288 profiled pairs (fullest device 100%)
-strata serve: layer split: layers 0-18 (CUDA0), 19-47 (CUDA1), one hand-off per window
+maya generate: layer split auto: K=19 - the caches hold 11767 of 12288 profiled pairs (fullest device 100%)
+maya serve: layer split: layers 0-18 (CUDA0), 19-47 (CUDA1), one hand-off per window
 ```
 
 ## What each card holds

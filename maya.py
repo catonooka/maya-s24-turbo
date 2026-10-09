@@ -7,9 +7,8 @@ CUDA: Linux; Windows (experimental). HIP: experimental gfx1100/gfx1201/gfx1151, 
     ./maya.sh --check         only check this PC
     ./maya.sh --backend hip --gpu 0 --check    check an RX 7900 XT / XTX with system ROCm 7
 
-On Windows START-MAYA.bat takes the same options.  Both make the private Python environment (.venv, the way Strata's
-setup.sh does) and run this file.  It reuses Strata's installer (setup.py) for the PC checks,
-pip, llama.cpp's source and resumable downloads.
+On Windows START-MAYA.bat takes the same options.  Both make the private Python environment (.venv) and run this
+file.  Its helpers (setup.py) do the PC checks, pip, llama.cpp's source and resumable downloads.
 
 In a terminal the setup runs on a screen of its own (tools/setup_tui.py): the steps, what runs now with a progress
 bar, and the questions as menus - then Maya runs on the same screen, and every later start too: its dashboard (the
@@ -35,7 +34,7 @@ What the first run does (each step is skipped when it is already done):
      earlier, or it offers the tuning (./maya.sh --calibrate does it any time) - and starts the dashboard on
      http://127.0.0.1:8080
 
-The tuning (tools/calibrate_glm.py, like Strata's --calibrate): decode speed measured with a few splits of the RAM-tier
+The tuning (tools/calibrate_glm.py): decode speed measured with a few splits of the RAM-tier
 experts between the CPU and the PCIe link, and with fewer CPU threads, in one engine run (~10-15 minutes, the model
 loads first); a setting is kept when it is more than 3% faster than the engine's own choice.  The result goes into the
 config's "env" (STRATA_GLM_PCIE_SHARE, STRATA_GLM_CPU_LANE) and into ~/.config/project-maya/calibration.json for this
@@ -620,7 +619,7 @@ def check_pc(a) -> dict:
     if WIN:
         warn("Windows support is new (experimental): Maya is developed and measured on Linux - tell us how it runs")
     if S.is_wsl():
-        warn("this is WSL2, which Maya does not support: Strata measured that WSL2's driver pins only about 1 GB of "
+        warn("this is WSL2, which Maya does not support: WSL2's driver pins only about 1 GB of "
              "RAM for the GPU, and Maya's RAM tier pins tens of GB. Use a native Linux install.")
     found = S.gpus()
     if not found:
@@ -893,7 +892,7 @@ def compile_engine(archs, gpu_ids, nvcc, host_compiler, llama: Path, src: str, s
     say("  Compiling the engine for " + ", ".join(f"sm_{x}" for x in archs) +
         " (10-30 minutes the first time, a few minutes after an update) ...")
     if cuda_archs == "native":
-        say("  (CMakeLists.txt refuses an explicit sm_70 - Strata's own floor is sm_75 - so CMake is asked for this")
+        say("  (CMakeLists.txt refuses an explicit sm_70 - Maya's own floor is sm_75 - so CMake is asked for this")
         say(f"  machine's GPUs instead: CMAKE_CUDA_ARCHITECTURES=native with CUDA_VISIBLE_DEVICES={env['CUDA_VISIBLE_DEVICES']})")
     stopped = cmake_steps(conf, build, env, "build-maya.bat")
     if stopped:
@@ -1570,10 +1569,10 @@ def prefill_tips(args: list, ram: float, gpus: int = 2) -> list:
     if prefill is not None and prefill.isdigit() and int(prefill) > 8192 and ram < PREFILL_RISK_RAM_GB:
         return [f"warning: --prefill {prefill} on {ram:.0f} GB of RAM: on a split, 32768-token chunks read prompts "
                 "slower than --prefill auto with little RAM (two V100s, 30 GB: 551 against 709 tok/s); they paid off "
-                "(+21-35%) with 96 GB in Strata's community benchmarks"]
+                "(+21-35%) with 96 GB in community benchmarks"]
     if prefill == "auto" and ram >= PREFILL_BIG_RAM_GB:
         return [f"tip: with {ram:.0f} GB of RAM, --prefill 32768 in the config's args read prompts 21-35% faster in "
-                "Strata's community benchmarks; not set, nothing changes"]
+                "community benchmarks; not set, nothing changes"]
     return []
 
 
@@ -2263,8 +2262,7 @@ def main() -> int:
         sys.stdout.flush()
         os.execve("/bin/sh", ["/bin/sh", str(HERE / "maya.sh"), *sys.argv[1:]], dict(os.environ, MAYA_SH="1"))
     version = maya_version()
-    say(f"Project Maya v{version} - GLM-5.3-Flash on your own GPU(s). Built on Strata (MIT) and ggml/llama.cpp "
-        "(MIT).")
+    say(f"Project Maya v{version} - GLM-5.3-Flash on your own GPU(s).")
     if a.report:
         return report(version, a.backend, a.config)
     if a.bench:

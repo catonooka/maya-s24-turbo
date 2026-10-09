@@ -613,7 +613,7 @@ def calibrate_config(cfg_path: Path) -> bool:
     import calibrate as CAL
     cfg = json.loads(cfg_path.read_text(encoding="utf-8-sig"))
     say()
-    say("  Tuning Strata for this PC: the output speed is measured with a few engine settings (the PCIe share, the")
+    say("  Tuning Maya for this PC: the output speed is measured with a few engine settings (the PCIe share, the")
     say("  draft depth, the CPU threads). It takes about 5-10 minutes; the PC is busy meanwhile.")
     try:
         res = CAL.run(cfg, say=say)

@@ -284,7 +284,7 @@ def measure(cfg: dict, ids_list, start_engine, say=print, extra_threads=()) -> d
 
 def engine_error(log: str | None, since: int = 0) -> str | None:
     """The engine's own reason for a failed start: the last line of its log written after byte `since` that is its own
-    ("glm ...", "strata ..." or "ERR ..."), else the last line there; None without a log or a new line."""
+    ("glm ...", "maya ..." or "ERR ..."), else the last line there; None without a log or a new line."""
     if not log:
         return None
     try:
@@ -293,7 +293,7 @@ def engine_error(log: str | None, since: int = 0) -> str | None:
             lines = [x.strip() for x in f.read()[-16384:].decode("utf-8", "replace").splitlines() if x.strip()]
     except OSError:
         return None
-    return next((x for x in reversed(lines) if x.startswith(("glm", "strata", "ERR"))), lines[-1] if lines else None)
+    return next((x for x in reversed(lines) if x.startswith(("glm", "maya", "ERR"))), lines[-1] if lines else None)
 
 
 def close(eng):

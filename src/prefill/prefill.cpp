@@ -983,7 +983,7 @@ bool Prefill::run(const int64_t* tokens, int64_t n, int64_t pos0, std::string& e
 
     for (int64_t c0 = 0; c0 < n; c0 += m.T) {
         if (should_stop && should_stop()) { err = "cancelled"; return false; }
-        if (std::getenv("STRATA_TRACE")) { std::fprintf(stderr, "strata trace: prompt chunk %lld of %lld\n", (long long) c0, (long long) n); std::fflush(stderr); }
+        if (std::getenv("STRATA_TRACE")) { std::fprintf(stderr, "maya trace: prompt chunk %lld of %lld\n", (long long) c0, (long long) n); std::fflush(stderr); }
         const int64_t T = std::min(m.T, n - c0), p0 = pos0 + c0;
         ++stats_.chunks;
         pt.mark(kPfStart, cs);
@@ -1390,7 +1390,7 @@ bool Prefill::run(const int64_t* tokens, int64_t n, int64_t pos0, std::string& e
                             std::sort(u.begin(), u.end());
                             sum_u += (double) (std::unique(u.begin(), u.end()) - u.begin());
                         }
-                        std::fprintf(stderr, "strata prefill: selection overlap at %lld: 16-query tiles read %.1f%% of the "
+                        std::fprintf(stderr, "maya prefill: selection overlap at %lld: 16-query tiles read %.1f%% of the "
                                              "cells one query at a time does\n", (long long) p0, sum_w > 0 ? 100.0 * sum_u / sum_w : 0.0);
                     }
                     // STRATA_IDX_FP16_CHECK: would FP16 pooled indexer keys select the same cells? (the KV-streaming
@@ -1436,7 +1436,7 @@ bool Prefill::run(const int64_t* tokens, int64_t n, int64_t pos0, std::string& e
                             if (p0 + t + 1 > m.cap) { ++sel_queries; shared += (double) c; cells += (double) w; }
                         }
                         if (qsa_index + 1 == g.n_qsa_layers())
-                            std::fprintf(stderr, "strata prefill: FP16 indexer keys: %lld of %lld selections identical; "
+                            std::fprintf(stderr, "maya prefill: FP16 indexer keys: %lld of %lld selections identical; "
                                                  "where the selection is sparse, %.4f%% of cells shared (%lld queries)\n",
                                          same, queries, cells > 0 ? 100.0 * shared / cells : 100.0, sel_queries);
                     }
@@ -1739,7 +1739,7 @@ bool Prefill::run(const int64_t* tokens, int64_t n, int64_t pos0, std::string& e
                         static int64_t reported = -1;
                         if ((bgu || bdm || bbo || bh > 0) && reported != stats_.chunks) {
                             reported = stats_.chunks;
-                            std::fprintf(stderr, "strata dbg: layer %lld (mmq %d, types %d/%d, %zu experts): non-finite GU %lld "
+                            std::fprintf(stderr, "maya dbg: layer %lld (mmq %d, types %d/%d, %zu experts): non-finite GU %lld "
                                          "H %lld Dm %lld bo %lld of T %lld\n", (long long) l, (int) use_mmq, mmq_gt, mmq_dt,
                                          order.size(), (long long) bgu, (long long) bh, (long long) bdm, (long long) bbo,
                                          (long long) T);
@@ -1834,7 +1834,7 @@ bool Prefill::run(const int64_t* tokens, int64_t n, int64_t pos0, std::string& e
             std::fprintf(stderr, " %lld non-finite (max |x| %.3g)", (long long) c, mx);
         };
         const int64_t last = (n - 1) % m.T;
-        std::fprintf(stderr, "strata dbg: prompt end: last residual row");
+        std::fprintf(stderr, "maya dbg: prompt end: last residual row");
         bad(m.R + last * D, D);
         if (ss.ple.ready()) { std::fprintf(stderr, "; PLE history"); bad(ss.ple.hist, (int64_t) strata::kernels::NG_HIST * strata::kernels::NG_HC_DIM); }
         std::fprintf(stderr, "; GDN state 0");
@@ -1862,9 +1862,9 @@ bool Prefill::run(const int64_t* tokens, int64_t n, int64_t pos0, std::string& e
             std::snprintf(b, sizeof b, " %s %.0f (%.1f%%)", kPfNames[i], pt.ms[i], total > 0 ? 100.0 * pt.ms[i] / total : 0.0);
             line += b;
         }
-        std::fprintf(stderr, "strata prefill timing: %lld tokens, GPU timeline %.0f ms, wall %.0f ms, host staging %.0f ms:%s\n",
+        std::fprintf(stderr, "maya prefill timing: %lld tokens, GPU timeline %.0f ms, wall %.0f ms, host staging %.0f ms:%s\n",
                      (long long) n, total, ms_since(t_start), stats_.ms_experts_host, line.c_str());
-        std::fprintf(stderr, "strata prefill timing: host: chunk setup (PLE rows, the expert stream plan) %.0f ms, "
+        std::fprintf(stderr, "maya prefill timing: host: chunk setup (PLE rows, the expert stream plan) %.0f ms, "
                              "waiting for each chunk %.0f ms, after each chunk (the draft layer, progress) %.0f ms, "
                              "PLE %.0f ms\n", host_setup_ms, host_sync_ms, host_chunk_ms, stats_.ms_ple);
     }
@@ -1880,7 +1880,7 @@ bool Prefill::run(const int64_t* tokens, int64_t n, int64_t pos0, std::string& e
             std::snprintf(h, sizeof(h), "%04llx ", (unsigned long long) (x & 0xffff));
             line += h;
         }
-        std::fprintf(stderr, "strata prefill: GDN_HASH %s\n", line.c_str());
+        std::fprintf(stderr, "maya prefill: GDN_HASH %s\n", line.c_str());
     }
     return true;
 }
