@@ -4,6 +4,19 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.0.20 - 2026-10-09
+
+Maya-S24 is listed apart from Maya-S on Hugging Face.
+
+- Maya-S24's files are `GLM-5.3-Flash-Maya-S24-IQ2_XXS_S-...` on Hugging Face (moved there, the same files and
+  sha256): v1.0.19's IQ2_XXS label was Maya-S's too, and Hugging Face adds up the files that share a label - the page
+  showed one 191 GB IQ2_XXS. `_S` marks the smaller mix of the same experts (its attention is 4-bit), as llama.cpp's
+  Q3_K_S does. Every Maya download now has a label of its own: IQ2_XXS (Maya-S), IQ2_XXS_S (Maya-S24), IQ2_S
+  (Maya-M), IQ3_S (Maya-L).
+- A Maya-S24 downloaded under either earlier name keeps it; setups of v1.0.19 and earlier can no longer download
+  Maya-S24 - update first (About > Update, or `git pull`).
+- Checked: the installer with v1.0.19's Maya-S24 names (a test), one label per download (a test).
+
 ## v1.0.19 - 2026-10-09
 
 Every Maya download is listed on its own on Hugging Face: the files carry their quant label.
