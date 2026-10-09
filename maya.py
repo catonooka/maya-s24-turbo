@@ -1327,7 +1327,7 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vi
         kept = keep_args(read_json(cfg_path).get("args") or [], cfg["args"], ("--prefill",))
         if kept:
             ok("kept from the config before: " + ", ".join(kept))
-    for line in prefill_tips(cfg["args"], mem_gb()[0]):
+    for line in prefill_tips(cfg["args"], mem_gb()[0], len(pc["gpus"])):
         ok(line)
     gguf_dir = local.parent if local else Path(a.gguf_dir).expanduser().resolve() if a.gguf_dir else None
     cfg["installer"] = {"models_dir": str(models), "quant": quant, "gguf": str(local) if local else None,
@@ -1350,12 +1350,16 @@ PREFILL_BIG_RAM_GB = 96        # Strata's benchmarks: 32768-token chunks +21-35%
 PREFILL_RISK_RAM_GB = 64       # below this a chunk set above 8192 is warned about
 
 
-def prefill_tips(args: list, ram: float) -> list:
-    """Strata's --prefill recommendations (its setup's bench tips): text only, nothing in the config changes."""
+def prefill_tips(args: list, ram: float, gpus: int = 2) -> list:
+    """Strata's --prefill recommendations for a split (one GPU's auto already takes up to 32768): text only, nothing in
+    the config changes."""
     prefill = args[args.index("--prefill") + 1] if "--prefill" in args[:-1] else None
+    if gpus < 2:
+        return []
     if prefill is not None and prefill.isdigit() and int(prefill) > 8192 and ram < PREFILL_RISK_RAM_GB:
-        return [f"warning: --prefill {prefill} on {ram:.0f} GB of RAM: in Strata's community benchmarks 32768-token "
-                "chunks ran ~3x slower than --prefill auto with 32 GB; they paid off (+21-35%) with 96 GB"]
+        return [f"warning: --prefill {prefill} on {ram:.0f} GB of RAM: on a split, 32768-token chunks read prompts "
+                "slower than --prefill auto with little RAM (two V100s, 30 GB: 551 against 709 tok/s); they paid off "
+                "(+21-35%) with 96 GB in Strata's community benchmarks"]
     if prefill == "auto" and ram >= PREFILL_BIG_RAM_GB:
         return [f"tip: with {ram:.0f} GB of RAM, --prefill 32768 in the config's args read prompts 21-35% faster in "
                 "Strata's community benchmarks; not set, nothing changes"]

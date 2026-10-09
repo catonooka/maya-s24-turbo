@@ -554,7 +554,9 @@ bool Glm5Model::prefill_setup(std::string& err) {
     const int64_t w16_elems = wsc.first, w32_elems = wsc.second;
     const size_t ws_bytes = kPfWorkspace;
     // ---- the chunk T, as Strata's --prefill (the config's args; STRATA_GLM_PREFILL, unset = auto).  `auto`: the
-    // largest chunk on the 256-token grid, up to 8192, whose buffers the expert pool fast_setup carves next can lend.
+    // largest chunk on the 256-token grid, up to 32768 on one GPU and 8192 on a split (each the faster there: one V100,
+    // 26K-token prompts 559 tok/s at 32768 against 367 at 8192; two V100s 709 at 8192 against 551 at 32768), whose
+    // buffers the expert pool fast_setup carves next can lend.
     // The pool lends at most STRATA_PREFILL_LEND_PCT of its slots - Strata's 90 when at least 90% of the expert bytes
     // are held pinned (the copies are DMA), 85 when host copies are the limit; that share is known once the RAM tier
     // exists, so the chunk is sized with 90 here and prefill_settle() takes it down to 85's when the share falls short
@@ -565,7 +567,8 @@ bool Glm5Model::prefill_setup(std::string& err) {
     // STRATA_GLM_PREFILL_MB=<MB> fixes what may be lent.
     const std::string mode = prefill_mode();
     const bool is_auto = mode == "auto";
-    const int64_t ceiling = is_auto ? 8192 : (int64_t) std::atoll(mode.c_str());
+    const int64_t auto_max = n_parts_ == 1 ? 32768 : 8192;
+    const int64_t ceiling = is_auto ? auto_max : (int64_t) std::atoll(mode.c_str());
     // the pool to come: `per` slots a layer over the tier layers, as fast_setup sizes it from the same free VRAM
     size_t dev_free = 0, dev_total = 0;
     cudaMemGetInfo(&dev_free, &dev_total);
@@ -648,7 +651,7 @@ bool Glm5Model::prefill_setup(std::string& err) {
     };
     S->lend_pct = pct_env != nullptr ? (int64_t) std::atoi(pct_env) : 90;
     S->lend_pct_fixed = pct_env != nullptr || mb_env != nullptr || !is_auto;
-    S->mode = is_auto ? "auto, up to 8192" : mode;
+    S->mode = is_auto ? "auto, up to " + std::to_string(auto_max) : mode;
     const auto pick = S->choose(S->lend_pct);
     const int64_t T = pick.first;
     if (T == 0) {

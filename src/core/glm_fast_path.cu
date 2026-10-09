@@ -1367,11 +1367,14 @@ bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
     // GPU's.  Unpinned, the parts' pools (half the vCPUs each) shared the cores: a part works while the other's idle
     // workers spin, and the 2-socket Xeon's 3090 + 5060 Ti split took 0.28 ms an expert where one GPU's pool took 0.15
     // (and with MTP drafting both parts run at once).  The RAM tier stays interleaved (one socket reading only its own
-    // memory: 54 GB/s, interleaved 77).  STRATA_GLM_CPU_PIN=0: unpinned (A/B).
+    // memory: 54 GB/s, interleaved 77).  By default only on a host with two NUMA nodes or more, where it measured
+    // faster; on one node the unpinned pools sharing every core were (two V100s, one 14-core Xeon: 25.8 tok/s against
+    // 24.7 pinned).  STRATA_GLM_CPU_PIN=1 / 0 pins / unpins on any host.
     std::vector<int> pin_cpus;
     int pin_node = -1;
     const char* pin_env = getenv("STRATA_GLM_CPU_PIN");
-    if (n_parts_ >= 2 && threads > 0 && !(pin_env != nullptr && std::atoi(pin_env) == 0)) {
+    const bool pin = pin_env != nullptr && pin_env[0] ? std::atoi(pin_env) != 0 : numa_nodes().size() >= 2;
+    if (n_parts_ >= 2 && threads > 0 && pin) {
         std::vector<int> gpu_node;
         for (int d : split_devs_) gpu_node.push_back(gpu_numa_node(d));
         int spare = 4;
