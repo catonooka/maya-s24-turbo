@@ -7,6 +7,7 @@
 #include "strata/kernels/glm_fast.hpp"
 #include "strata/kernels/cpu/native_expert.hpp"
 #include "glm_memory.hpp"
+#include "glm_layer_graphs.hpp"
 
 #include "ggml.h"
 
@@ -399,6 +400,8 @@ struct Glm5Model::FastState {
     int ram_slack = 0;           // extra RAM-tier slots per MoE layer (STRATA_GLM_RAM_SLACK; default 16 resident)
     // ---- STRATA_GLM_PROF=1: a cudaEvent after every launch, the gaps summed per kernel name (debug only)
     bool prof_on = false;
+    bool kda_graph_on = false;   // experimental, single-device ordinary decode only
+    glmfast::LayerGraphs kda_graphs;
     std::vector<cudaEvent_t> pev;
     std::vector<const char*> pname;
     size_t pn = 0;

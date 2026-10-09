@@ -1999,6 +1999,12 @@ void Glm5Model::fast_destroy() {
                      100.0 * (double) spec_hits_ / (double) spec_steps_);
     if (F->cs) cudaStreamSynchronize(F->cs);
     if (F->copy) cudaStreamSynchronize(F->copy);
+    if (F->kda_graphs.captures || F->kda_graphs.replays)
+        std::fprintf(stderr, "glm KDA graphs: %llu captures, %llu replays, %llu invalidations\n",
+                     (unsigned long long) F->kda_graphs.captures,
+                     (unsigned long long) F->kda_graphs.replays,
+                     (unsigned long long) F->kda_graphs.invalidations);
+    F->kda_graphs.clear();   // before the graph's buffers and streams are freed
     for (auto& R : F->rc)
         if (R.base && R.registered) numa_pinned_free(R.base, (size_t) R.n * R.stride);
         else if (R.base) cudaFreeHost(R.base);
@@ -3178,9 +3184,15 @@ bool Glm5Model::fast_layers(int64_t p, bool hop_in, std::string& err) {
     bool pf_pending = false;
     float* Rc = state_;
     float* Ro = state_ + (int64_t) g.hc * g.n_embd;
+    const char* graph_opt = getenv("STRATA_GLM_KDA_GRAPH");
+    const bool graphs = graph_opt && std::atoi(graph_opt) != 0 && n_parts_ == 1 && !hop_in &&
+                        mtp_il_ < 0 && !F->prof_on && !dumps && F->max_pf == 0 && F->n_ahead == 0 &&
+                        getenv("GLM_DUMP_H") == nullptr;
+    F->kda_graph_on = graphs;
     if (F->prof_on) F->mark("start");
     for (int il = l0_; il < l1_; ++il) {
         const auto& Ly = F->L[(size_t) il];
+        const auto body = [&]() -> bool {
         // ---- the attention-side read (fused with the previous FFN's write)
         gf::HcArgs h;
         h.block_out = il == l0_ ? nullptr : F->ffn;
@@ -3288,6 +3300,22 @@ bool Glm5Model::fast_layers(int64_t p, bool hop_in, std::string& err) {
             if (!fast_moe(il, pf_pending, err)) return false;
         }
         if (dumps) fast_dump(s, "ffn_out-" + std::to_string(il), F->ffn, g.n_embd);
+        return true;
+        };
+        if (graphs && Ly.recr) {
+            bool replayed = false;
+            const glmfast::LayerGraphs::Key key{F->cpu_plan, Rc, Ro};
+            if (!F->kda_graphs.enqueue(il, key, s, F->expected, Ly.moe ? 1 : 0, body, replayed, err))
+                return false;
+            // Capture executes the host pointer swaps; replay only executes device
+            // work. Maintain the identical residual convention in both cases.
+            if (replayed) {
+                if (il != l0_) std::swap(Rc, Ro);
+                std::swap(Rc, Ro);
+            }
+        } else if (!body()) {
+            return false;
+        }
     }
     // the last layer's write half: R (in the OTHER buffer) = post x ffn + comb . R
     gf::hc_post(F->ffn, Rc, F->post, F->comb, g.n_embd, Ro, s);
