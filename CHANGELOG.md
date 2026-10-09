@@ -4,6 +4,64 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.0.27 - 2026-10-09
+
+The setup and Maya get a screen of their own in the terminal, the crash after a long prompt is fixed, a stuck prompt
+ends with an error instead of waiting forever, and Maya builds on Windows again.
+
+- **A screen of its own** (#58 by @needmorevram): in a terminal, the setup's 8 steps are tabs, the questions are
+  arrow-key menus, and the compile and the download show their progress. Maya then runs on the same screen, with
+  a loading view while the experts warm up, a dashboard of the Monitor's numbers and its log.
+  - `./setup.sh`, `./maya.sh`, `START-MAYA.bat` and `run-maya-<model>.sh` all open it.
+  - Its library (Textual) ships with Maya as 9 pure-Python wheels in `third_party/wheels`, byte-identical to
+    PyPI's, and goes into `.venv` with nothing downloaded.
+  - `--plain`, a pipe or a service keeps the plain text exactly as before, and `--yes` keeps a plain setup.
+- **No more "illegal memory access" after a long prompt, and no more 0xC0000005 on Windows / AMD** (#39 by
+  @boxwrench). Three races in the expert tiers, shared by NVIDIA and AMD:
+  - the pinned buffers of the expert tables' updates were rewritten while their copy to the GPU was still in
+    flight;
+  - a background move of an expert could land in a VRAM slot that a prompt was borrowing at the same moment;
+  - a route of NaN scores indexed the expert tables. It now fails that request with an error, and the engine
+    goes on.
+  - Confirmed on an RTX 3090 + 3060 with every RAM-tier expert on the CPU (#50: the 8K prompt after decoding
+    crashed, now it runs), and on Windows with an RX 7900 XTX (#53: 5 crashes in 8 sessions, now 0 in 8).
+- **A stuck prompt ends** (#40): the engine's watchdog now watches Maya's GLM engine too. A request that finishes
+  no prompt layer and no token for 3 minutes ends the engine with an error that names where it stopped (on Windows
+  also `strata-stall-<pid>.dmp`, every thread's stack), and the next request starts it again. Before, a prompt that
+  stalled with the GPU idle waited forever. `STRATA_WATCHDOG_S` sets the time; `0` turns it off.
+- **Windows builds again** (#54 by @jerem91150, the same fix as #55 by @noahark): `--kv int8` called `setenv`,
+  which Windows' C library doesn't have.
+- **Thinking off stays off** (#54): GLM-5.3's template opens a thinking block even when thinking is off, so the
+  answer could land inside it. The server now closes it. This applies to every GPU.
+- **AMD**:
+  - Windows: `tools\hip\build_maya_windows.bat` builds the engine with TheRock's ROCm wheels (#54).
+  - RDNA4 prompts +8-10% (#38 by @boxwrench): a wave32 WMMA attention kernel, the default on R9700 / RX 9070.
+  - `STRATA_GLM_DISK_QD` goes up to 32 reads in flight (#54). The default stays 2.
+- **One GPU skips the last layer's unused outputs in a prompt** (#61 by @boxwrench): +1% prefill (reading the
+  prompt), the same output. `STRATA_GLM_PREFILL_TAIL_SKIP=0` turns it off.
+- **Robustness** (#62 by @needmorevram):
+  - The embedding rows of F16, BF16, Q2_K, Q4_1 and Q5_1 GGUFs are found (every token read row 0 before). The
+    published Maya models are unaffected.
+  - A prompt whose staging events cannot be created runs token by token instead of failing.
+  - Damaged image-embedding files and vision measurements are refused instead of ending the engine or the
+    server.
+- **Switch chats while an answer is written** (#66 by @needmorevram): another chat, or a new one, opens; the
+  answer goes on in its own chat and shows again when that chat is opened. Esc stops it only in its own chat.
+- **A setup for another context keeps your tuning** (#57): it used the engine's defaults until `--calibrate` ran
+  again. It now takes the settings tuned at the nearest context.
+- Checked on 1x and 2x Tesla V100, and on Windows:
+  - the builds and the parity tests, and the engine's Windows build (MSVC with CUDA 12.8);
+  - identical greedy tokens with the CPU lane off, on one GPU and on two, and with the KDA graphs on;
+  - #62's and #59's tests;
+  - #50's sequence (every RAM-tier expert on the CPU, answers, then 2K and 8K prompts) on one GPU and on two;
+  - the watchdog: a forced stall ends with an error that names its stage, and the next request is answered. A
+    10-second watchdog never fired over long prompts and decode;
+  - decode and prefill (reading the prompt) the same at the defaults, prefill +1% on one GPU (#61);
+  - the server end to end: answers, a picture, thinking, context reloads, a graceful stop;
+  - #58's screen in a real terminal, with its tests on Linux and Windows, and #66 in a browser against the
+    running model;
+  - the GitHub checks.
+
 ## v1.0.26 - 2026-10-09
 
 Documentation.
