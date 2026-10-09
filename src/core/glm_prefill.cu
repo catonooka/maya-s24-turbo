@@ -1370,7 +1370,8 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
     const auto prestage = [&](int il) {
         S->pre_layer = -1;
         S->pre_e.clear();
-        if (S->pbuf == nullptr || T < kPreMinT || il >= l1_ || !F->L[(size_t) il].moe || F->layer_rc[(size_t) il] < 0)
+        if (S->pbuf == nullptr || T < kPreMinT || il >= l1_ || !F->L[(size_t) il].moe || F->layer_rc[(size_t) il] < 0 ||
+            (tail_skip && il == g.n_layers - 1))   // the skipped terminal FFN reads no experts
             return;
         const auto& Ly = F->L[(size_t) il];
         const auto& P = F->lp[(size_t) il];
