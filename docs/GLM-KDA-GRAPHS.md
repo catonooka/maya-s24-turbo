@@ -39,7 +39,7 @@ full native/quality result is claimed. The full v1.0.21 stock-oracle matrix was
 deliberately interrupted after the synthetic gates to prioritize quick user-requested
 screens; that interruption is not a numerical-parity pass or failure. Synthetic
 graph checks passed on the rig, but current-main actual-pack and quality gates remain
-pending. Keep the PR a draft. Historical v1.0.16 gains and the chart's progress
+pending and must be completed before merge or adoption. Historical v1.0.16 gains and the chart's progress
 from a user-reported ~11 tok/s starting point are not this PR's isolated gain.
 
 ## Native validation
