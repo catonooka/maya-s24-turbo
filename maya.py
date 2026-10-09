@@ -79,8 +79,9 @@ HF = "https://huggingface.co/{repo}/resolve/{revision}/{path}"
 # The models the installer can download: Project Maya's own quants, made from Z.ai's FP8 release (their model card
 # has the measurements against it).
 # Another glm5-next GGUF can be used with --gguf-dir (experimental).  "folder": the files' folder in the repo ("" =
-# its top).  "file": the names on Hugging Face, with the quant label its file list groups them by; "was": the names
-# before that label (v1.0.18 and earlier) - a download under them is used as it is.  "sha256" per file name (the
+# its top).  "file": the names on Hugging Face, with the quant label its file list groups (and adds up) them by -
+# one label per model; "was": the names they had there before (v1.0.18 and earlier: no label; v1.0.19: Maya-S24 as
+# IQ2_XXS, which Hugging Face added to Maya-S's) - a download under them is used as it is.  "sha256" per file name (the
 # Hugging Face one): every download is verified.  "vision": the image encoder's files (the mmproj,
 # made from the official vision tower, and the tokenizer it reads its markers with) - from "repo" / "revision" when
 # it names them, else the model's own repo.
@@ -109,14 +110,15 @@ MODELS = {
                  "24 GB cards hold more experts (decode about 14% faster there, 11% on 32 GB), close to Maya-S in "
                  "quality",
         "repo": "peasantsmith/GLM-5.3-Flash-Maya-GGUF", "revision": "main", "folder": "Maya-S24",
-        "file": "GLM-5.3-Flash-Maya-S24-IQ2_XXS-{i:05d}-of-{n:05d}.gguf",
-        "was": "GLM-5.3-Flash-Maya-S24-{i:05d}-of-{n:05d}.gguf", "shards": 3, "download_gb": 94.7,
+        "file": "GLM-5.3-Flash-Maya-S24-IQ2_XXS_S-{i:05d}-of-{n:05d}.gguf",
+        "was": ["GLM-5.3-Flash-Maya-S24-IQ2_XXS-{i:05d}-of-{n:05d}.gguf",
+                "GLM-5.3-Flash-Maya-S24-{i:05d}-of-{n:05d}.gguf"], "shards": 3, "download_gb": 94.7,
         "sha256": {
-            "GLM-5.3-Flash-Maya-S24-IQ2_XXS-00001-of-00003.gguf":
+            "GLM-5.3-Flash-Maya-S24-IQ2_XXS_S-00001-of-00003.gguf":
                 "3dc347757686c1435eae36c4872f5c151191cc5063bc188ce699b97700aae076",
-            "GLM-5.3-Flash-Maya-S24-IQ2_XXS-00002-of-00003.gguf":
+            "GLM-5.3-Flash-Maya-S24-IQ2_XXS_S-00002-of-00003.gguf":
                 "4bd445da3a0128a9c5b32228c924e0a622aa4a132c7a8dc9a2c207a4beea8e34",
-            "GLM-5.3-Flash-Maya-S24-IQ2_XXS-00003-of-00003.gguf":
+            "GLM-5.3-Flash-Maya-S24-IQ2_XXS_S-00003-of-00003.gguf":
                 "a6fd4e88007ac49b431c7d02be34e43ab7a09224d53a0c52782327613cb41917"},
         "vision": {
             "folder": "vision", "mmproj": "mmproj-GLM-5.3-Flash-F16.gguf", "vocab": "GLM-5.3-Flash-vocab.gguf",
@@ -131,7 +133,7 @@ MODELS = {
                  "Z.ai's FP8 release",
         "repo": "peasantsmith/GLM-5.3-Flash-Maya-GGUF", "revision": "main", "folder": "Maya-M",
         "file": "GLM-5.3-Flash-Maya-M-IQ2_S-{i:05d}-of-{n:05d}.gguf",
-        "was": "GLM-5.3-Flash-Maya-M-{i:05d}-of-{n:05d}.gguf", "shards": 3, "download_gb": 116.0,
+        "was": ["GLM-5.3-Flash-Maya-M-{i:05d}-of-{n:05d}.gguf"], "shards": 3, "download_gb": 116.0,
         "sha256": {
             "GLM-5.3-Flash-Maya-M-IQ2_S-00001-of-00003.gguf":
                 "3ac0f066ec45af3432d59b33de49bdfb29156432b627240b35769c7d02cc6c02",
@@ -152,7 +154,7 @@ MODELS = {
                  "Z.ai's FP8 release",
         "repo": "peasantsmith/GLM-5.3-Flash-Maya-GGUF", "revision": "main", "folder": "Maya-L",
         "file": "GLM-5.3-Flash-Maya-L-IQ3_S-{i:05d}-of-{n:05d}.gguf",
-        "was": "GLM-5.3-Flash-Maya-L-{i:05d}-of-{n:05d}.gguf", "shards": 4, "download_gb": 156.3,
+        "was": ["GLM-5.3-Flash-Maya-L-{i:05d}-of-{n:05d}.gguf"], "shards": 4, "download_gb": 156.3,
         "sha256": {
             "GLM-5.3-Flash-Maya-L-IQ3_S-00001-of-00004.gguf":
                 "5fc82a6c9af4c6898e8d45cf32964f9a7b10640caf51e82be735d2d50e9f3d45",
@@ -561,34 +563,41 @@ def choose_context(a, prev_ctx) -> int:
     return CONTEXTS[int(pick) - 1]
 
 
-def shard_names(m: dict, key: str = "file") -> list:
-    return [m[key].format(i=i, n=m["shards"]) for i in range(1, m["shards"] + 1)] if m.get(key) else []
+def shard_names(m: dict, pattern: str | None = None) -> list:
+    return [(pattern or m["file"]).format(i=i, n=m["shards"]) for i in range(1, m["shards"] + 1)]
+
+
+def old_names(m: dict) -> list:
+    """The names a model's files had on Hugging Face before ("was", newest first), each as its list of shards."""
+    return [shard_names(m, p) for p in m.get("was") or []]
 
 
 def local_shards(m: dict, d: Path) -> list:
-    """The model's files in d: under their names before the quant label when any of those is there (a download
-    started or finished before v1.0.19 - its run config points at them), else under the names on Hugging Face."""
-    old = [d / n for n in shard_names(m, "was")]
-    if any(p.exists() for p in old):
-        return old
+    """The model's files in d: under an earlier name when any of its files is there (a download started or finished
+    under it - its run config points at them), else under the name on Hugging Face."""
+    for names in old_names(m):
+        if any((d / n).exists() for n in names):
+            return [d / n for n in names]
     return [d / n for n in shard_names(m)]
 
 
 def hf_name(m: dict, local: Path) -> str:
-    """A local file's name on Hugging Face (a file under its old name downloads from, and checks against, the new)."""
-    was = shard_names(m, "was")
-    return shard_names(m)[was.index(local.name)] if local.name in was else local.name
+    """A local file's name on Hugging Face (a file under an earlier name downloads from, and checks against, it)."""
+    for names in old_names(m):
+        if local.name in names:
+            return shard_names(m)[names.index(local.name)]
+    return local.name
 
 
 def download_dir(models: Path, quant: str) -> Path:
     """A download's folder: <models folder>/<quant> (--models-dir).  Files already there are used where they are:
     in that folder, in <models folder>/glm-5.3-flash-<quant> (an earlier version's downloads), or straight in the
-    models folder - under their names on Hugging Face or the ones before the quant label."""
+    models folder - under their names on Hugging Face or an earlier one."""
     m = MODELS[quant]
     d = models / quant
     for c in (d, models / f"glm-5.3-flash-{quant}".lower(), models):
-        for names in (shard_names(m), shard_names(m, "was")):
-            if names and all((c / n).exists() for n in names):
+        for names in [shard_names(m)] + old_names(m):
+            if all((c / n).exists() for n in names):
                 return c
     return d
 
@@ -996,7 +1005,7 @@ def incomplete(path: Path):
 
 def quant_of(first: Path) -> str:
     for q, mm in MODELS.items():                       # a Maya download, under its name on Hugging Face or its old one
-        if first.name in shard_names(mm)[:1] + shard_names(mm, "was")[:1]:
+        if first.name in [names[0] for names in [shard_names(mm)] + old_names(mm)]:
             return q
     m = re.match(r"GLM-5\.3-Flash-(.+?)(-\d{5}-of-\d{5})?\.gguf$", first.name, re.I)
     return m.group(1) if m else first.parent.name

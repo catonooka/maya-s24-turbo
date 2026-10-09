@@ -90,7 +90,10 @@ class LabelledNames(unittest.TestCase):
         self.assertEqual(maya.shard_names(maya.MODELS["Maya-L"])[0], "GLM-5.3-Flash-Maya-L-IQ3_S-00001-of-00004.gguf")
         self.assertEqual(maya.shard_names(maya.MODELS["Maya-M"])[2], "GLM-5.3-Flash-Maya-M-IQ2_S-00003-of-00003.gguf")
         self.assertEqual(maya.shard_names(maya.MODELS["Maya-S24"])[1],
-                         "GLM-5.3-Flash-Maya-S24-IQ2_XXS-00002-of-00003.gguf")
+                         "GLM-5.3-Flash-Maya-S24-IQ2_XXS_S-00002-of-00003.gguf")
+        # one label per model: Hugging Face adds up the files that share one (Maya-S is IQ2_XXS)
+        labels = [maya.shard_names(m)[0].split("-")[-4] for m in maya.MODELS.values()]
+        self.assertEqual(len(labels), len(set(labels)), labels)
 
     def test_a_fresh_folder_downloads_the_new_names(self):
         m = maya.MODELS["Maya-L"]
@@ -104,7 +107,7 @@ class LabelledNames(unittest.TestCase):
             d = Path(d)
             (d / "GLM-5.3-Flash-Maya-M-00001-of-00003.gguf").write_bytes(b"part")   # an interrupted old download
             shards = maya.local_shards(m, d)
-            self.assertEqual([s.name for s in shards], maya.shard_names(m, "was"))
+            self.assertEqual([s.name for s in shards], maya.old_names(m)[0])
             self.assertEqual(maya.hf_name(m, shards[1]), "GLM-5.3-Flash-Maya-M-IQ2_S-00002-of-00003.gguf")
             self.assertIn(maya.hf_name(m, shards[1]), m["sha256"])        # checked against the published hash
 
@@ -113,16 +116,25 @@ class LabelledNames(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             models = Path(d)
             (models / "Maya-S24").mkdir()
-            for n in maya.shard_names(m, "was"):
+            for n in maya.old_names(m)[-1]:                        # the names before any label
                 (models / "Maya-S24" / n).write_bytes(b"x")
             self.assertEqual(maya.download_dir(models, "Maya-S24"), models / "Maya-S24")
             self.assertTrue(all(p.exists() for p in maya.local_shards(m, models / "Maya-S24")))
 
-    def test_both_names_are_the_same_model(self):
+    def test_v1019s_s24_name_is_kept_too(self):
+        m = maya.MODELS["Maya-S24"]
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "GLM-5.3-Flash-Maya-S24-IQ2_XXS-00003-of-00003.gguf").write_bytes(b"x")
+            shards = maya.local_shards(m, d)
+            self.assertEqual(shards[0].name, "GLM-5.3-Flash-Maya-S24-IQ2_XXS-00001-of-00003.gguf")
+            self.assertEqual(maya.hf_name(m, shards[0]), "GLM-5.3-Flash-Maya-S24-IQ2_XXS_S-00001-of-00003.gguf")
+
+    def test_every_name_is_the_same_model(self):
         for q in ("Maya-S24", "Maya-M", "Maya-L"):
             m = maya.MODELS[q]
-            for key in ("file", "was"):
-                self.assertEqual(maya.quant_of(Path(maya.shard_names(m, key)[0])), q)
+            for names in [maya.shard_names(m)] + maya.old_names(m):
+                self.assertEqual(maya.quant_of(Path(names[0])), q)
         self.assertEqual(maya.quant_of(Path("GLM-5.3-Flash-Maya-S-v2-IQ2_XXS-00001-of-00003.gguf")),
                          "Maya-S-v2-IQ2_XXS")
 
