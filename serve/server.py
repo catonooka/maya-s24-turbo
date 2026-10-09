@@ -514,11 +514,30 @@ class StrataEngine:
             if got.startswith("ERR"):
                 raise ValueError(got[4:].strip())
 
+    def wrap(self):
+        """The server is stopping: a request still thinking closes its reasoning at the next token and answers."""
+        try:
+            self.proc.stdin.write("WRAP\n")
+            self.proc.stdin.flush()
+        except OSError:
+            pass
+
+    def stop(self):
+        """End the request in flight at its next step (its answer is cut there)."""
+        if self.can_stop:
+            try:
+                self.proc.stdin.write("STOP\n")
+                self.proc.stdin.flush()
+            except OSError:
+                pass
+
     def close(self):
         """QUIT, then wait for the engine to end: with kept conversations (STRATA_GLM_SLOT_KEEP) it first writes the
         one it holds, so it gets STRATA_ENGINE_QUIT_S seconds (50; llama-swap's unloadTimeout should exceed it)."""
         wait = float(os.environ.get("STRATA_ENGINE_QUIT_S", "50") or 50)
         try:
+            if self.can_stop:                           # a request in flight ends at its next step first: QUIT
+                self.proc.stdin.write("STOP\n")         # alone lets it run to max_tokens before the engine ends
             self.proc.stdin.write("QUIT\n")
             self.proc.stdin.flush()
             end = time.monotonic() + wait
@@ -838,6 +857,7 @@ class Service:
         self.shared = {}                              # the web app's Chat settings for every client (POST /settings)
         self.shared_path = None                       # where they are kept between starts (next to the config)
         self.fifo = threading.Lock()
+        self.stopping = False            # the server is ending: a request still queued is refused, not started
         self.embeddings = threading.local()           # the current request's image embeddings file (GENI)
         self.api_key = ""                              # when set, /v1/* needs it (Bearer or x-api-key)
         self.status = {"busy": False, "queued": 0}      # GET /status: what the model is doing right now
@@ -1160,6 +1180,8 @@ class Service:
             with self.fifo:
                 with self.status_lock:
                     self.status["queued"] -= 1
+                if self.stopping:
+                    raise ValueError("the server is stopping: send the request again once the model is back")
                 if self.vision is not None and self.vision.owed:   # memory an encode borrowed, not back yet
                     self.vision.settle()
                 if hasattr(self.engine, "alive") and not self.engine.alive():
@@ -2503,6 +2525,25 @@ def main() -> int:
         if os.name != "nt":
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
         httpd.shutdown()
+        # a request in progress is wrapped up, not dropped: its thinking is closed and it answers, for up to
+        # STRATA_ENGINE_WRAP_S seconds (40), so the client still gets an answer and the turn ends; past that it is cut.
+        # Requests still queued are refused. Then the engine ends (and keeps its conversation).
+        svc.stopping = True
+        wrap_s = float(os.environ.get("STRATA_ENGINE_WRAP_S", "40") or 0)
+        if wrap_s > 0 and hasattr(engine, "wrap") and svc.status.get("busy"):
+            print(f"[strata] stopping: the request in progress closes its thinking and answers (up to {wrap_s:.0f} s)",
+                  flush=True)
+            engine.wrap()
+            if svc.fifo.acquire(timeout=wrap_s):
+                svc.fifo.release()
+                print("[strata] stopping: the request in progress finished", flush=True)
+            else:
+                print(f"[strata] stopping: the answer was not done after {wrap_s:.0f} s - cut there", flush=True)
+                engine.stop()
+                # the cut request ends at its next step (DONE, or an error if the engine died): only then QUIT, so its
+                # last lines are read by the request and not by close()
+                with svc.fifo:
+                    pass
         if hasattr(engine, "close"):
             engine.close()
         if vision:

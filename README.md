@@ -237,6 +237,7 @@ These settings change what the engine chooses (put them in the config with `--en
 | `STRATA_ENGINE_STALL_S` | 90 | the server: an engine silent this long that also used no CPU, disk or GPU in that time is stuck - it is ended, the request gets an error and the next request starts it again (a silent engine that is working is never ended); `0` = off |
 | `STRATA_HTTP_BACKLOG`, `STRATA_MAX_BODY_MIB` | 256, 256 | the server: connections that may wait to be accepted, and the largest request body in MiB (a larger one gets a 413 before it is read) |
 | `STRATA_ENGINE_QUIT_S` | 50 | the server: how long the engine gets to end (and keep its conversation, with `STRATA_GLM_SLOT_KEEP`) after a stop - SIGTERM is handled like Ctrl+C, a second one is ignored; a supervisor's own grace (llama-swap's `unloadTimeout`) should exceed it |
+| `STRATA_ENGINE_WRAP_S` | 40 | the server: on a stop, a request in progress is wrapped up instead of dropped - its thinking is closed at once and it answers for up to this long (then it is cut), so the client gets an answer and the turn ends; requests still queued are refused. Keep it plus the engine's end inside the supervisor's grace (llama-swap's `unloadTimeout`); `0` = cut at once |
 
 **A routing profile for a GGUF of your own.** At start the engine fills VRAM with each layer's most used experts:
 your usage file (above) blended with the pack's profile, `expert_counts.txt` / `expert_prior.txt`. To make one, start

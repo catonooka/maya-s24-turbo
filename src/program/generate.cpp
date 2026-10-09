@@ -959,6 +959,8 @@ static int glm_pack_generate(const Options& o) {
     // still running.  read(2), not std::cin - glibc's exit() flushes stdio and waits on stdin's lock,
     // which getline holds while it waits for input.
     std::atomic<bool> stop_req{false}, quit_req{false};
+    // WRAP (the server is stopping): a request still thinking closes its reasoning at the next token and answers
+    std::atomic<bool> wrap_req{false};
     std::mutex in_mu;
     std::condition_variable in_cv;
     std::deque<std::string> in_lines;
@@ -993,7 +995,11 @@ static int glm_pack_generate(const Options& o) {
             while (getline_fd(l)) {
                 if (!l.empty() && l.back() == '\r') l.pop_back();
                 if (l == "STOP") { stop_req.store(true); continue; }
-                if (l == "QUIT") quit_req.store(true);   // cancel an in-flight request AND queue the line:
+                if (l == "WRAP") { wrap_req.store(true); continue; }
+                if (l == "QUIT") {                       // cancel an in-flight request AND queue the line:
+                    quit_req.store(true);
+                    stop_req.store(true);                // (the decode checks stop_req; reset by the next GEN)
+                }
                 std::lock_guard<std::mutex> lk(in_mu);   // a GEN written before QUIT must still run (pipes)
                 in_lines.push_back(l);
                 in_cv.notify_one();
@@ -1398,7 +1404,7 @@ static int glm_pack_generate(const Options& o) {
         const auto on_token = [&](int tok) -> bool {
             std::printf("T %d\n", tok);
             ++produced;
-            if (in_think && (tok == req_think_end || produced >= req_think_budget)) {
+            if (in_think && (tok == req_think_end || produced >= req_think_budget || wrap_req.load())) {
                 if (tok != req_think_end) model.force_next(req_think_end);   // the budget: the next token closes it
                 in_think = false;
             }
