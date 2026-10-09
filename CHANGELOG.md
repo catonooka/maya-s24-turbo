@@ -4,6 +4,64 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.0.21 - 2026-10-09
+
+Eight community pull requests, with every default fitted to the machine it runs on:
+- a split search and prompt chunks sized from the expert pool;
+- a smaller KV cache at long context (decode 6-8% faster at 128K);
+- pictures from the web app read again;
+- a loop guard, and a thinking budget that leaves room for the answer;
+- speculative decode on three GPUs or more;
+- CPUs without AVX2;
+- conversations that outlive a restart.
+
+- **The layer split and prompt chunks (#44 by @needmorevram):**
+  - `--layer-split auto` prices every placement on 2-4 GPUs before loading (each card's room for experts, the share
+    of routes they cover, its memory bandwidth, the host's RAM speed) and takes the fastest.
+  - `--prefill auto | N | 0` sizes the prompt chunk from what each card's expert pool can lend: up to 32768 tokens on
+    one GPU and 8192 on a split, each the faster there. One V100 reads 26K-token prompts at 562 tok/s; two V100s at
+    719.
+  - On hosts with two NUMA nodes or more, each GPU's CPU lane runs on CPUs of its own (2x Xeon Gold 6152: decode
+    15.4 -> 19.8 tok/s). On one node it stays off, which measured faster there. `STRATA_GLM_CPU_PIN=1/0` forces it.
+  - The RAM tier takes huge pages only when free 2 MB blocks cover it, so a second card's tier no longer waits over
+    10 minutes in kernel compaction.
+- **A smaller KV cache (#41 by @merbanan):**
+  - The attention indexer keeps its keys for the last 8,256 positions instead of the whole context, with the same
+    output. At 128K that is 1.28 GB more VRAM for experts. Decode: one V100 with Maya-S24 18.2 -> 19.4 tok/s; two
+    V100s with Maya-S 26.3 -> 28.2.
+  - `STRATA_GLM_KV_INT8=1` (opt-in) stores the attention latents in INT8: another 0.65 GB, 19.6 tok/s on the same V100.
+    Its KL divergence from the FP8 model is the same as without it (0.436 against 0.431).
+  - Conversation slots saved by earlier versions are read again once.
+- **Pictures from the web app (#42 by @tanutanu56):** the engine received them without their image data, so the model
+  answered about a black picture. Fixed.
+- **Loop guard (#33 by @ksanislo):** a reply that repeats one short pattern for 256 tokens while thinking (1024 while
+  answering) is closed: the thinking ends, a tool call's argument ends, or else the turn. `STRATA_GLM_LOOP_THINK` /
+  `_ANSWER` set the lengths; `0` = off.
+- **Thinking budget (#34 by @ksanislo):** the budget leaves the answer at least a quarter of the request's `max_tokens`
+  (and at least 1024 tokens), so a small `max_tokens` no longer ends in thinking with no answer.
+- **Speculative decode on three GPUs or more (#31 by @ksanislo):** the parts split into a head and a tail group (4x
+  Tesla T4: decode 15.0 -> 22.6 tok/s). Two GPUs: the same as before.
+- **CPUs without AVX2 (#32 by @ksanislo):** the engine runs there; its CPU lane uses ggml's kernels. The setup warns
+  instead of refusing.
+- **Conversations that outlive a restart (#35 by @ksanislo):** `STRATA_GLM_SLOT_KEEP=1` (opt-in) keeps the saved
+  conversations across starts. A stop (SIGTERM, Ctrl+C) lets the running answer finish its thinking and answer first.
+- **Reloads wait for the GPUs:** a context reload, or a restart after a crash, starts the new engine only once the GPUs
+  have freed the old one's memory. The driver releases it a few seconds after the process ends, and the split search
+  measures the cards before anything loads. The server waits until no GPU lists the old engine (NVML), or 5 s where it
+  can't tell.
+- **INT8 shown as such:** with `STRATA_GLM_KV_INT8=1`, the engine reports `kv=int8` and About says "8-bit (INT8)
+  attention cache".
+- **Housekeeping:**
+  - No third-party quant names in the tree.
+  - `setup.py` keeps only the helpers Maya's installer uses.
+  - The start line names the thinking level GLM gets.
+- Checked on 1x and 2x Tesla V100:
+  - the 239 Python tests and the CUDA parity tests;
+  - greedy tokens, identical with and without the new KV cache;
+  - prompts, decode, and KL against FP8;
+  - the server end to end: an exact answer, a picture through the web app's path, a small `max_tokens` with
+    thinking, the context reload 128K -> 16K -> 128K, and a graceful stop.
+
 ## v1.0.20 - 2026-10-09
 
 - Housekeeping: Maya-S24's files on Hugging Face are labelled IQ2_XXS_S, apart from Maya-S; the files themselves are
