@@ -1388,8 +1388,15 @@ class Service:
                 # the thinking budget goes to the engine with the request: a reasoning block still open after that many
                 # tokens is closed there (its next token is </think>) and the answer follows in the same decode
                 in_think = bool(thinking) and self.think_end_id is not None and self.think_budget > 0
+                # never let the reasoning use the whole output: a request whose max_tokens is reached while still
+                # thinking ends with no answer at all.  The budget is clamped to leave a quarter of max_tokens (at
+                # least 1024 tokens) for the answer; STRATA_GLM_THINK_RESERVE=<tokens> sets that floor
+                think_budget = self.think_budget
+                if in_think and max_new:
+                    reserve = max(int(os.environ.get("STRATA_GLM_THINK_RESERVE", "1024") or 1024), int(max_new) // 4)
+                    think_budget = max(1, min(think_budget, int(max_new) - reserve))
                 if in_think:
-                    sampling = {**(sampling or {}), "_think_budget": self.think_budget, "_think_end": self.think_end_id}
+                    sampling = {**(sampling or {}), "_think_budget": think_budget, "_think_end": self.think_end_id}
                 gen = self.engine.generate(ids, max_new, sampling, cancel, embeddings=emb) if emb else \
                     self.engine.generate(ids, max_new, sampling, cancel)
                 for ev in pre_events:                   # a required call's opening (prepare put it in the prompt)
@@ -1403,8 +1410,8 @@ class Service:
                         n += 1
                         if in_think and t == self.think_end_id:
                             in_think = False
-                            if n == self.think_budget + 1:
-                                print(f"[strata] thinking reached its budget ({self.think_budget} tokens): closed, "
+                            if n == think_budget + 1:
+                                print(f"[strata] thinking reached its budget ({think_budget} tokens): closed, "
                                       "answering", flush=True)
                         if t in self.stop_ids:
                             finish = "stop"
