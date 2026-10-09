@@ -459,7 +459,7 @@ def choose_gpus(a, found) -> list:
                   [(label, "recommended" if i == 0 else None, None) for i, label in enumerate(labels)], 0,
                   a.yes or a.check,
                   ["(--gpus picks any others, e.g. --gpus 0,2,5; a model with a draft block drafts tokens on two GPUs "
-                   "or more)"] if len(best) > 2 else [])
+                   "or more)"] if len(best) > 2 and S.UI is None else [])   # (the plain setup's; not on the screen)
     return opts[pick]
 
 
