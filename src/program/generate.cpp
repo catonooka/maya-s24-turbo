@@ -2113,7 +2113,7 @@ int main(int argc, char** argv) {
     // mistake worth saying out loud.
     if (!o.glm_pack.empty()) {
         // --kv int8 on the GLM path: the INT8 latent cache (Glm5Model::lat_q8_, read at load)
-        if (o.kv == "int8") setenv("STRATA_GLM_KV_INT8", "1", 0);
+        if (o.kv == "int8" && std::getenv("STRATA_GLM_KV_INT8") == nullptr) set_env("STRATA_GLM_KV_INT8", "1");
         if (o.pack != "pack/full") {
             std::fprintf(stderr, "strata generate: note: --glm-pack supersedes --pack (%s ignored)\n", o.pack.c_str());
         }
