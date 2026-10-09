@@ -25,6 +25,7 @@ int main(int argc, char** argv) {
     graph_mode(false);
     require(model.load_pack_env(argv[1], std::atoll(argv[2]), err), err);
     require(model.fast() && model.n_parts_ == 1, "requires a single-device fast pack");
+    require(!model.has_mtp(), "MTP must be absent: the graph path deliberately bypasses MTP");
     require(model.set_pcie_share(1.0), "CPU lane unavailable");
     const size_t V = (size_t) model.geometry().n_vocab;
     std::vector<float> logits, direct;
@@ -35,6 +36,13 @@ int main(int argc, char** argv) {
         direct.insert(direct.end(), logits.begin(), logits.end());
     }
     uint64_t comparisons = 0;
+    // Qualify the ordinary snapshot control before attributing a difference to graphs.
+    require(model.snapshot_restore() && model.position() == 16, "control snapshot restore failed");
+    for (int t = 0; t < 48; ++t) {
+        require(model.forward({31 + t % 29}, logits, err), err);
+        require(logits.size() == V && std::memcmp(logits.data(), direct.data() + (size_t) t * V, V * 4) == 0,
+                "ordinary snapshot control is unstable; graph parity not scored");
+    }
     for (int round = 0; round < 3; ++round) {
         require(model.snapshot_restore() && model.position() == 16, "snapshot restore failed");
         graph_mode(true);
@@ -62,6 +70,13 @@ int main(int argc, char** argv) {
     model.reset();
     require(model.set_pcie_share(1.0), "restore plan failed");
     for (int t = 0; t < 16; ++t) require(model.forward({1 + t}, logits, err), err);
+    require(model.snapshot_save(), "reset control snapshot save failed");
+    for (int t = 0; t < 48; ++t) {
+        require(model.forward({31 + t % 29}, logits, err), err);
+        require(logits.size() == V && std::memcmp(logits.data(), direct.data() + (size_t) t * V, V * 4) == 0,
+                "ordinary reset control is unstable; graph parity not scored");
+    }
+    require(model.snapshot_restore() && model.position() == 16, "reset control snapshot restore failed");
     graph_mode(true);
     for (int t = 0; t < 48; ++t) {
         require(model.forward({31 + t % 29}, logits, err), err);

@@ -2,6 +2,7 @@
 #include "../src/core/glm_layer_graphs.hpp"
 #include "strata/kernels/glm_fast.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
