@@ -1465,13 +1465,20 @@ bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
     // (up to 4 of them: a route's RAM-tier experts come several to a call, and one alone leaves most of the pool idle -
     // timed alone, a 40-thread pool's expert took 0.26 ms where a decode's calls ran them at 0.16, and the split
     // sent the 8th of 8 over PCIe, 2.1 ms on the critical path)
-    const uint8_t* cals[4] = {nullptr, nullptr, nullptr, nullptr};
-    int n_cal = 0;
-    for (int s = 0; s < R.n && n_cal < 4; ++s)
+    // Each call takes the next 4 of up to 64 (~480 MB of Maya-S24's 7.5 MB experts): a decode reads its RAM-tier
+    // experts from DRAM, and 4 timed again and again stay in the CPU's L3 - a 7950X (64 MB L3) timed 0.097 ms an
+    // expert where decode ran them at ~0.16 (DRAM-bound, 47 of its 57 GB/s), and the split kept 4 and 5 of a layer's
+    // RAM-tier experts on the CPU: 25.1 / 25.3 tok/s against 26.9 / 27.5 with one of them over PCIe
+    constexpr int kCalSets = 16;
+    std::vector<const uint8_t*> cal_all;
+    for (int s = 0; s < R.n && (int) cal_all.size() < 4 * kCalSets; ++s)
         if (R.st[(size_t) s] == FastState::kRHold && R.key[(size_t) s] / g.n_expert == il_cal)
-            cals[n_cal++] = R.base + (size_t) s * R.stride;
-    const uint8_t* cal = cals[0];
-    if (cal == nullptr) return true;   // nothing in RAM: the lane would never run
+            cal_all.push_back(R.base + (size_t) s * R.stride);
+    if (cal_all.empty()) return true;   // nothing in RAM: the lane would never run
+    const uint8_t* cal = cal_all[0];
+    const int n_cal = (int) std::min<size_t>(4, cal_all.size());
+    const int n_sets = (int) cal_all.size() / n_cal;   // (fewer than 64 held: the sets repeat sooner)
+    auto cal_set = [&](int i) { return cal_all.data() + (size_t) (i % n_sets) * n_cal; };
     void* hp = nullptr;
     if (cudaHostAlloc(&hp, sizeof(gf::CpuAnswer), cudaHostAllocMapped) != cudaSuccess ||
         cudaMalloc((void**) &F->cpu_seq_d, 64) != cudaSuccess) {
@@ -1500,11 +1507,13 @@ bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
     std::vector<float> x((size_t) g.n_embd), out((size_t) g.n_embd);
     for (int i = 0; i < g.n_embd; ++i) x[(size_t) i] = 0.01f * (float) ((i * 37) % 101 - 50);
     const float w4[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    int set = 0;
     for (const auto tw = std::chrono::steady_clock::now();
          std::chrono::steady_clock::now() - tw < std::chrono::milliseconds(100);)
-        fast_cpu_experts(il_cal, n_cal, cals, w4, x.data(), out.data());
+        fast_cpu_experts(il_cal, n_cal, cal_set(set++), w4, x.data(), out.data());
     double c_ms = 0.0;
     for (int rep = 0; rep < 16; ++rep) {
+        const uint8_t* const* cals = cal_set(set++);
         const auto t0 = std::chrono::steady_clock::now();
         fast_cpu_experts(il_cal, n_cal, cals, w4, x.data(), out.data());
         c_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
