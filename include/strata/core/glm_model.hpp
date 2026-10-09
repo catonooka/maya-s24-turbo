@@ -258,6 +258,8 @@ public:
     // kernels' and gave 0 for F16 / BF16 / Q2_K / Q4_1 / Q5_1, so every token read row 0
     const uint8_t* pack_emb_src_ = nullptr;
     int pack_emb_type_ = -1;
+    std::vector<uint8_t> pack_emb_copy_;                   // Windows: token_embd once the shard views are gone
+    void pack_release_views();                             // Windows, fast path: unmap the shards after the load
 
     // ---- M2b: the device expert pool.  Slots of [gate|up|down] rows (the native blob layout),
     // filled on miss by streaming the rows straight out of the mmap'd shards; LFU-with-aging
