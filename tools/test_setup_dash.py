@@ -75,6 +75,15 @@ class Boxes(unittest.TestCase):
         self.assertIn("live · 19,456 routed experts", D.tiers_sub(METRICS).plain)
         self.assertIn("while it writes", text(D.tiers({"engine": {}}, 56)))    # (the mock engine: no tiers)
 
+    def test_the_tiers_advice_fits_on_one_line(self):          # (a word of it on a line of its own: no more)
+        m = {**METRICS, "tiers": {**METRICS["tiers"], "now": {**METRICS["tiers"]["now"], "vram_hit": 0.33,
+                                                                 "ram_fetch": 19.8}}}
+        for width, said in ((120, 0), (92, 1), (42, 2), (30, 2)):
+            out = text(D.tiers(m, width), width + 2).rstrip("\n").split("\n")
+            tip = D.TIPS["ram"][said]
+            self.assertTrue(out[-1].strip() == tip if len(tip) <= width else out[-1].strip().endswith("…"), out[-1])
+            self.assertIn(out[-1].strip()[:20], tip)
+
     def test_gpus_hardware_requests_and_banners(self):
         gpus = text(D.gpus(METRICS))
         for want in ("RTX 5060 Ti", "RTX 3090", "41%", "14.0 / 16 GB", "88 / 180 W", "Gen5 x8", "3,100 MB/s"):

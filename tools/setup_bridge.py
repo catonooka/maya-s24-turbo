@@ -2,6 +2,7 @@
 hand a Bridge what they would print, ask and run; it queues all of it for the screen in order, runs the commands with
 their output on the screen as it comes, and keeps what the terminal gets when the screen closes (summary) and
 maya-setup.log.  Nothing here draws: the screen reads `events`, and answers questions through their Future.
+LoadWatch reads how far Maya's start is from its engine log, for the dashboard's loading box (setup_dash.py).
 """
 from __future__ import annotations
 
@@ -11,10 +12,15 @@ import re
 import signal
 import subprocess
 import threading
+import time
 from concurrent.futures import Future
 from pathlib import Path
 
 TAIL = 40                                               # the output lines a summary keeps of a step that stopped
+# the GLM engine's start, in its log: each GPU's expert tiers warmed up in turn - "glm fast: CUDA2 warming the expert
+# tiers 40% (5.4 of 13.4 GB, 11 s)", then "glm fast: CUDA2 tiers warm: 1152 experts (13.4 GB) in 29 s"
+WARMING = re.compile(r"glm fast: (\S+?)(\d+) warming the expert tiers \d+% \(([\d.]+) of ([\d.]+) GB")
+WARMED = re.compile(r"glm fast: (\S+?)(\d+) tiers warm: \d+ experts \(([\d.]+) GB\)")
 
 
 def curl_meter(line: str):
@@ -37,6 +43,62 @@ def describe(cmd: list) -> str:
     if name.startswith("python") and cmd[1:3] == ["-m", "pip"]:
         return "Installing Python packages"
     return f"Running {Path(cmd[1]).name if name.startswith('python') and len(cmd) > 1 else Path(cmd[0]).name}"
+
+
+class LoadWatch:
+    """How far the model's start is, from the engine log (read from where it stood when the start began): the warm-up
+    of each GPU's expert tiers - the bulk of a start, one GPU after the other - in GB.  `gpus`: the start's, in the
+    order the engine numbers its parts (its CUDA0 is the first); `vram`: each one's GB of VRAM, by its number."""
+
+    def __init__(self, path, gpus, vram=None):
+        self.path, self.gpus, self.vram = path, list(gpus) or [0], dict(vram or {})
+        try:
+            self.pos = os.path.getsize(path) if path else 0
+        except OSError:
+            self.pos = 0
+        self.reset()
+
+    def reset(self) -> None:
+        """A start (or a reload) begins: nothing warm yet."""
+        self.parts, self.t0 = {}, time.monotonic()      # the part's number -> [GB warm, GB in all]
+
+    def read(self) -> None:
+        """The log's new lines (on the screen's thread, once a second: a few KB)."""
+        try:
+            with open(self.path, "rb") as f:
+                f.seek(self.pos)
+                chunk = f.read()
+        except (OSError, TypeError):
+            return
+        cut = chunk.rfind(b"\n") + 1
+        self.pos += cut
+        for line in chunk[:cut].decode("utf-8", "replace").splitlines():
+            if m := WARMING.search(line):
+                self.parts[int(m.group(2))] = [float(m.group(3)), float(m.group(4))]
+            elif m := WARMED.search(line):
+                self.parts[int(m.group(2))] = [float(m.group(3))] * 2
+
+    def total(self) -> tuple:
+        """(the GB the start warms in all, whether it is known): each part's as the engine said; one not started yet
+        as the parts so far per GB of their VRAM, times its own (a 16 GB card after the 3090: 2/3 of its part, not
+        all of it) - without the VRAMs, as their mean."""
+        known = {k: whole for k, (_, whole) in self.parts.items()}
+        waiting = [k for k in range(len(self.gpus)) if k not in known]
+        vram = [self.vram.get(self.gpus[k]) if k < len(self.gpus) else None for k in [*known, *waiting]]
+        if not waiting or not known:
+            return sum(known.values()), not waiting
+        if all(vram):
+            per = sum(known.values()) / sum(vram[:len(known)])
+            return sum(known.values()) + per * sum(vram[len(known):]), False
+        return sum(known.values()) * (1 + len(waiting) / len(known)), False
+
+    def fraction(self):
+        """The share of the start done (None: no engine log to tell)."""
+        if not self.path:
+            return None
+        if not self.parts:
+            return 0.0
+        return min(1.0, sum(done for done, _ in self.parts.values()) / max(self.total()[0], 1e-9))
 
 
 class Bridge:

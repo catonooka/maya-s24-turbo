@@ -5,8 +5,6 @@ own instead: how far the start is (the engine log's warm-up of each GPU's expert
 from __future__ import annotations
 
 import json
-import os
-import re
 import threading
 import time
 import urllib.request
@@ -19,6 +17,7 @@ from textual.app import ComposeResult
 from textual.containers import Center, Horizontal, VerticalScroll
 from textual.widgets import Static
 
+from setup_bridge import LoadWatch
 from setup_look import (ACCENT, ACCENT2, ACCENT_TEXT, DANGER, FAINT, INFO_TEXT, INK, INK_SOFT, MUTED, OK, QUADRANTS,
                         WARN, Card, bar, clock, gradient, mix, title)
 
@@ -30,12 +29,15 @@ DIGITS = {"0": (0x3E, 0x63, 0x73, 0x7B, 0x6F, 0x67, 0x3E, 0x00), "1": (0x0C, 0x0
           "8": (0x1E, 0x33, 0x33, 0x1E, 0x33, 0x33, 0x1E, 0x00), "9": (0x1E, 0x33, 0x33, 0x3E, 0x30, 0x18, 0x0E, 0x00),
           ".": (0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C, 0x00), "-": (0x00, 0x00, 0x00, 0x3F, 0x00, 0x00, 0x00, 0x00),
           "%": (0x00, 0x63, 0x33, 0x18, 0x0C, 0x66, 0x63, 0x00)}
-# the GLM engine's start, in its log: each GPU's expert tiers warmed up in turn - "glm fast: CUDA2 warming the expert
-# tiers 40% (5.4 of 13.4 GB, 11 s)", then "glm fast: CUDA2 tiers warm: 1152 experts (13.4 GB) in 29 s"
-WARMING = re.compile(r"glm fast: (\S+?)(\d+) warming the expert tiers \d+% \(([\d.]+) of ([\d.]+) GB")
-WARMED = re.compile(r"glm fast: (\S+?)(\d+) tiers warm: \d+ experts \(([\d.]+) GB\)")
 BLOCKS = "▁▂▃▄▅▆▇█"
 TIERS = (("ram_fetch", "From RAM", INFO_TEXT), ("disk", "From SSD", WARN), ("promo", "Promoted", ACCENT))   # per token
+TIPS = {   # the Monitor's advice under the tiers, said shorter as the box narrows (one line: the longest that fits)
+    "disk": ("Many experts are read from the SSD for every token: more RAM, a smaller model or a shorter context "
+             "makes answers faster.", "Many experts come from the SSD: more RAM or a shorter context is faster.",
+             "Experts come from the SSD: more RAM helps."),
+    "ram": ("Most misses come from RAM over PCIe: more VRAM (or a second GPU) keeps more experts on the card.",
+            "Most misses come from RAM: more VRAM keeps more experts on the GPU.",
+            "Misses come from RAM: more VRAM helps.")}
 FINISH = {"stop": ("Done", OK), "length": ("Max tokens", INK_SOFT), "cancel": ("Stopped", WARN),
           "disconnect": ("Closed", WARN), "error": ("Error", DANGER)}
 API = {"web": "Chat", "openai": "OpenAI", "anthropic": "Anthropic"}
@@ -177,12 +179,11 @@ def tiers(m: dict, width: int):
         rows.add_row(Text(name, MUTED), Text.assemble((fmt(n.get(key), 2), f"bold {INK}"), ("/tok", MUTED)),
                      spark(h.get(key), max(8, width - 32), color=color))
     stale = time.time() - (n.get("time") or 0) > 30
-    tip = "" if stale else \
-        "Many experts are read from the SSD for every token: more RAM, a smaller model or a shorter context " \
-        "makes answers faster." if (n.get("disk") or 0) >= 3 else \
-        "Most misses come from RAM over PCIe: more VRAM (or a second GPU) keeps more experts on the card." \
-        if (n.get("vram_hit") or 1) < 0.85 and (n.get("ram_fetch") or 0) >= 4 else ""
-    return Group(line, legend, Text(""), rows, *([Text(tip, f"italic {INK_SOFT}")] if tip else []))
+    tips = () if stale else TIPS["disk"] if (n.get("disk") or 0) >= 3 else \
+        TIPS["ram"] if (n.get("vram_hit") or 1) < 0.85 and (n.get("ram_fetch") or 0) >= 4 else ()
+    tip = next((t for t in tips if len(t) <= width), tips[-1] if tips else "")   # (one line: the longest that fits)
+    return Group(line, legend, Text(""), rows,
+                 *([Text(tip, f"italic {INK_SOFT}", no_wrap=True, overflow="ellipsis")] if tip else []))
 
 
 def tiers_sub(m: dict) -> Text:
@@ -306,62 +307,6 @@ def banners(m: dict, fails: int) -> Text:
     if fails >= 3:
         out.append(("The server does not answer: these numbers are from before.", DANGER))
     return Text("\n").join(Text.assemble(("! ", f"bold {tone}"), (msg, tone)) for msg, tone in out)
-
-
-class LoadWatch:
-    """How far the model's start is, from the engine log (read from where it stood when the start began): the warm-up
-    of each GPU's expert tiers - the bulk of a start, one GPU after the other - in GB.  `gpus`: the start's, in the
-    order the engine numbers its parts (its CUDA0 is the first); `vram`: each one's GB of VRAM, by its number."""
-
-    def __init__(self, path, gpus, vram=None):
-        self.path, self.gpus, self.vram = path, list(gpus) or [0], dict(vram or {})
-        try:
-            self.pos = os.path.getsize(path) if path else 0
-        except OSError:
-            self.pos = 0
-        self.reset()
-
-    def reset(self) -> None:
-        """A start (or a reload) begins: nothing warm yet."""
-        self.parts, self.t0 = {}, time.monotonic()      # the part's number -> [GB warm, GB in all]
-
-    def read(self) -> None:
-        """The log's new lines (on the screen's thread, once a second: a few KB)."""
-        try:
-            with open(self.path, "rb") as f:
-                f.seek(self.pos)
-                chunk = f.read()
-        except (OSError, TypeError):
-            return
-        cut = chunk.rfind(b"\n") + 1
-        self.pos += cut
-        for line in chunk[:cut].decode("utf-8", "replace").splitlines():
-            if m := WARMING.search(line):
-                self.parts[int(m.group(2))] = [float(m.group(3)), float(m.group(4))]
-            elif m := WARMED.search(line):
-                self.parts[int(m.group(2))] = [float(m.group(3))] * 2
-
-    def total(self) -> tuple:
-        """(the GB the start warms in all, whether it is known): each part's as the engine said; one not started yet
-        as the parts so far per GB of their VRAM, times its own (a 16 GB card after the 3090: 2/3 of its part, not
-        all of it) - without the VRAMs, as their mean."""
-        known = {k: whole for k, (_, whole) in self.parts.items()}
-        waiting = [k for k in range(len(self.gpus)) if k not in known]
-        vram = [self.vram.get(self.gpus[k]) if k < len(self.gpus) else None for k in [*known, *waiting]]
-        if not waiting or not known:
-            return sum(known.values()), not waiting
-        if all(vram):
-            per = sum(known.values()) / sum(vram[:len(known)])
-            return sum(known.values()) + per * sum(vram[len(known):]), False
-        return sum(known.values()) * (1 + len(waiting) / len(known)), False
-
-    def fraction(self):
-        """The share of the start done (None: no engine log to tell)."""
-        if not self.path:
-            return None
-        if not self.parts:
-            return 0.0
-        return min(1.0, sum(done for done, _ in self.parts.values()) / max(self.total()[0], 1e-9))
 
 
 def loading(w: LoadWatch, width: int):
