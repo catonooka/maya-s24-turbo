@@ -23,8 +23,11 @@ model's own:
 | --- | ---: | ---: | ---: |
 | FP8 | 0 | 100% | 71.5% |
 | **Maya-L** (156.3 GB) | **0.188** | **90.0%** | **71.2%** |
-| Maya-M (116 GB) | MAYA_M_KL | 86.2% | 70.3% |
+| Maya-M (116 GB) | 0.291 | 86.8% | 70.3% |
 | Maya-S (96.5 GB) | 0.428 | 83.3% | 68.8% |
+
+Maya-L and Maya-M through the same engine (v1.0.15's), one after the other: **35% lower KL divergence** than
+Maya-M. Maya-S's row is its own release's measurement, with an earlier engine.
 
 ## Zero-shot accuracy
 
@@ -49,6 +52,8 @@ No loops: a single-file three.js scene asked for at temperature 1.0 and greedily
 14,000 tokens each, with no repeated passage (longest repeat a single 32-token run, 0% repeated 64-token runs). Both
 were still planning at 14,000 tokens - the test runs at GLM's Max thinking level.
 
-## Speed
+## What it needs
 
-MAYA_L_SPEED_SECTION
+Maya-L is the largest of the four and the most demanding: like every Maya quant it runs with the experts
+spread over VRAM, RAM and the SSD, and it is fastest when VRAM and RAM together hold most of its 156 GB - what does
+not fit is read from the SSD while it answers. With less memory, Maya-M (116 GB) or Maya-S (96.5 GB) answer faster.

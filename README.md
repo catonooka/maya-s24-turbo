@@ -32,8 +32,9 @@ WinoGrande, PIQA; 400 questions each, the same for both models). On held-out tex
 FP8 model 83% of the time, and it writes long answers (6,000-14,000 tokens) without looping.
 Details: [bench/results/MAYA-S.md](bench/results/MAYA-S.md).
 
-**Maya-S24** (94.7 GB) is Maya-S with its attention and shared experts in 4-bit (Q4_K) instead of 6-bit: about 1.5 GB
-less that has to stay on the GPU, so a 24 GB card holds more experts. On one Tesla V100 limited to 24 GB it decodes
+**Maya-S24** (94.7 GB) is Maya-S with the same 2-bit routed experts (most of the model) and only its attention and
+shared experts - the small part every token runs through - in 4-bit (Q4_K) instead of 6-bit: about 1.5 GB less that
+has to stay on the GPU, so a 24 GB card holds more experts. On one Tesla V100 limited to 24 GB it decodes
 **14% faster** than Maya-S (13.5 vs 11.8 tokens/s), and 11% faster on the full 32 GB (19.1 vs 17.2); prefill is the
 same. It keeps 97.7% of the FP8 model's zero-shot accuracy (Maya-S: 97.9%) and picks the same next token as the
 FP8 model 83% of the time, like Maya-S. On cards of 24 GB or less the setup recommends it; else
@@ -51,9 +52,11 @@ Details: [bench/results/MAYA-M.md](bench/results/MAYA-M.md).
 **Maya-L** (156.3 GB) is the largest, made for PCs with the biggest memory pool: Maya-M's recipe one step up -
 IQ3_S gate/up experts, IQ4_XS down projections and Q5_K in the most sensitive layers - with Maya-M's FP8 statistics and
 error-feedback rounding. It is the closest to the FP8 model: **99.2% of its zero-shot accuracy** (the same score on
-HellaSwag and PIQA), a KL divergence of 0.188 against Maya-M's 0.329, and the same next token as the FP8 model 90% of
-the time. It needs that memory pool to be fast: MAYA_L_SPEED Set it up with `./setup.sh --setup --model Maya-L`
-(Windows: `START-MAYA.bat --setup --model Maya-L`). Details: [bench/results/MAYA-L.md](bench/results/MAYA-L.md).
+HellaSwag and PIQA), a KL divergence 35% below Maya-M's (0.188 vs 0.291, the same engine), and the same next token as
+the FP8 model 90% of the time. It is the most demanding of the four: it is fastest when VRAM and RAM together hold most
+of its 156 GB (what does not fit is read from the SSD while it answers). Set it up with
+`./setup.sh --setup --model Maya-L` (Windows: `START-MAYA.bat --setup --model Maya-L`).
+Details: [bench/results/MAYA-L.md](bench/results/MAYA-L.md).
 
 ## How fast is it?
 
@@ -112,7 +115,10 @@ ROCm 7): `./maya.sh --backend hip --gpu 0 --check` first (two cards: `--gpus 0,1
 
 **Next time**, just run `./setup.sh` again: it starts right away, nothing is downloaded twice. Ctrl+C stops it.
 
-**Updating:** `git pull`, then `./setup.sh`: it recompiles only what changed and starts.
+**Updating:** the dashboard's **About** says when a new version is out, and its **Update** button does it: Maya
+downloads the new code (git), compiles only the engine files that changed and loads the same model again - the model
+is not downloaded again, and your settings stay. By hand: `git pull`, then `./setup.sh`.
+(The check asks GitHub for the latest release, at most every six hours; `MAYA_UPDATE_CHECK=0` turns it off.)
 
 ### What the first run does
 
@@ -159,8 +165,8 @@ It takes 20-40 minutes plus the download:
 
 - **In the browser:** `http://127.0.0.1:8080` - **Chat** (your chats kept in this browser, instructions per chat,
   edit and regenerate, code with a preview for HTML pages), a live **Monitor** of the model, the expert caches and
-  your GPU/CPU/RAM (with **Copy report** for an issue), and **About** (the version, this PC, how to connect your
-  tools). **Settings** (the gear in the chat) changes the **context size**: the model reloads with it in a minute or
+  your GPU/CPU/RAM (with **Copy report** for an issue), and **About** (the version and its **Update** button when
+  a new one is out, this PC, how to connect your tools). **Settings** (the gear in the chat) changes the **context size**: the model reloads with it in a minute or
   two, and the dashboard shows what the size costs in GPU memory on this PC.
 - **Your apps and coding agents:** an "OpenAI-compatible" provider with the base URL `http://127.0.0.1:8080/v1`
   (any model name; any API key unless you set one). Anthropic's API: `http://127.0.0.1:8080/v1/messages`
