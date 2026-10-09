@@ -4,6 +4,20 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.0.19 - 2026-10-09
+
+Every Maya download is listed on its own on Hugging Face: the files carry their quant label.
+
+- **New file names on Hugging Face** (moved there, not re-uploaded; the same files and sha256): Maya-S24's are
+  `GLM-5.3-Flash-Maya-S24-IQ2_XXS-...`, Maya-M's `GLM-5.3-Flash-Maya-M-IQ2_S-...` and Maya-L's
+  `GLM-5.3-Flash-Maya-L-IQ3_S-...` - the label of their routed experts' main type. Hugging Face groups a repo's files
+  by that label, so the model page listed Maya-S alone and hid the rest behind "+4 variants".
+- **Nothing is downloaded again:** a model downloaded under the old names - finished or interrupted - keeps them (its
+  run config points at them); an interrupted one continues from the new address. Setups of v1.0.18 and earlier can no
+  longer download Maya-S24, Maya-M or Maya-L: update first (About > Update, or `git pull`).
+- Checked: the installer's choices for a fresh folder, an old finished download and an old interrupted one (5 new
+  tests); the renamed files on Hugging Face match their published sizes.
+
 ## v1.0.18 - 2026-10-09
 
 Maya-L, the closest quant yet to the full FP8 model; GLM's own thinking levels; an exact context meter; and an Update
