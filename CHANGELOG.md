@@ -4,6 +4,18 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.0.26 - 2026-10-09
+
+Documentation.
+
+- **A speed report in the README** (#63 by @npc97): Maya-L on an RTX 4090 24 GB with 192 GB of DDR5 under
+  Windows 11. It holds every expert in VRAM or RAM and decodes at 16.4 tokens/s, with prefill at 1371 tokens/s
+  on an 8K-token prompt. The Windows section no longer says Maya has not run on a Windows PC with an NVIDIA GPU,
+  and notes that CUDA 13 works for RTX 20 and newer.
+- **`STRATA_GLM_CPU_PIN` is Linux-only** (#64 by @needmorevram): on Windows the engine pins nothing, and one GPU is
+  never pinned anywhere, so `0` changes nothing there. A two-socket Windows PC whose decode differs between starts
+  differs in something else; compare the starts' `CPU lane:` log lines.
+
 ## v1.0.25 - 2026-10-09
 
 Splits of three GPUs or more use all of the CPU; `--calibrate` measures realistic text and leaves your usage
