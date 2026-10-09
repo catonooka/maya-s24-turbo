@@ -1,7 +1,41 @@
 # Changelog
 
-Every release is on GitHub (Releases) with these notes; every published change moves the last number. Update: `git pull`, then `./setup.sh` (Windows:
-`START-MAYA.bat`) - it recompiles only what changed and starts.
+Every release is on GitHub (Releases) with these notes; every published change moves the last number. Update: the
+dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
+only what changed and starts; the model is not downloaded again.
+
+## v1.0.18 - 2026-10-09
+
+Maya-L, the closest quant yet to the full FP8 model; GLM's own thinking levels; an exact context meter; and an Update
+button in the dashboard.
+
+- **Maya-L** (156.3 GB, `./setup.sh --setup --model Maya-L`): Maya-M's recipe one step up - IQ3_S gate/up experts,
+  IQ4_XS down projections, Q5_K in the most sensitive MoE layers, Q6_K attention and shared experts. It keeps 99.2% of
+  the FP8 model's zero-shot accuracy (the same score on HellaSwag and PIQA), its KL divergence is 35% below Maya-M's on
+  the same engine (0.188 vs 0.291), it picks the FP8 model's next token 90% of the time, and it wrote two
+  14,000-token answers without a loop. The most demanding of the four: fastest when VRAM and RAM hold most of its
+  156 GB. It is the setup's fourth download, in place of the 3.5-bit community file offered before.
+  ([bench/results/MAYA-L.md](bench/results/MAYA-L.md))
+- **Thinking levels are GLM's own:** Off / Low / High (the default) / Max in the dashboard, `none` / `low` / `high` /
+  `max` in the API (OpenAI's `medium` is High and `xhigh` Max; Anthropic budgets under 2K tokens Low, under 8K High,
+  else Max). The page's old "High" asked GLM for Max, its longest thinking; settings saved by the old page are
+  translated once.
+- **The context meter counts exactly:** while it answers, the request's prompt plus the tokens written so far (the
+  server's live count); otherwise the chat and the draft through the model's own template and tokenizer
+  (`POST /api/tokens`, nothing run; approximate only with pictures). Both numbers in the same K.
+- **Updates from the dashboard:** About says when a new release is out, and its **Update** button downloads the new
+  code (git), compiles only the engine files that changed and loads the same model with the same settings - the
+  model is not downloaded again. A folder that can't update itself (not a git checkout, files changed by hand, a
+  server not started by `./setup.sh` or `START-MAYA.bat`) says why and gives the steps by hand. The check asks GitHub
+  for the latest release at most every six hours; `MAYA_UPDATE_CHECK=0` turns it off. (`GET`/`POST /api/update`)
+- **Monitor shows each GPU figure once:** with two to four GPUs, every hardware card lists each GPU's own value under
+  the total (the GPUs table repeated them); from five GPUs the table comes back and the cards keep their totals.
+- **Fixed:** saving the Chat settings for other apps failed with a Min-p above 0 (the Creative preset), so nothing
+  was shared.
+- Checked: Maya-L against the FP8 model on one Tesla V100 (KL, zero-shot, loop test); the thinking levels rendered
+  with GLM's own template; the update against a throwaway git origin (a real fast-forward, then the exit maya.py
+  starts the new version on) and every case that blocks it; the dashboard in the browser at desktop and phone widths;
+  the Python tests (82, 16 of them new) pass.
 
 ## v1.0.17 - 2026-10-09
 
