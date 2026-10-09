@@ -60,7 +60,8 @@ class RestartAfterUpdate(unittest.TestCase):
             cfg.write_text('{"exe": "%s", "tokenizer": "%s", "args": ["--glm-pack", "%s"]}'
                            % ((d / "strata").as_posix(), (d / "tok").as_posix(), (d / "pack").as_posix()))
             a = SimpleNamespace(port=8090, host=None, api_key=None, gpu=None, gpus="0,1", backend="cuda")
-            with patch.object(maya, "refresh_engine") as refresh, patch.object(maya, "say"),                     patch.object(maya.sys, "argv", list(argv)),                     patch.object(maya.subprocess, "call", return_value=rc) as call,                     patch.object(maya.os, "execv") as execv, patch.object(maya, "WIN", False):
+            with patch.object(maya, "refresh_engine") as refresh, patch.object(maya, "say"), \
+                    patch.object(maya, "setup_screen", return_value=False),                     patch.object(maya.sys, "argv", list(argv)),                     patch.object(maya.subprocess, "call", return_value=rc) as call,                     patch.object(maya.os, "execv") as execv, patch.object(maya, "WIN", False):
                 out = maya.start(cfg, a)
             return out, call, execv, refresh
 
@@ -79,6 +80,31 @@ class RestartAfterUpdate(unittest.TestCase):
         out, _, execv, _ = self.start(0)
         self.assertEqual(out, 0)
         execv.assert_not_called()
+
+
+class RunScript(unittest.TestCase):
+    """run-maya-<model>.sh starts its config through maya.py - on the screen in a terminal, as ./maya.sh does - not
+    the server alone in the terminal."""
+
+    def test_the_script_starts_its_config_through_maya_py(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(maya, "ROOT", Path(d)), patch.object(maya, "WIN", False):
+            cfg = Path(d) / "maya-maya-l.json"
+            script = maya.write_run_script(cfg, 8091).read_text()
+        self.assertIn(f"{maya.HERE / 'maya.py'} --config {cfg} --port 8091 \"$@\"", script)
+        self.assertNotIn("server.py", script)
+
+    def test_config_starts_that_one_without_the_question(self):
+        with tempfile.TemporaryDirectory() as d:
+            mine, other = Path(d) / "maya-maya-l.json", Path(d) / "maya-maya-s.json"
+            for p in (mine, other):
+                p.write_text("{}")
+            with patch.object(maya, "configs", return_value=[other, mine]), patch.object(maya, "say"), \
+                    patch.object(maya.sys, "argv", ["maya.py", "--config", str(mine), "--port", "8091"]), \
+                    patch.object(maya, "ask", side_effect=AssertionError("no question: --config names it")), \
+                    patch.object(maya, "start", return_value=0) as start:
+                self.assertEqual(maya.main(), 0)
+        self.assertEqual(start.call_args.args[0], mine.resolve())
+        self.assertEqual(start.call_args.args[1].port, 8091)
 
 
 class LabelledNames(unittest.TestCase):
