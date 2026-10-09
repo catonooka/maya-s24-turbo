@@ -211,6 +211,8 @@ public:
     int l0_ = 0, l1_ = 0;
     int dev_ = 0;
     int n_parts_ = 1;                                      // the devices the layers are split across (the CPU lane's share)
+    int part_ = 0;                                         // ... and which of them this one is (0 = the first layers)
+    std::vector<int> split_devs_;                          // ... and the CUDA devices of all of them, part by part
     std::unique_ptr<Glm5Model> split_next_;
     std::vector<float> hop_;                               // the boundary residual staging buffer
     int* d_tok_ = nullptr;                                 // the sampler's one-int output, on dev_
@@ -413,6 +415,10 @@ public:
     void prefill_lend();                                   // the tail slots -> the prompt path (drops their experts)
     void prefill_return();                                 // ... and back to the expert pool
     void prefill_destroy();
+    void prefill_cap(int T, const char* why);              // its pinned staging for chunks of at most T
+    void prefill_settle(double pinned_share);              // --prefill auto's lend cap from the pinned share (85/90%)
+    std::pair<size_t, size_t> prefill_bytes_for(size_t T) const;   // a chunk's device buffers {kept rows, scratch}
+    static size_t pool_avail(size_t free_b, size_t total_b);   // the expert pool's bytes from the free VRAM
     void lend_tail(size_t limit, uint64_t& moved, uint64_t& dropped);   // the tail's slots below xpool + limit -> kLent
     bool vis_lend_ok_ = false;                             // this half's tail can go to the vision encoder
     bool vis_lent_ = false;                                // ... and is with it now (freed)
@@ -443,5 +449,10 @@ private:
     int64_t sc_moe = 0, sc_sh = 0, sc_ffn = 0, sc_mixer = 0, sc_head = 0, sc_logits = 0;
     int64_t sc_ids = 0, sc_rw = 0;
 };
+
+/// What a part with these layer kinds lends the prompt path for a chunk of T tokens, its prestage buffer aside
+/// (src/core/glm_prefill.cu) - the layer split search's startability gate.
+size_t glm_prefill_lend_bytes(const Glm5Geometry& g, size_t T, bool has_kda, bool has_dsa, bool has_dense,
+                              bool has_moe, bool mtp, int64_t max_ctx, size_t gstride);
 
 }  // namespace strata::core

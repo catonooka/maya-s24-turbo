@@ -30,6 +30,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -131,6 +132,118 @@ static std::vector<std::vector<int>> numa_node_cpu_lists() {
     return out;
 }
 
+// this process's CPUs (its affinity mask) by NUMA node: {node, CPUs}, node by node - one group (node -1) without NUMA
+static std::vector<std::pair<int, std::vector<int>>> cpu_groups() {
+    std::vector<std::pair<int, std::vector<int>>> out;
+#ifdef __linux__
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof set, &set) != 0) return out;
+    for (int n : numa_nodes()) {
+        std::string list;
+        std::ifstream("/sys/devices/system/node/node" + std::to_string(n) + "/cpulist") >> list;
+        std::stringstream ss(list);
+        std::string r;
+        std::vector<int> cpus;
+        while (std::getline(ss, r, ',')) {
+            const size_t d = r.find('-');
+            const int a = std::atoi(r.c_str()), b = d == std::string::npos ? a : std::atoi(r.c_str() + d + 1);
+            for (int c = a; c <= b && c < CPU_SETSIZE; ++c)
+                if (CPU_ISSET(c, &set)) cpus.push_back(c);
+        }
+        if (!cpus.empty()) out.push_back({n, std::move(cpus)});
+    }
+    if (out.empty()) {
+        std::vector<int> cpus;
+        for (int c = 0; c < CPU_SETSIZE; ++c)
+            if (CPU_ISSET(c, &set)) cpus.push_back(c);
+        if (!cpus.empty()) out.push_back({-1, std::move(cpus)});
+    }
+#endif
+    return out;
+}
+
+// a CPU's physical core (package, core id): its SMT siblings share it
+static std::pair<int, int> cpu_core(int cpu) {
+    int pkg = cpu, core = cpu;
+#ifdef __linux__
+    const std::string t = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/";
+    std::ifstream(t + "physical_package_id") >> pkg;
+    std::ifstream(t + "core_id") >> core;
+#endif
+    return {pkg, core};
+}
+
+// the NUMA node a GPU hangs off (sysfs, by its PCI address), -1 when unknown (a VM, or no NUMA)
+static int gpu_numa_node(int dev) {
+    int node = -1;
+#ifdef __linux__
+    char bus[32] = {0};
+    if (cudaDeviceGetPCIBusId(bus, (int) sizeof bus, dev) != cudaSuccess) {
+        cudaGetLastError();
+        return -1;
+    }
+    std::string b(bus);
+    for (char& ch : b) ch = (char) std::tolower((unsigned char) ch);
+    std::ifstream("/sys/bus/pci/devices/" + b + "/numa_node") >> node;
+#else
+    (void) dev;
+#endif
+    return node;
+}
+
+// Part `part` of a split across `n` GPUs (`gpu_node`: each part's GPU's NUMA node): the CPUs its pool runs on - no
+// other part's, on any machine - with the node it is on (-1: none known) and how many of them to leave free.  Whole
+// NUMA nodes while there are as many as parts: each part on its GPU's node when the GPUs hang off distinct nodes,
+// else part i on node i.  With fewer nodes than parts (one socket), the parts on a node share it out in runs of whole
+// physical cores (SMT siblings together).  The 4 CPUs a node keeps free (the main thread's event wait, the service
+// and warm-up threads, as one GPU's pool leaves) are shared by its parts.  {} with nothing to give.
+static std::vector<int> part_cpus(int part, int n, const std::vector<int>& gpu_node, int& node, int& spare) {
+    const auto groups = cpu_groups();
+    node = -1;
+    spare = 4;
+    if (groups.empty() || n < 1 || part < 0 || part >= n) return {};
+    const int G = (int) groups.size();
+    std::vector<int> grp((size_t) n);
+    bool by_gpu = n <= G && (int) gpu_node.size() == n;
+    std::vector<bool> taken((size_t) G, false);
+    for (int i = 0; by_gpu && i < n; ++i) {
+        int at = -1;
+        for (int j = 0; j < G; ++j)
+            if (groups[(size_t) j].first >= 0 && groups[(size_t) j].first == gpu_node[(size_t) i]) at = j;
+        by_gpu = at >= 0 && !taken[(size_t) at];
+        if (by_gpu) {
+            taken[(size_t) at] = true;
+            grp[(size_t) i] = at;
+        }
+    }
+    if (!by_gpu)
+        for (int i = 0; i < n; ++i) grp[(size_t) i] = i % G;
+    int k = 0, slot = 0;   // the parts on this part's node, and this part's place among them
+    for (int i = 0; i < n; ++i)
+        if (grp[(size_t) i] == grp[(size_t) part]) {
+            if (i == part) slot = k;
+            ++k;
+        }
+    const auto& g = groups[(size_t) grp[(size_t) part]];
+    node = g.first;
+    spare = (4 + k - 1) / k;
+    if (k == 1) return g.second;
+    std::vector<std::pair<std::pair<int, int>, int>> by_core;
+    for (int c : g.second) by_core.push_back({cpu_core(c), c});
+    std::sort(by_core.begin(), by_core.end());
+    std::vector<std::vector<int>> cores;
+    for (size_t i = 0; i < by_core.size(); ++i) {
+        if (i == 0 || by_core[i].first != by_core[i - 1].first) cores.emplace_back();
+        cores.back().push_back(by_core[i].second);
+    }
+    std::vector<int> out;
+    const size_t a = cores.size() * (size_t) slot / (size_t) k, b = cores.size() * (size_t) (slot + 1) / (size_t) k;
+    for (size_t j = a; j < b; ++j) out.insert(out.end(), cores[j].begin(), cores[j].end());
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 static int numa_node_cpus() {
     int best = 0;
     for (const auto& c : numa_node_cpu_lists()) best = std::max(best, (int) c.size());
@@ -159,7 +272,34 @@ static void* numa_pinned(size_t bytes) {
     if (p == MAP_FAILED) return nullptr;
     unsigned long mask[4] = {0, 0, 0, 0};
     for (int n : nodes) mask[n / 64] |= 1ul << (n % 64);
-    madvise(p, bytes, MADV_HUGEPAGE);
+    // huge pages only while free 2 MB blocks cover the tier (/proc/buddyinfo, orders 9 and up): otherwise every 2 MB
+    // fault of a MADV_HUGEPAGE region compacts memory on the spot (transparent_hugepage/defrag "madvise") and mostly
+    // fails - a split's second card, pinning its tier after the first card's had taken most of the RAM and the page
+    // cache the rest (0.28 GB left in 2 MB blocks), sat in the kernel for over 10 minutes at ~10 MB/s.  4 KB pages
+    // reclaim the cache as they fault in (the CPU lane reads them 6-8% slower than huge ones)
+    size_t huge_free = 0;
+    bool huge_known = false;
+    if (FILE* bf = std::fopen("/proc/buddyinfo", "r")) {
+        char line[512];
+        while (std::fgets(line, sizeof line, bf)) {
+            const char* z = std::strstr(line, "zone");
+            if (z == nullptr) continue;
+            z += 4;
+            while (*z == ' ') ++z;
+            while (*z != ' ' && *z != '\0') ++z;   // the zone's name
+            unsigned long long c[16] = {};
+            int k = 0;
+            char* end = nullptr;
+            for (const char* q = z; k < 16; ++k, q = end) {
+                c[k] = std::strtoull(q, &end, 10);
+                if (end == q) break;
+            }
+            for (int o = 9; o < k; ++o) huge_free += (size_t) c[o] << (o + 12);
+            huge_known = true;
+        }
+        std::fclose(bf);
+    }
+    if (!huge_known || huge_free >= bytes + ((size_t) 1 << 30)) madvise(p, bytes, MADV_HUGEPAGE);
     // (the registration faults the pages in, one thread: faulting them from 16 threads first started ~40 s sooner but
     // left fewer huge pages - the CPU lane read its experts 6-8% slower, 2-socket Xeon 6152)
     if (syscall(SYS_mbind, p, bytes, 3 /* MPOL_INTERLEAVE */, mask, (unsigned long) (sizeof mask * 8), 0u) != 0 ||
@@ -989,6 +1129,17 @@ bool Glm5Model::fast_setup(std::string& err) {
         if (F->ram_resident)
             std::fprintf(stderr, "glm fast: CUDA%d RAM-resident mode: every non-VRAM expert gets a slot (+%d slack/layer); disk evictions are OFF\n",
                          dev_, F->ram_slack);
+        // the prompt path's lend cap (Strata's, from the share of the expert bytes held pinned), now that it is known
+        if (pf_ != nullptr) {
+            double held = (double) F->ram_bytes, all = 0;
+            for (int il = l0_; il < lt_; ++il)
+                if (F->L[(size_t) il].moe) {
+                    const auto& P = F->lp[(size_t) il];
+                    all += (double) g.n_expert * (double) P.stride;
+                    held += (double) std::min(g.n_expert, P.n) * (double) P.stride;
+                }
+            prefill_settle(all > 0 ? std::min(1.0, held / all) : 1.0);
+        }
         if (cudaHostAlloc((void**) &F->upd_key_h, FastState::kMaxUpd * sizeof(int), cudaHostAllocDefault) != cudaSuccess ||
             cudaHostAlloc((void**) &F->upd_val_h, FastState::kMaxUpd * sizeof(unsigned long long),
                           cudaHostAllocDefault) != cudaSuccess ||
@@ -1045,6 +1196,7 @@ bool Glm5Model::fast_setup(std::string& err) {
         }
         if (!fast_cpu_lane_setup(err)) return false;
         F->svc = std::thread([this] { fast_service(); });
+        glmfast::pin_thread(F->svc.native_handle(), F->cpu_pin);   // (the CPU lane's last worker: on its pool's node)
     }
     return true;
 }
@@ -1210,6 +1362,22 @@ bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
         threads /= std::max(1, n_parts_);   // a split's parts share the CPU, one pool each
         if (threads < 2) threads = 0;   // one core is the service thread's
     }
+    // a split: each part's pool on CPUs of its own (part_cpus: whole NUMA nodes while there are enough, runs of whole
+    // cores of a shared one otherwise), at most those CPUs less the part's share of the 4 a node keeps free, like one
+    // GPU's.  Unpinned, the parts' pools (half the vCPUs each) shared the cores: a part works while the other's idle
+    // workers spin, and the 2-socket Xeon's 3090 + 5060 Ti split took 0.28 ms an expert where one GPU's pool took 0.15
+    // (and with MTP drafting both parts run at once).  The RAM tier stays interleaved (one socket reading only its own
+    // memory: 54 GB/s, interleaved 77).  STRATA_GLM_CPU_PIN=0: unpinned (A/B).
+    std::vector<int> pin_cpus;
+    int pin_node = -1;
+    const char* pin_env = getenv("STRATA_GLM_CPU_PIN");
+    if (n_parts_ >= 2 && threads > 0 && !(pin_env != nullptr && std::atoi(pin_env) == 0)) {
+        std::vector<int> gpu_node;
+        for (int d : split_devs_) gpu_node.push_back(gpu_numa_node(d));
+        int spare = 4;
+        pin_cpus = part_cpus(part_, n_parts_, gpu_node, pin_node, spare);
+        if (!pin_cpus.empty() && lv == nullptr) threads = std::max(2, (int) pin_cpus.size() - spare);
+    }
     if (threads <= 0 || g.n_embd > 4096 || g.n_exp_used > 8) return true;
     namespace kc = strata::kernels::cpu;
     F->cpu_fmt.assign(F->L.size(), kc::NativeFmt{});
@@ -1256,7 +1424,9 @@ bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
     F->cpu_ff.assign((size_t) 8 * g.n_ff_exp, 0.0f);
     F->cpu_dn.assign((size_t) 8 * g.n_embd, 0.0f);
     // the service thread is the pool's last worker; idle workers spin 20 ms (a decode's routes come ~1 ms apart)
-    F->cpu_pool.reset(new glmfast::Workers(threads - 1, 20000));
+    F->cpu_pool.reset(new glmfast::Workers(threads - 1, 20000, pin_cpus));
+    F->cpu_node = pin_node;
+    F->cpu_pin = pin_cpus;
     // ---- calibration, each lane alone: the CPU after 100 ms of the same work (an idle CPU's clocks take tens of ms to
     //      ramp up - a decode keeps them up), then the mean of 16 runs
     std::vector<float> x((size_t) g.n_embd), out((size_t) g.n_embd);
@@ -1362,8 +1532,12 @@ bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
         cudaMemcpy(F->dcnt_d, F->cnt.data(), (size_t) F->n_keys * sizeof(unsigned int), cudaMemcpyHostToDevice);
         F->md.dcnt = F->dcnt_d;
     }
-    std::fprintf(stderr, "glm fast: CUDA%d CPU lane: %d threads, an expert %.3f ms on the CPU vs %.3f ms over PCIe -> "
-                         "of 0..8 RAM-tier experts the CPU takes%s\n", dev_, threads, c_ms, p_ms, tab.c_str());
+    std::fprintf(stderr, "glm fast: CUDA%d CPU lane: %d threads%s, an expert %.3f ms on the CPU vs %.3f ms over PCIe -> "
+                         "of 0..8 RAM-tier experts the CPU takes%s\n", dev_, threads,
+                 pin_cpus.empty() ? ""
+                 : (" on " + std::to_string(pin_cpus.size()) + " CPUs of its own" +
+                    (pin_node >= 0 ? " (NUMA node " + std::to_string(pin_node) + ")" : std::string())).c_str(),
+                 c_ms, p_ms, tab.c_str());
     // STRATA_GLM_CPU_LANE_CHECK=1: the calibration expert on one normalised input three ways - the device's decode
     // kernels, the CPU lane, and a double-precision reference from ggml's dequantised rows - and their distances
     if (getenv("STRATA_GLM_CPU_LANE_CHECK") != nullptr) {
@@ -3240,6 +3414,26 @@ int Glm5Model::fast_sample(strata::kernels::SamplerParams& sp, std::string& err)
         return -1;
     }
     return F->tok_h[0];
+}
+
+// the bytes the expert pool may take from what is free: headroom kept (cuBLAS-free path; the context's own growth is
+// already allocated in the state arena) - ~700 MB for the driver, the sampler and kernel launches' local memory,
+// STRATA_GLM_RESERVE_MB; STRATA_GLM_POOL_GB caps it; STRATA_GLM_VRAM_GB=<n> behaves like a card with n GB (the cap
+// counts everything this process already holds on the device, so the pool gets what such a card would have).  The
+// prompt path and the layer split search size from the same number, before the pool is carved (a discrete card's:
+// fast_setup prices a unified-memory APU's pool itself).
+size_t Glm5Model::pool_avail(size_t free_b, size_t total_b) {
+    size_t reserve = (size_t) 700 << 20;
+    if (const char* r = getenv("STRATA_GLM_RESERVE_MB")) reserve = (size_t) std::atoll(r) << 20;
+    size_t avail = glmfast::expert_pool_budget(false, free_b, 0, reserve, 0, 0);
+    if (const char* cap = getenv("STRATA_GLM_POOL_GB"))
+        avail = std::min(avail, (size_t) (std::atof(cap) * 1073741824.0));
+    if (const char* vc = getenv("STRATA_GLM_VRAM_GB")) {
+        const size_t cap = (size_t) (std::atof(vc) * 1073741824.0);
+        const size_t used = total_b - free_b;
+        avail = std::min(avail, cap > used + reserve ? cap - used - reserve : (size_t) 0);
+    }
+    return avail;
 }
 
 bool Glm5Model::has_mtp() const {

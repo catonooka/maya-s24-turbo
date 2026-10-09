@@ -235,6 +235,7 @@ struct Options {
     /// `--prefill auto`: the largest chunk (up to 8192) whose buffers the expert cache can lend.  Every expert a chunk
     /// routes to is streamed once per chunk, so a bigger chunk streams fewer bytes per token (the "ubatch" effect).
     bool prefill_auto = false;
+    std::string prefill_arg;           ///< `--prefill` as given (the GLM engine reads it as STRATA_GLM_PREFILL)
     bool no_split_rows = false;        ///< plan v0.3 P4 A/B: one whole expert per pool thread
     /// Plan v0.3 P5: the prompt path borrows the top expert-cache slots for its buffers and refills them after
     /// the prompt (default); `--no-prefill-borrow` reserves the buffers' VRAM for the whole session instead.
@@ -908,9 +909,21 @@ double probe_pcie_h2d_gbps() {
 // call waits for its result); --eos-ids
 // overrides it.  Serve stops on them by default; non-serve stops only when asked (--stop-eos or
 // --eos-ids), like the qwen path.
+// a variable of this process's environment (the GLM model reads its switches from there)
+static void set_env(const char* k, const char* v) {
+#if defined(_WIN32)
+    _putenv_s(k, v);
+#else
+    setenv(k, v, 1);
+#endif
+}
+
 static int glm_pack_generate(const Options& o) {
     strata::core::Glm5Model model;
     std::string err;
+    // the prompt chunk, set in the config's args like Strata's: --prefill auto | N (a chunk of N tokens) | 0
+    // (the engine reads it as STRATA_GLM_PREFILL; without either, auto)
+    if (!o.prefill_arg.empty()) set_env("STRATA_GLM_PREFILL", o.prefill_arg.c_str());
     // the layer split across the visible GPUs: STRATA_GLM_SPLIT, else --layer-split (auto | K1,K2,..)
     if (!model.load_pack_env(o.glm_pack, o.max_context, err, o.layer_split)) {
         std::fprintf(stderr, "strata generate: %s\n", err.c_str());
@@ -1775,6 +1788,7 @@ int main(int argc, char** argv) {
         else if (a == "--vram-reserve-mib") o.vram_reserve_mib = std::atoi(next("--vram-reserve-mib"));
         else if (a == "--prefill") {
             const std::string v = next("--prefill");
+            o.prefill_arg = v;
             o.prefill_auto = v == "auto";
             o.prefill_chunk = o.prefill_auto ? 8192 : std::atoll(v.c_str());
         }
