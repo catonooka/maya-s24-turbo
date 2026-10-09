@@ -115,11 +115,13 @@ struct DsaPrepArgs {
     const float* qr_raw = nullptr; const float* q_a_norm = nullptr; float* qr = nullptr; void* qr_q = nullptr;
     int q_lora = 1536;
     const float* kv_raw = nullptr; const float* kv_norm = nullptr; uint16_t* lat = nullptr; int kv_lora = 512;
+    int lat_q8 = 0;   // the latent cache holds INT8 records (lat8_rec_bytes each) instead of FP16 rows
     const float* ik_raw = nullptr; const float* k_norm_w = nullptr; const float* k_norm_b = nullptr;
     float* ik_cache = nullptr;
     const float* ig_raw = nullptr; float* ig_cache = nullptr;
     const float* ape = nullptr; float* pooled = nullptr;
     int idx_key = 128, kpool = 4;
+    int ring = 1 << 30;   // the ik / ig caches hold positions modulo ring (a multiple of kpool)
     int p = 0;
     float eps = 1e-5f;
 };
@@ -132,8 +134,12 @@ void dsa_select(const float* score, int n_vis, int kpool, int top_pools, int n_s
                 cudaStream_t s);
 /// Absorbed MLA for one token, per head: q_abs = wk_b_h . q_h, scores over the selected latents,
 /// softmax, ctx, out_h = wv_b_h . ctx; writes the q8_1 of the n_head * v_head output.
+/// lat_q8: the cache holds INT8 latent records (see lat8_rec_bytes), else FP16 rows of kv_lora.
 void mla(const float* q, const uint16_t* wk_b, const uint16_t* wv_b, const uint16_t* lat, const int* cells, int n_sel,
-         int n_head, int qk_nope, int kv_lora, int v_head, void* out_q8_1, cudaStream_t s);
+         int n_head, int qk_nope, int kv_lora, int v_head, void* out_q8_1, cudaStream_t s, bool lat_q8 = false);
+/// The INT8 latent cache (STRATA_GLM_KV_INT8): per position kv_lora int8 codes, then one FP16 scale per 32 values
+/// (symmetric, absmax / 127) - 544 bytes at kv_lora 512 against the FP16 row's 1024.
+__host__ __device__ constexpr inline int lat8_rec_bytes(int kv_lora) { return kv_lora + kv_lora / 16; }
 
 /// SwiGLU with GLM's clamp (gate above, up both sides) and the q8_1 of h, n values.
 void swiglu_q8(const float* gate, const float* up, float limit, int n, void* hq, cudaStream_t s);

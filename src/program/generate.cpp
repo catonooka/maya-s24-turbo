@@ -1401,7 +1401,19 @@ static int glm_pack_generate(const Options& o) {
             double nll = 0.0, kl = 0.0, kl_max = 0.0;
             size_t n = 0, top1 = 0, same = 0, nref = 0;
             const auto ts = std::chrono::steady_clock::now();
-            for (size_t i = 0; i + 1 < o.tokens.size(); ++i) {
+            // STRATA_GLM_SCORE_PREFILL=1: the unscored context (all but its last token) through the prompt path, so a
+            // long context is scored in minutes (the KV-cache formats at 128K); the scored tokens stay token by token
+            size_t i0 = 0;
+            if (getenv("STRATA_GLM_SCORE_PREFILL") != nullptr && model.fast() && model.prefill_chunk() > 0 && c > 2 &&
+                c < o.tokens.size()) {
+                const std::vector<int32_t> part(o.tokens.begin(), o.tokens.begin() + (long) (c - 1));
+                if (!model.prefill(part, err, (int32_t) o.tokens[c - 1])) {
+                    std::printf("ERR %s\n", err.empty() ? "prefill" : err.c_str());
+                    return 1;
+                }
+                i0 = c - 1;
+            }
+            for (size_t i = i0; i + 1 < o.tokens.size(); ++i) {
                 if (!model.forward({(int32_t) o.tokens[i]}, lg, err)) {
                     std::printf("ERR %s\n", err.c_str());
                     return 1;
@@ -1887,6 +1899,8 @@ int main(int argc, char** argv) {
     // see glm_pack_generate).  --glm-pack with an explicit non-default --pack is almost certainly a
     // mistake worth saying out loud.
     if (!o.glm_pack.empty()) {
+        // --kv int8 on the GLM path: the INT8 latent cache (Glm5Model::lat_q8_, read at load)
+        if (o.kv == "int8") setenv("STRATA_GLM_KV_INT8", "1", 0);
         if (o.pack != "pack/full") {
             std::fprintf(stderr, "strata generate: note: --glm-pack supersedes --pack (%s ignored)\n", o.pack.c_str());
         }

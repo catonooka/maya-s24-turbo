@@ -20,6 +20,7 @@
 #include "glm_fast_state.hpp"
 
 #include "strata/kernels/glm_dsa.hpp"
+#include "strata/kernels/glm_fast.hpp"
 #include "strata/kernels/glm_ffn.hpp"
 #include "strata/kernels/glm_hc.hpp"
 #include "strata/kernels/glm_kda.hpp"
@@ -568,6 +569,7 @@ bool Glm5Model::load(const std::string& gguf_path, int64_t max_ctx, std::string&
     dsa_ik_.assign(g_.n_layers, 0);
     dsa_ig_.assign(g_.n_layers, 0);
     dsa_pool_.assign(g_.n_layers, 0);
+    ik_ring_ = (int) max_ctx;   // the reference path keeps every position's indexer key / gate
     for (int il = 0; il < g_.n_layers; ++il) {
         if (il < l0_ || il >= l1_) continue;   // the other half's caches stay on the other device
         if (g_.is_recr(il)) {
@@ -2413,7 +2415,14 @@ bool strata::core::Glm5Model::load_pack(const std::string& pack_dir, int64_t max
     int64_t floats = 2 * hc_dim;
     // the fast path keeps the DSA latent cache in FP16 (half the bytes: at 128k context ~0.8 GB more for experts on
     // each card, and the prompt attention reads half as much); the reference path (STRATA_GLM_SLOW) keeps F32
-    const int64_t lat_floats = fast_mode_ ? (int64_t) g_.kv_lora * max_ctx / 2 : (int64_t) g_.kv_lora * max_ctx;
+    lat_q8_ = fast_mode_ && g_.kv_lora % 32 == 0 && getenv("STRATA_GLM_KV_INT8") != nullptr &&
+              std::atoi(getenv("STRATA_GLM_KV_INT8")) != 0;
+    // (INT8: lat8_rec_bytes per position, a multiple of 16 bytes at kv_lora 512)
+    const int64_t lat_floats = lat_q8_      ? (int64_t) strata::kernels::glmf::lat8_rec_bytes(g_.kv_lora) / 4 * max_ctx
+                               : fast_mode_ ? (int64_t) g_.kv_lora * max_ctx / 2
+                                            : (int64_t) g_.kv_lora * max_ctx;
+    if (lat_q8_) std::fprintf(stderr, "glm pack: CUDA%d latent cache INT8 (%d bytes a position and layer)\n", dev_,
+                              strata::kernels::glmf::lat8_rec_bytes(g_.kv_lora));
     // (one entry past the trunk: the NextN block's DSA caches, when this half carries it)
     kda_S_.assign((size_t) g_.n_layers + 1, 0);
     kda_conv_.assign((size_t) g_.n_layers + 1, 0);
@@ -2421,13 +2430,16 @@ bool strata::core::Glm5Model::load_pack(const std::string& pack_dir, int64_t max
     dsa_ik_.assign((size_t) g_.n_layers + 1, 0);
     dsa_ig_.assign((size_t) g_.n_layers + 1, 0);
     dsa_pool_.assign((size_t) g_.n_layers + 1, 0);
+    // the indexer key / gate caches: a ring on the fast path (the prompt path's largest sub-batch + 64 positions; see
+    // ik_ring_), the whole context on the reference path (whose kernels index them by position)
+    ik_ring_ = fast_mode_ ? (int) std::min<int64_t>(max_ctx, 8192 + 64) : (int) max_ctx;
     if (mtp_il_ >= 0) {
         dsa_lat_[(size_t) mtp_il_] = floats;
         floats += lat_floats;
         dsa_ik_[(size_t) mtp_il_] = floats;
-        floats += (int64_t) g_.idx_key * max_ctx;
+        floats += (int64_t) g_.idx_key * ik_ring_;
         dsa_ig_[(size_t) mtp_il_] = floats;
-        floats += (int64_t) g_.idx_key * max_ctx;
+        floats += (int64_t) g_.idx_key * ik_ring_;
         dsa_pool_[(size_t) mtp_il_] = floats;
         floats += (int64_t) g_.idx_key * max_pools;
     }
@@ -2442,9 +2454,9 @@ bool strata::core::Glm5Model::load_pack(const std::string& pack_dir, int64_t max
             dsa_lat_[(size_t) il] = floats;
             floats += lat_floats;
             dsa_ik_[(size_t) il] = floats;
-            floats += (int64_t) g_.idx_key * max_ctx;
+            floats += (int64_t) g_.idx_key * ik_ring_;
             dsa_ig_[(size_t) il] = floats;
-            floats += (int64_t) g_.idx_key * max_ctx;
+            floats += (int64_t) g_.idx_key * ik_ring_;
             dsa_pool_[(size_t) il] = floats;
             floats += (int64_t) g_.idx_key * max_pools;
         }

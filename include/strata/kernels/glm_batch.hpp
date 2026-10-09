@@ -70,17 +70,19 @@ struct DsaPrepArgs {
     const float* qr_raw = nullptr; const float* q_a_norm = nullptr; float* qr = nullptr; void* qr16 = nullptr;
     int q_lora = 1536;
     const float* kv_raw = nullptr; const float* kv_norm = nullptr; uint16_t* lat = nullptr; int kv_lora = 512;
+    int lat_q8 = 0;   // INT8 latent records (kv_lora codes + kv_lora / 32 FP16 scales) instead of FP16 rows
     const float* ik_raw = nullptr; const float* k_norm_w = nullptr; const float* k_norm_b = nullptr;
     float* ik_cache = nullptr;
     const float* ig_raw = nullptr; float* ig_cache = nullptr;
     int idx_key = 128;
+    int ring = 1 << 30;   // the ik / ig caches hold positions modulo ring (a multiple of kpool)
     int p0 = 0, T = 0;
     float eps = 1e-5f;
 };
 void dsa_prep(const DsaPrepArgs& a, cudaStream_t s);
-/// The pooled keys of pools [pool0, pool0 + n) (their cells all in the caches).
+/// The pooled keys of pools [pool0, pool0 + n) (their cells all in the caches, positions modulo ring).
 void dsa_pool(const float* ik_cache, const float* ig_cache, const float* ape, float* pooled, int idx_key, int kpool,
-              int pool0, int n, cudaStream_t s);
+              int pool0, int n, cudaStream_t s, int ring = 1 << 30);
 /// score[t][p] = sum_h relu(iq[t]_h . pooled_p) * iw[t][h] for the pools visible at position p0 + t.
 void dsa_score(const float* iq, const float* pooled, const float* iw, int key_dim, int idx_heads, int p0, int kpool,
                int T, int max_vis, float* score, int score_ld, cudaStream_t s);
@@ -92,12 +94,12 @@ void dsa_select(const float* score, int score_ld, int p0, int kpool, int top_poo
 /// The same attention with Q in FP16 ([T][n_head][512]) on the WMMA units (rocWMMA, RDNA3/RDNA4): FP16 operands, F32
 /// accumulation and softmax.  n_head % 16 == 0, kv_lora 512.
 void mla_attn_f16q(const uint16_t* q16, const uint16_t* lat, const int* cells, const int* n_sel, int n_sel_max,
-                   int n_head, int kv_lora, float scale, int T, float* ctx, cudaStream_t s);
+                   int n_head, int kv_lora, float scale, int T, float* ctx, cudaStream_t s, bool lat_q8 = false);
 #endif
 /// Absorbed MLA attention per token and head over the token's cells: ctx[t][h] = softmax(q_abs[t][h] . lat_c *
 /// scale) . lat_c.  kv_lora 512, n_head % 16 == 0.
 void mla_attn(const float* q_abs, const uint16_t* lat, const int* cells, const int* n_sel, int n_sel_max, int n_head,
-              int kv_lora, float scale, int T, float* ctx, cudaStream_t s);
+              int kv_lora, float scale, int T, float* ctx, cudaStream_t s, bool lat_q8 = false);
 
 /// h[t] = rms(mean of the 4 streams of R[t]) * w - the final hidden state per row (the NextN block's input).
 void head_rows(const float* R, const float* w, float eps, int T, int n_embd, float* h, cudaStream_t s);
