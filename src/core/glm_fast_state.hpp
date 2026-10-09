@@ -181,7 +181,7 @@ inline size_t expert_stride(size_t blob, int gu_type, int d_type) {
 namespace gf = strata::kernels::glmf;
 
 struct Glm5Model::FastState {
-    bool unified_memory = false;   // set only for integrated HIP devices; CUDA keeps its existing policy
+    bool unified_memory = false;   // set only for integrated HIP devices on Linux; CUDA and Windows keep the discrete policy
     cudaStream_t cs = nullptr, copy = nullptr, ps = nullptr;   // ps: the prefetch side stream
     cudaEvent_t ev_hop = nullptr, ev_done = nullptr, ev_pred = nullptr, ev_pf = nullptr, ev_pf_prev = nullptr;
     int max_pf = 0;   // STRATA_GLM_PREFETCH_N: measured a net LOSS on Mercury (the window between routes is shorter than one fetch)
@@ -317,6 +317,8 @@ struct Glm5Model::FastState {
     std::vector<uint32_t> usage;
     uint64_t cnt_events = 0;
     uint8_t* pool = nullptr;
+    // the main slots' further allocations, where one did not allocate (each holds whole layers: lp[il].base)
+    std::vector<uint8_t*> pool_more;
     size_t pool_bytes = 0;
     int64_t pool_slots = 0;
     // the lendable tail (every layer's slots [n_main, n)) is its own allocation: an on-demand vision encoder can
