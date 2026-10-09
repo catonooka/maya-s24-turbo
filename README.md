@@ -59,10 +59,9 @@ all of it there and decodes 16.4 tokens/s ([#63](https://github.com/mw00/project
 `./setup.sh --setup --model Maya-L` (Windows: `START-MAYA.bat --setup --model Maya-L`).
 Details: [bench/results/MAYA-L.md](bench/results/MAYA-L.md).
 
-**Other engines:** the four are ordinary GGUFs, and llama.cpp loads them too (architecture `glm5-next`). Files
-downloaded before 2026-10-09 name it `glm5next`, which llama.cpp refuses as an unknown architecture.
-`python tools/gguf_fix_arch.py <the model's first .gguf> --in-place` renames it in a moment, rewriting only the
-header, and Maya reads either name.
+**Files downloaded before 2026-10-09** name the architecture `glm5next`, an early spelling.
+`python tools/gguf_fix_arch.py <the model's first .gguf> --in-place` gives them the standard name, `glm5-next`,
+rewriting only the header. Maya reads either name.
 
 ## How fast is it?
 

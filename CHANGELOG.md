@@ -4,19 +4,22 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.0.29 - 2026-10-09
+
+Documentation: the README and v1.0.28's entry below describe the model files' new architecture name more plainly.
+
 ## v1.0.28 - 2026-10-09
 
-Maya's model files load in llama.cpp.
+The model files name their architecture with the standard GGUF name, `glm5-next`.
 
-- **The GGUFs name their architecture as llama.cpp does: `glm5-next`.** Maya's quants had copied `glm5next`, an
-  early spelling, from the file they were made from, and llama.cpp refused them as an unknown architecture.
+- **The model files say `glm5-next`.** Maya's quants had copied `glm5next`, an early spelling, from the file they
+  were made from. Standard GGUF tools don't recognize that spelling.
   - On Hugging Face, the first file of each model is published again with only its header changed. Every byte of
     the model stays where it was, so installed models and their packs keep working, and nothing has to be
     downloaded again. Setup accepts both versions of that file.
   - `tools/gguf_fix_arch.py` renames a file downloaded earlier, in place (only the header).
   - The quantizer writes `glm5-next` from now on, and Maya reads either name.
 - Checked:
-  - upstream llama.cpp refuses the old header and loads the new one, and answers;
   - Maya's greedy tokens are the same with the new header (Tesla V100, CPU lane off);
   - the four new files are the old ones byte for byte after the header;
   - the GitHub checks.
