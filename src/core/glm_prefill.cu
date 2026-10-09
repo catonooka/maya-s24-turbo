@@ -18,6 +18,7 @@
 // experts.  STRATA_GLM_NO_PREFILL=1 keeps the token-at-a-time prompt (A/B).
 #include "glm_fast_state.hpp"
 
+#include "strata/core/progress.hpp"
 #include "strata/kernels/cpu/kq_avx512.hpp"
 #include "strata/kernels/dequant_bf16.hpp"
 #include "strata/kernels/glm_batch.hpp"
@@ -43,6 +44,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -1523,6 +1525,8 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
     prestage(next_moe(l0_));   // (the dense layers before the first MoE one run meanwhile)
     for (auto& t : S->tr) t.on = false;
     for (int il = l0_; il < l1_; ++il) {
+        progress_at("the prompt: layer", il);   // a layer is the serve watchdog's heartbeat (issue #40)
+        progress_beat();
         const auto& Ly = F->L[(size_t) il];
         const bool skip_output = tail_skip && il == g.n_layers - 1;
         if (S->trace) cudaEventRecord(S->tr[(size_t) il].start, s);
@@ -2570,12 +2574,23 @@ bool Glm5Model::prefill(const std::vector<int32_t>& tokens, std::string& err, in
     const int Trun = split_next_ == nullptr ? (int) std::min<int64_t>(Tmax, (nn + 63) / 64 * 64)
                                             : (int) std::min<int64_t>(Tmax, ((nn + nchunks - 1) / nchunks + 63) / 64 * 64);
     bool ok = true;
+    progress_at("the prompt: lending the expert pool's tail");   // (the serve watchdog's stages, issue #40)
     for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) {
         cudaSetDevice(m->dev_);
         m->prefill_carve(Trun);
         if (!m->prefill_lend(err)) { ok = false; break; }
     }
+    // STRATA_GLM_STALL_TEST=<s> (a test of the serve watchdog): every batched prompt stops here for s seconds
+    static const int stall_test = [] {
+        const char* v = getenv("STRATA_GLM_STALL_TEST");
+        return v ? std::max(0, std::atoi(v)) : 0;
+    }();
+    if (ok && stall_test > 0) {
+        progress_at("the prompt: STRATA_GLM_STALL_TEST's pause");
+        std::this_thread::sleep_for(std::chrono::seconds(stall_test));
+    }
     if (ok) ok = prefill_run(tokens, err);
+    progress_at("the prompt: returning the expert pool's tail");
     for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) {
         std::string return_err;
         if (!m->prefill_return(return_err)) {

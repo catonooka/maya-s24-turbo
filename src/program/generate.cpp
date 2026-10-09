@@ -691,6 +691,36 @@ void stall_report(std::FILE* f, uint64_t layers_during) {
 #endif
 }
 
+// issue #29: a request whose heartbeat (tokens, prompt chunks or layers, verify windows) stops for STRATA_WATCHDOG_S
+// seconds (default_s when unset; 0 = off) is stuck on a flag nobody will raise - end the engine with where it was, so
+// the server starts it again instead of the GPU spinning forever.  Issue #31: before it does, it reports what every
+// part was doing (stall_report), so one occurrence says where the wait is.  Issue #40: the GLM serve has it too.
+void start_serve_watchdog(int default_s) {
+    const char* ws = std::getenv("STRATA_WATCHDOG_S");
+    const int limit = ws ? std::atoi(ws) : default_s;
+    if (limit <= 0) return;
+    std::thread([limit] {
+        strata::core::Progress& p = strata::core::progress();
+        uint64_t last = p.beats.load(), ticks_at = p.ticks.load();
+        auto since = std::chrono::steady_clock::now();
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            const auto now = std::chrono::steady_clock::now();
+            const uint64_t b = p.beats.load();
+            if (!p.busy.load() || b != last) { last = b; ticks_at = p.ticks.load(); since = now; continue; }
+            if (now - since < std::chrono::seconds(limit)) continue;
+            std::fprintf(stderr, "strata serve: no progress for %d s during a request (%s %lld) - stopping "
+                                 "the engine so the server starts it again (issue #29)\n",
+                         limit, p.where.load(), (long long) p.detail.load());
+            stall_report(stderr, p.ticks.load() - ticks_at);
+            std::fflush(stderr);
+            // not abort(): Windows Error Reporting can hold the process open, and a core dump of tens of GB of
+            // pinned expert tiers takes minutes - the stall report above already says where it stopped
+            std::_Exit(3);
+        }
+    }).detach();
+}
+
 /// STRATA_TRACE=1: the VRAM left at a step of the startup (finds what fills the card after the cache is sized)
 void mem_mark(const char* where) {
     static const bool on = std::getenv("STRATA_TRACE") != nullptr;
@@ -1317,6 +1347,7 @@ static int glm_pack_generate(const Options& o) {
         }
         // CONVERSATION REUSE (the fast path): the previous prompt's state, saved just before its last token, is
         // restored when this prompt extends it - a chat's next turn reads only what is new
+        strata::core::progress_at("the request: restoring a conversation");
         size_t reuse = 0;
         if (model.fast() && !snap_tokens.empty() && snap_tokens.size() < prompt.size() &&
             std::equal(snap_tokens.begin(), snap_tokens.end(), prompt.begin()) &&
@@ -1382,6 +1413,8 @@ static int glm_pack_generate(const Options& o) {
             }
         }
         for (size_t i = i_first; i < prompt.size();) {
+            strata::core::progress_at("the prompt: the token path, at token", (int64_t) i);
+            strata::core::progress_beat();
             if (model.fast() && !snapped && i == prompt.size() - 1) {
                 if (model.snapshot_save()) {
                     snap_tokens.assign(prompt.begin(), prompt.end() - 1);
@@ -1438,6 +1471,8 @@ static int glm_pack_generate(const Options& o) {
         const auto on_token = [&](int tok) -> bool {
             std::printf("T %d\n", tok);
             ++produced;
+            strata::core::progress_at("decode: after token", produced);   // the watchdog's heartbeat (issue #40)
+            strata::core::progress_beat();
             gen_hist.push_back(tok);
             if (in_think && tok != req_think_end) {
                 if (const int per = looping(loop_w_think)) {
@@ -1696,6 +1731,10 @@ static int glm_pack_generate(const Options& o) {
         return rc;
     }
 
+    // issue #40: a prompt that stopped moving (the GPU idle, a host thread spinning on a flag) waited forever - the
+    // server's own stall check counts a spinning thread as work.  A prompt layer or a token is the heartbeat; a big
+    // chunk's layer on a slow PC takes seconds, so three minutes of none is a hang.
+    start_serve_watchdog(180);
     // the serve wire contract (serve/server.py): READY <max_context> [stop] once, then GEN <max_new>
     // [<key>=<value> ...] <id,id,...> lines - the sampling keys are per request and the ids are the LAST
     // token.  "stop" is NOT advertised: a request runs to its end (no mid-request cancel in M3.1).
@@ -1714,6 +1753,11 @@ static int glm_pack_generate(const Options& o) {
         ss >> cmd;
         if (cmd == "QUIT") break;
         if (cmd == "STOP") continue;   // a stray one between requests: ignore
+        // the watchdog watches a command from here until this iteration ends, whichever way it ends
+        struct BusyScope {
+            BusyScope() { strata::core::progress().busy.store(true); strata::core::progress_at("the request"); }
+            ~BusyScope() { strata::core::progress().busy.store(false); strata::core::progress_at("idle"); }
+        } busy_scope;
         // LOGP <n_ctx> <id,id,...>: the summed log-probability of the tokens from n_ctx on given those before
         // ("LP <sum> <n> <1 if every one was the most likely>") - the multiple-choice scoring of the zero-shot suite
         // (tools/maya_quant/zs_tasks.py).  A context identical to the previous request's is restored, not read again
@@ -4557,33 +4601,7 @@ int main(int argc, char** argv) {
                         (long long) (strata::kernels::cpu::expert_layout().total >> 20), pool.workers(), o.pcie_frac,
                         o.spec_min_p);
         }
-        // issue #29: a request whose heartbeat (tokens, prompt chunks, verify windows) stops for this long is stuck on
-        // a flag nobody will raise - end the engine with where it was, so the server starts it again instead of the
-        // GPU spinning forever.  STRATA_WATCHDOG_S=0 turns it off.  Issue #31: before it does, it reports what every
-        // part was doing (stall_report), so one occurrence says where the wait is.
-        {
-            const char* ws = std::getenv("STRATA_WATCHDOG_S");
-            const int limit = ws ? std::atoi(ws) : 60;   // one step (a prompt layer, a verify window) takes seconds
-            if (limit > 0)
-                std::thread([limit] {
-                    strata::core::Progress& p = strata::core::progress();
-                    uint64_t last = p.beats.load(), ticks_at = p.ticks.load();
-                    auto since = std::chrono::steady_clock::now();
-                    for (;;) {
-                        std::this_thread::sleep_for(std::chrono::seconds(1));
-                        const auto now = std::chrono::steady_clock::now();
-                        const uint64_t b = p.beats.load();
-                        if (!p.busy.load() || b != last) { last = b; ticks_at = p.ticks.load(); since = now; continue; }
-                        if (now - since < std::chrono::seconds(limit)) continue;
-                        std::fprintf(stderr, "strata serve: no progress for %d s during a request (%s %lld) - stopping "
-                                             "the engine so the server starts it again (issue #29)\n",
-                                     limit, p.where.load(), (long long) p.detail.load());
-                        stall_report(stderr, p.ticks.load() - ticks_at);
-                        std::fflush(stderr);
-                        std::abort();
-                    }
-                }).detach();
-        }
+        start_serve_watchdog(60);   // one step (a prompt layer, a verify window) takes seconds
         std::printf("READY %lld stop\n", (long long) o.max_context);   // "stop": this engine honours STOP
         std::fflush(stdout);
         std::string line;
