@@ -4,6 +4,37 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.0.25 - 2026-10-09
+
+Splits of three GPUs or more use all of the CPU; `--calibrate` measures realistic text and leaves your usage
+profile alone; opt-in CUDA graphs for one GPU.
+
+- **One CPU pool for a split of 3+ GPUs** (#60 by @needmorevram):
+  - A decode token visits the cards in turn, so a pool per card (`cores / GPUs` threads each) left most of the
+    CPU idle. One pool now serves them all, sized as one GPU's.
+  - Maya-L on 9 GPUs (8x RTX 5060 Ti + RTX 3090, 2x Xeon Gold 6152): decode 25.7 -> 30.7 tokens/s, an 8K prompt
+    1265 -> 1466 tokens/s.
+  - One and two GPUs are unchanged. `STRATA_GLM_CPU_SHARED=1` shares the pool on two GPUs too; on 2x Tesla V100
+    with one CPU socket it measured 30.0 against 28.5 tokens/s. `0` gives every GPU its own pool.
+- **`--calibrate` on realistic text** (#60):
+  - Every measurement answers prompts it has not seen before (60 of them). Repeating three prompts had left the
+    experts in VRAM fitted to just those answers, so the CPU lane's settings were measured with almost nothing
+    on the CPU.
+  - The tuning's engine reads and writes a copy of your expert usage file, so its answers no longer change the
+    order the next start warms up in.
+- **Opt-in CUDA graphs for one GPU** (#59 by @handmade0octopus): `STRATA_GLM_KDA_GRAPH=1` replays the recurrent
+  (KDA) decode layers as CUDA graphs. The output is bit-identical.
+  - RTX 4090D: +2.35% decode.
+  - Tesla V100: the same speed.
+  - Off by default; two GPUs, MTP, profiling, prefetch and lookahead keep the direct path.
+- Checked on 1x and 2x Tesla V100:
+  - the builds and the parity tests;
+  - identical greedy tokens with each change at its default, and with the graphs on (CPU lane on and off);
+  - #59's two tests: 192 bitwise comparisons on the real model;
+  - decode and prefill unchanged at the defaults;
+  - a full `--calibrate` run (380 s) that left the usage file byte-for-byte unchanged;
+  - the GitHub checks.
+
 ## v1.0.24 - 2026-10-09
 
 Better drafts for speculative decode on two GPUs or more.
