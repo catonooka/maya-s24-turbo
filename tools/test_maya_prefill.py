@@ -73,6 +73,8 @@ class PrefillConfigTests(unittest.TestCase):
         self.assertEqual(again.count("--prefill"), 1)
 
     def test_prefill_tips_follow_strata(self):
+        self.assertEqual(maya.prefill_tips(["--prefill", "auto"], 177, 1), [])      # one GPU: auto takes 32768
+        self.assertEqual(maya.prefill_tips(["--prefill", "32768"], 32, 1), [])
         self.assertIn("--prefill 32768", maya.prefill_tips(["--prefill", "auto"], 177)[0])
         self.assertEqual(maya.prefill_tips(["--prefill", "auto"], 64), [])
         self.assertIn("warning", maya.prefill_tips(["--prefill", "32768"], 32)[0])
