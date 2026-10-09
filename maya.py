@@ -7,9 +7,8 @@ CUDA: Linux; Windows (experimental). HIP: experimental Linux gfx1100/gfx1201/gfx
     ./maya.sh --check         only check this PC
     ./maya.sh --backend hip --gpu 0 --check    check an RX 7900 XT / XTX with system ROCm 7
 
-On Windows START-MAYA.bat takes the same options.  Both make the private Python environment (.venv, the way Strata's
-setup.sh does) and run this file.  It reuses Strata's installer (setup.py) for the PC checks,
-pip, llama.cpp's source and resumable downloads.
+On Windows START-MAYA.bat takes the same options.  Both make the private Python environment (.venv) and run this
+file.  Its helpers (setup.py) do the PC checks, pip, llama.cpp's source and resumable downloads.
 
 In a terminal the setup runs on a screen of its own (tools/setup_tui.py): the steps, what runs now with a progress
 bar, and the questions as menus - then Maya runs on the same screen, and every later start too: its dashboard (the
@@ -34,7 +33,7 @@ What the first run does (each step is skipped when it is already done):
      earlier, or it offers the tuning (./maya.sh --calibrate does it any time) - and starts the dashboard on
      http://127.0.0.1:8080
 
-The tuning (tools/calibrate_glm.py, like Strata's --calibrate): decode speed measured with a few splits of the RAM-tier
+The tuning (tools/calibrate_glm.py): decode speed measured with a few splits of the RAM-tier
 experts between the CPU and the PCIe link, and with fewer CPU threads, in one engine run (~10-15 minutes, the model
 loads first); a setting is kept when it is more than 3% faster than the engine's own choice.  The result goes into the
 config's "env" (STRATA_GLM_PCIE_SHARE, STRATA_GLM_CPU_LANE) and into ~/.config/project-maya/calibration.json for this
