@@ -4,33 +4,65 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
-## Unreleased
+## v1.0.30 - 2026-10-10
 
-- **AMD on Windows, Strix Halo / Gorgon Halo included (experimental):** `START-MAYA.bat --backend hip` sets Maya up
-  on Windows 10/11 as `./maya.sh --backend hip` does on Linux. It finds the GPUs with ROCm's hipInfo (else Windows'
-  display adapters), uses AMD's HIP SDK for Windows (or offers AMD's ROCm SDK 7.14.1 wheels in `.venv` when there is
-  none), and compiles the engine with ROCm's clang and Ninja in Visual Studio's environment (2022 or 2026), like
-  `tools\hip\build_maya_windows.bat` (#54). The SDK's HIP runtime goes next to `strata.exe`, so the driver's own in
-  System32 is not loaded instead.
-  - Ryzen AI Max 300 / 400 (Radeon 8050S / 8060S / 8065S, `gfx1151`): Windows gives the GPU a fixed carve-out
-    (Variable Graphics Memory) that it does not count as RAM, so the engine sizes it there like a discrete card: the
-    pool from the GPU memory HIP reports free, the RAM tier from the free RAM and commit. Linux keeps its
-    unified-memory sizing.
-  - Windows' HIP runtime allocates at most 64 GiB plus the RAM Windows sees in one piece: an expert pool larger than
-    that (Maya-L's 134 GB) goes into several allocations, each holding whole layers. Where one allocation works,
-    nothing changes.
-  - Windows' HIP runtime submits launches when the host waits on the GPU, not one by one: the GPU-to-CPU handoff of
-    a route could wait for a kernel that had not started. The engine's service thread now submits the queued work
-    when no route has come for 1 ms. (Submitting every launch, `GPU_FLUSH_ON_EXECUTION=1`, works too, but decoded
-    9.8 instead of 15.9 tokens/s.)
-  - Two HIP checks were wrong on every platform: `hip_glm_handoff` still passed a removed `bool` (it skipped every
-    miss), and `hip_prefill_mmq_parity` raced its output sentinel's memset.
-- **A restart no longer takes the dashboard's saved settings for a config:** after a settings change, a plain
-  `./maya.sh` / `START-MAYA.bat` could pick `maya-<model>.shared-settings.json`, guess the CUDA backend and fail.
-- Checked on a Ryzen AI Max+ PRO 495 / Radeon 8065S (Gorgon Halo, 192 GB, 160 GB of it the GPU's), Windows 11, HIP
-  SDK 7.2: the setup downloads, builds and packs Maya-L; all 15 HIP checks pass; every expert stays in the GPU pool;
-  `--bench` decodes 15.9 tokens/s and reads 345 tokens/s of an 8K-token prompt; answers, a 4.7K-token prompt and
-  thinking mode come out right.
+AMD GPUs set up on Windows too, Windows reads its experts from the SSD much faster, the CPU lane times itself
+correctly at start, and the logs say Maya.
+
+- **AMD on Windows, Strix Halo / Gorgon Halo included (experimental)** (#69): `START-MAYA.bat --backend hip` sets
+  Maya up on Windows 10/11 as `./maya.sh --backend hip` does on Linux, for Ryzen AI Max 300 / 400 (Radeon 8050S /
+  8060S / 8065S) and the RX 7900 XT / XTX and RX 9070 / R9700.
+  - **Setup:**
+    - finds the GPUs with ROCm's hipInfo, else Windows' display adapters;
+    - uses AMD's HIP SDK for Windows, or offers AMD's ROCm SDK wheels in `.venv` when there is none;
+    - compiles the engine with ROCm's clang and Ninja in Visual Studio's environment (2022 or 2026).
+
+    The SDK's HIP runtime goes next to `strata.exe`, so the driver's own copy in System32 is not loaded instead.
+  - **The engine on a Windows APU:**
+    - The GPU's memory is a fixed carve-out that Windows does not count as RAM, so the engine sizes it like a
+      discrete card.
+    - An expert pool larger than one allocation goes into several.
+    - The engine submits queued GPU work when no route has come for 1 ms, because Windows' HIP runtime holds
+      launches until the host waits.
+
+    Linux and NVIDIA are unchanged.
+  - **Two HIP checks were wrong on every platform:** `hip_glm_handoff` passed a removed argument, and
+    `hip_prefill_mmq_parity` raced its output sentinel.
+  - **Checked on a Ryzen AI Max+ PRO 495 / Radeon 8065S under Windows 11:** setup builds and packs Maya-L, every
+    expert stays in the GPU pool, answers, long prompts and thinking come out right, and all 15 HIP checks pass.
+- **Windows reads experts from the SSD much faster** (#73 by @klvnblst, for #65 and #67):
+  - **Unmapping:** while a model file stays mapped, Windows sends every direct read of it down a slower path. The
+    engine now unmaps the files once they are loaded, moving the token table (~0.7 GB) to RAM. On the RTX 5090
+    Laptop of #67, decode is about 3.5x as fast. `STRATA_GLM_KEEP_MAP=1` keeps the old behaviour.
+  - **CPUs without SMT** (Intel Core Ultra 200 and others): the CPU lane uses two thirds of the cores, leaving the
+    rest for the disk readers and the service thread.
+  - **`--calibrate`:** the CPU lane threads it leaves out sleep instead of spinning.
+- **The CPU lane times itself on experts read from RAM** (#70 by @merbanan): its start-up timing reused 4 experts
+  that stayed in the CPU's cache, so it took the CPU for faster than it is during decode. It now goes through up to
+  64. That gave +6% decode on a Ryzen 9 7950X with a Tesla V100, and the same plan at every start.
+- **Maya's name in the logs** (#74):
+  - the engine's lines say `maya generate:` / `maya serve:` / `maya:`, and the server's say `[maya]`;
+  - the installer no longer shows Strata's name;
+  - the Windows stall dump is `maya-stall-<pid>.dmp`.
+
+  Settings (`STRATA_*`), flags, the API, file and binary names are unchanged, and the README keeps the credit.
+- **A restart no longer mistakes the dashboard's saved settings for a model's config** (#69). After a settings
+  change, `./maya.sh` / `START-MAYA.bat` could pick `maya-<model>.shared-settings.json` and fail.
+- **The README's Windows setup, step by step** (#71 by @handmade0octopus):
+  - the Visual Studio 2022 Build Tools components, and the difference between `nvidia-smi`'s CUDA version and an
+    installed toolkit;
+  - copy-paste commands for checking the PC, setting up on an NVMe drive and calibrating;
+  - page-file advice that matches what `--check` asks for (about VRAM + 9 GB, since "System managed" can stay too
+    small).
+- The README has no speed figure under 12 tokens/s.
+- Checked:
+  - on 1x and 2x Tesla V100: the builds and the parity tests; identical greedy tokens with the CPU lane off, on one
+    GPU and on two; decode and prefill (reading the prompt) the same within run-to-run variation (#70 picks a
+    different CPU-lane plan at some starts); the CPU thread count changed per request, as `--calibrate` does; the
+    server end to end; the setup screen in a real terminal; the logs saying `[maya]` and `maya ...`;
+  - on Windows: the engine compiles (MSVC with CUDA 12.8);
+  - AMD on Windows: on the author's Ryzen AI Max+ PRO 495;
+  - the GitHub checks.
 
 ## v1.0.29 - 2026-10-09
 
