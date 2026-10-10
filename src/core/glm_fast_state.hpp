@@ -390,6 +390,7 @@ struct Glm5Model::FastState {
     std::shared_ptr<glmfast::Workers> cpu_pool;
     int cpu_node = -1;                         // the NUMA node the pool is pinned to (-1: unpinned) ...
     std::vector<int> cpu_pin;                  // ... and its CPUs (the service thread runs there too)
+    bool lane_pending = false;                 // the lane and the service thread wait for fast_setup_finish
     double cpu_c_ms = 0.0, cpu_p_ms = 0.0;   // the lane's calibration: an expert on the CPU, one over PCIe
     double cpu_ps_ms = 0.0;                  // ... one in a stream of copies (the prompt's staging)
     unsigned long long cpu_plan = 0;

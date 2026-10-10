@@ -302,8 +302,13 @@ static void* numa_pinned(size_t bytes) {
     if (!huge_known || huge_free >= bytes + ((size_t) 1 << 30)) madvise(p, bytes, MADV_HUGEPAGE);
     // (the registration faults the pages in, one thread: faulting them from 16 threads first started ~40 s sooner but
     // left fewer huge pages - the CPU lane read its experts 6-8% slower, 2-socket Xeon 6152)
-    if (syscall(SYS_mbind, p, bytes, 3 /* MPOL_INTERLEAVE */, mask, (unsigned long) (sizeof mask * 8), 0u) != 0 ||
-        cudaHostRegister(p, bytes, cudaHostRegisterPortable | cudaHostRegisterMapped) != cudaSuccess) {
+    // fault in before registering: cudaHostRegister holds the driver lock, stalling other parts' copies
+    if (syscall(SYS_mbind, p, bytes, 3 /* MPOL_INTERLEAVE */, mask, (unsigned long) (sizeof mask * 8), 0u) != 0) {
+        munmap(p, bytes);
+        return nullptr;
+    }
+    for (size_t o = 0; o < bytes; o += 4096) ((volatile char*) p)[o] = 0;
+    if (cudaHostRegister(p, bytes, cudaHostRegisterPortable | cudaHostRegisterMapped) != cudaSuccess) {
         cudaGetLastError();
         munmap(p, bytes);
         return nullptr;
@@ -1051,10 +1056,9 @@ bool Glm5Model::fast_setup(std::string& err) {
         // controllers, ~60 instead of ~92 GB/s).  Pages some process still maps stay.  STRATA_GLM_DROP_CACHE=0 keeps it.
 #ifdef __linux__   // (numa_nodes() is empty elsewhere; posix_fadvise is POSIX)
         {
-            static bool dropped = false;
+            static std::atomic<bool> dropped{false};
             const char* dc = getenv("STRATA_GLM_DROP_CACHE");
-            if (!dropped && (dc == nullptr || std::atoi(dc) != 0) && numa_nodes().size() >= 2) {
-                dropped = true;
+            if ((dc == nullptr || std::atoi(dc) != 0) && numa_nodes().size() >= 2 && !dropped.exchange(true)) {
                 for (const Shard& sh : pack_shards_)
                     if (sh.fd >= 0) posix_fadvise(sh.fd, 0, 0, POSIX_FADV_DONTNEED);
             }
@@ -1086,6 +1090,7 @@ bool Glm5Model::fast_setup(std::string& err) {
         }
         double wsum = 0;
         for (double w : cls_weight) wsum += w;
+        if (split_load_ != nullptr) split_load_->wait(part_);
         int64_t budget = ram_budget_;
         const bool staging_only = glmfast::minimal_ram_tier(F->unified_memory, nmin >= g.n_expert,
                                                            ram_budget_ >= 0 || getenv("STRATA_GLM_RAM_GB") != nullptr);
@@ -1146,18 +1151,33 @@ bool Glm5Model::fast_setup(std::string& err) {
                                                                                  (double) std::max(1, remaining_layers)));
         }
         F->rc.assign(cls_stride.size(), FastState::RamClass{});
+        std::vector<int64_t> cls_n(cls_stride.size(), 0), cls_cap(cls_stride.size(), 0);
         for (size_t c = 0; c < cls_stride.size() && wsum > 0; ++c) {
-            auto& R = F->rc[c];
-            R.stride = cls_stride[c];
-            int64_t n = (int64_t) ((double) budget * cls_weight[c] / wsum / (double) R.stride);
+            int64_t n = (int64_t) ((double) budget * cls_weight[c] / wsum / (double) cls_stride[c]);
             n = std::max<int64_t>(n, 16);   // a floor so a miss always has somewhere to land
             // never more than the experts of the class that the VRAM pool does not hold, plus the free slots
             // fast_boundary keeps per class for disk reads and reads ahead.  When the pool holds every expert (a big
             // card: 288 of 288 slots a layer, or a split across many GPUs) that is a few spares' worth - below the floor
             // for a class of one layer (the NextN block), which then never allocated and stopped the start ("did not
             // allocate")
-            const int64_t cap = std::max<int64_t>(1, (int64_t) (cls_weight[c] / (double) R.stride)) + 16;
-            n = std::min<int64_t>(n, cap);
+            cls_cap[c] = std::max<int64_t>(1, (int64_t) (cls_weight[c] / (double) cls_stride[c])) + 16;
+            cls_n[c] = std::min<int64_t>(n, cls_cap[c]);
+        }
+        // parallel load: take the planned size from the budget and let the next part go before pinning
+        if (split_load_ != nullptr) {
+            int64_t planned = 0;
+            for (size_t c = 0; c < cls_n.size(); ++c) planned += cls_n[c] * (int64_t) cls_stride[c];
+            if (!staging_only && ram_budget_ < 0 && remaining >= 0) {
+                remaining = std::max<int64_t>(0, remaining - planned);
+                remaining_layers -= n_moe;
+            }
+            split_load_->pass(part_);
+        }
+        for (size_t c = 0; c < cls_stride.size() && wsum > 0; ++c) {
+            auto& R = F->rc[c];
+            R.stride = cls_stride[c];
+            int64_t n = cls_n[c];
+            const int64_t cap = cls_cap[c];
             const int64_t least = std::min<int64_t>(16, cap);   // the floor, or the whole cap when that is smaller
             void* p = nullptr;
             while (n >= least) {
@@ -1188,7 +1208,7 @@ bool Glm5Model::fast_setup(std::string& err) {
             R.tick.assign((size_t) n, 0);
             F->ram_bytes += (size_t) n * R.stride;
         }
-        if (!staging_only && ram_budget_ < 0 && remaining >= 0) {
+        if (split_load_ == nullptr && !staging_only && ram_budget_ < 0 && remaining >= 0) {
             remaining = std::max<int64_t>(0, remaining - (int64_t) F->ram_bytes);
             remaining_layers -= n_moe;
         }
@@ -1264,10 +1284,20 @@ bool Glm5Model::fast_setup(std::string& err) {
             std::fprintf(stderr, "glm fast: CUDA%d RAM-resident verified: all %d experts are in VRAM or pinned RAM\n",
                          dev_, total);
         }
-        if (!fast_cpu_lane_setup(err)) return false;
-        F->svc = std::thread([this] { fast_service(); });
-        glmfast::pin_thread(F->svc.native_handle(), F->cpu_pin);   // (the CPU lane's last worker: on its pool's node)
+        F->lane_pending = true;
+        if (!defer_lane_ && !fast_setup_finish(err)) return false;
     }
+    return true;
+}
+
+bool Glm5Model::fast_setup_finish(std::string& err) {
+    FastState* F = fast_;
+    if (F == nullptr || !F->lane_pending) return true;
+    F->lane_pending = false;
+    cudaSetDevice(dev_);
+    if (!fast_cpu_lane_setup(err)) return false;
+    F->svc = std::thread([this] { fast_service(); });
+    glmfast::pin_thread(F->svc.native_handle(), F->cpu_pin);   // (the CPU lane's last worker: on its pool's node)
     return true;
 }
 
