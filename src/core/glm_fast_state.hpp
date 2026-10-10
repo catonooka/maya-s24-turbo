@@ -420,6 +420,9 @@ struct Glm5Model::FastState {
     std::atomic<uint64_t> processed{0};  // ... and the service thread has consumed
     // stats (written by the service thread, read by anyone)
     std::atomic<uint64_t> hits{0}, misses{0}, miss_layers{0}, ram_hits{0}, disk_reads{0}, promotions{0};
+    std::atomic<uint64_t> disk_skips{0};   // STRATA_GLM_DISK_SKIP_W / _FROM: disk-only experts left out
+    int disk_skip_from = 8;                // ... at route rank >= this (8: none)
+    float disk_skip_w = 0.0f;              // ... or of a smaller weight share than this (0: none)
     std::atomic<uint64_t> scratch_uses{0}, demotions{0}, drops{0};
     std::atomic<uint64_t> miss_us{0}, disk_us{0};
     uint64_t tokens = 0;
