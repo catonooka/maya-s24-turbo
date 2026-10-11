@@ -851,7 +851,12 @@ bool Verifier::capture(int T, std::string& err) {
                 cudaKernelNodeParams kp{};
                 if (cudaGraphKernelNodeGetParams(nd, &kp) == cudaSuccess) {
                     const char* fn = nullptr;
+                    // cudaFuncGetName arrived in CUDA 12.3; 12.0/12.2 still list the node type.
+#if CUDART_VERSION >= 12030
                     if (cudaFuncGetName(&fn, kp.func) == cudaSuccess && fn) name = fn;
+#else
+                    (void) fn;
+#endif
                 }
             } else if (ty == cudaGraphNodeTypeMemcpy) name = "memcpy";
             else if (ty == cudaGraphNodeTypeMemset) name = "memset";
