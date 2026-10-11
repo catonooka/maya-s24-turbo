@@ -4,6 +4,28 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.0.34 - 2026-10-11
+
+Fixes from your reports: a two-GPU Windows PC whose RAM tier came out smaller in v1.0.33, and builds on CUDA 12.0-12.2.
+Also two new opt-in settings for machines that read experts from the SSD.
+
+- **A split's RAM tiers near Windows' pinning cap** (#110, from #105). A two-GPU Windows PC pinned 35.6 GB of its
+  44 GB RAM budget on v1.0.33 against 42.6 on v1.0.32, so more experts came from the SSD. The fix:
+  - the GPUs pin their tiers one after another, so only the one that reaches the cap gives way;
+  - a tier leaves 512 MB of room under the cap;
+  - the expert tables upload through the engine's own pinned buffer, so reaching the cap no longer stops the start with
+    `the warmed expert tables did not upload`.
+- **Windows with two NUMA nodes or more** (#110, from #56): the engine log says which processor group and node the
+  engine runs in, and where the RAM tier's pages are, to find why some starts decode slower than others.
+- **Builds on CUDA 12.0-12.2** (#107 by @Ajay9o9), the version Ubuntu's `nvidia-cuda-toolkit` installs.
+- **New, opt-in: `STRATA_GLM_DISK_READERS=<n>`** (#108 by @Ajay9o9). Prompts read the experts that come from the SSD
+  with n threads, each expert whole, handed on as soon as it lands. On a DRAM-less NVMe, prompts read 25-50% faster; an
+  NVMe with its own DRAM can lose instead, so measure yours. The answers stay the same.
+- **New, opt-in, it changes the answers: `STRATA_GLM_TRUNK_KEEP` / `_MAP`** (#103 by @sociolog), for a RAM-bound split
+  that would rather be faster. The model's own layers leave out their lowest-ranked experts that aren't in VRAM, as the
+  MTP draft does, layer by layer with the map. On an RTX 3090 + 3060, Maya-M decoded 23% faster with the map in the
+  README's row, KL 0.018 from the full model.
+
 ## v1.0.33 - 2026-10-11
 
 Several conversations at once on a layer split, a short request no longer waits for a long answer, `--calibrate` also
