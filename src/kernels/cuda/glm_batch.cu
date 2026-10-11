@@ -1485,8 +1485,9 @@ __global__ void __launch_bounds__(256) mla_attn_wmma2_kernel(
         }
 }
 
-// Per device, the wave32 WMMA path: 0 not probed yet, 1 gfx12 (supported, the default), 2 gfx11 (supported),
-// 3 anything else (unsupported).
+// Per device, the wave32 WMMA path: 0 not probed yet, 1 gfx12, 2 other gfx11 (gfx1100/1101/1102/1150),
+// 4 gfx1151 (Strix Halo), 3 anything else (unsupported).
+// Default wmma2 on gfx12 and gfx1151; other gfx11 stay on f16q.
 int mla_wmma2_arch() {
     static std::atomic<int> cache[64]{};
     int dev = 0;
@@ -1499,9 +1500,10 @@ int mla_wmma2_arch() {
             const char* arch = prop.gcnArchName;
             if (std::strncmp(arch, "gfx1200", 7) == 0 || std::strncmp(arch, "gfx1201", 7) == 0)
                 c = 1;
+            else if (std::strncmp(arch, "gfx1151", 7) == 0)
+                c = 4;
             else if (std::strncmp(arch, "gfx1100", 7) == 0 || std::strncmp(arch, "gfx1101", 7) == 0 ||
-                     std::strncmp(arch, "gfx1102", 7) == 0 || std::strncmp(arch, "gfx1150", 7) == 0 ||
-                     std::strncmp(arch, "gfx1151", 7) == 0)
+                     std::strncmp(arch, "gfx1102", 7) == 0 || std::strncmp(arch, "gfx1150", 7) == 0)
                 c = 2;
         }
         cache[dev].store(c, std::memory_order_relaxed);
@@ -2020,8 +2022,8 @@ void mla_attn_f16q(const uint16_t* q16, const uint16_t* lat, const int* cells, c
     check("mla_attn_wmma");
 }
 
-bool mla_wmma2_supported() { return mla_wmma2_arch() <= 2; }
-bool mla_wmma2_default() { return mla_wmma2_arch() == 1; }
+bool mla_wmma2_supported() { const int a = mla_wmma2_arch(); return a == 1 || a == 2 || a == 4; }
+bool mla_wmma2_default() { const int a = mla_wmma2_arch(); return a == 1 || a == 4; }
 
 void mla_attn_wmma2(const float* q_abs, const uint16_t* lat, const int* cells, const int* n_sel, int n_sel_max,
                     int n_head, int kv_lora, float scale, int T, float* ctx, cudaStream_t s, bool lat_q8) {
