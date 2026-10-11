@@ -94,6 +94,24 @@ class PrefillConfigTests(unittest.TestCase):
         self.assertEqual(again[again.index("--prefill") + 1], "32768")
         self.assertEqual(again.count("--prefill"), 1)
 
+    def test_dflash2_drafter_in_the_config(self):
+        # a DFlash2 setup: --dflash with the drafter's file, the answer kept for the next setup, its own tuning key
+        pc = {"gpus": [{"index": i, "name": "GPU", "vram_gb": 24} for i in (0, 1)]}
+        drafter = self.root / "models" / "GLM-5.3-Flash-DFlash2" / maya.DFLASH["file"]
+        p = maya.write_config(self.a, pc, {}, self.model / "pack", "test", 32768, self.root / "models", None,
+                              ("local", self.first), drafter)
+        c = json.loads(p.read_text())
+        self.assertEqual(c["args"][c["args"].index("--dflash") + 1], str(drafter))
+        self.assertEqual(c["installer"]["draft"], "dflash2")
+        key = maya.hardware_key(c)
+        # the MTP block (the default): no --dflash, not even one kept from the config before
+        p = maya.write_config(self.a, pc, {}, self.model / "pack", "test", 32768, self.root / "models", None,
+                              ("local", self.first))
+        c = json.loads(p.read_text())
+        self.assertNotIn("--dflash", c["args"])
+        self.assertEqual(c["installer"]["draft"], "mtp")
+        self.assertNotEqual(maya.hardware_key(c), key)
+
     def test_prefill_tips_follow_strata(self):
         self.assertEqual(maya.prefill_tips(["--prefill", "auto"], 177, 1), [])      # one GPU: auto takes 32768
         self.assertEqual(maya.prefill_tips(["--prefill", "32768"], 32, 1), [])

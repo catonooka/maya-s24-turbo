@@ -254,5 +254,40 @@ class ZfsArc(unittest.TestCase):
         self.assertEqual(self.arc("name type data\nsize 4 1024\n"), 0.0)
 
 
+
+class DraftChoice(unittest.TestCase):
+    """The setup's drafting question: the MTP block by default, a DFlash2 drafter when chosen."""
+
+    def choose(self, inst, pc=None, draft=None, yes=True):
+        args = SimpleNamespace(draft=draft, yes=yes)
+        with patch.object(maya, "say"):
+            return maya.choose_draft(args, pc or {}, inst)
+
+    def test_mtp_is_the_default(self):
+        self.assertEqual(self.choose({}), "mtp")
+
+    def test_the_earlier_answer_is_the_default(self):
+        self.assertEqual(self.choose({"draft": "dflash2"}), "dflash2")
+        self.assertEqual(self.choose({"draft": "something else"}), "mtp")
+
+    def test_the_option_wins(self):
+        self.assertEqual(self.choose({"draft": "mtp"}, draft="dflash2"), "dflash2")
+
+    def test_amd_keeps_mtp_without_asking(self):
+        with patch.object(maya, "choose", side_effect=AssertionError("asked")):
+            self.assertEqual(self.choose({"draft": "dflash2"}, pc={"backend": "hip"}, yes=False), "mtp")
+
+    def test_the_answer_typed(self):
+        with patch.object(maya, "ask", return_value="2"):
+            self.assertEqual(self.choose({}, yes=False), "dflash2")
+
+    def test_the_drafter_download_is_pinned_and_hashed(self):
+        d = maya.DFLASH
+        self.assertEqual(maya.hf_url(d["repo"], d["revision"], "", d["file"]),
+                         "https://huggingface.co/Anbeeld/GLM-5.3-Flash-DFlash2-GGUF/resolve/"
+                         "f3569acb7f9cee95e66d24442d75536eb00ab842/GLM-5.3-Flash-DFlash2-Q4_K_M.gguf")
+        self.assertEqual(len(d["sha256"]), 64)
+
+
 if __name__ == "__main__":
     unittest.main()
