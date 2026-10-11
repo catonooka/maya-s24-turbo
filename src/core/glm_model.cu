@@ -760,7 +760,8 @@ bool Glm5Model::load_pack_split(const std::string& pack_dir, int64_t max_ctx, co
             p->defer_lane_ = true;
             th.emplace_back([&, i, l0, l1, p] {
                 ok[(size_t) i] = p->load_pack(pack_dir, max_ctx, errs[(size_t) i], devs[(size_t) i], l0, l1);
-                sl.pass(i);
+                sl.pass(i);       // (a part that stopped early, or never reached those turns, lets the others on)
+                sl.pass_pin(i);
             });
         }
         for (auto& t : th) t.join();

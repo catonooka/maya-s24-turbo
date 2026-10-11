@@ -220,13 +220,14 @@ public:
     int part_ = 0;                                         // ... and which of them this one is (0 = the first layers)
     std::vector<int> split_devs_;                          // ... and the CUDA devices of all of them, part by part
     std::unique_ptr<Glm5Model> split_next_;
-    // parallel split load: parts take the RAM budget in part order; CPU lane setup waits until all have loaded
+    // parallel split load: parts take the RAM budget in part order, then pin their RAM tiers in part order too
+    // (wait_pin / pass_pin); CPU lane setup waits until all have loaded
     struct SplitLoad {
         std::mutex mu;
         std::condition_variable cv;
-        std::vector<bool> passed;
-        int turn = 0;
-        explicit SplitLoad(int n) : passed((size_t) n, false) {}
+        std::vector<bool> passed, pinned;
+        int turn = 0, pin_turn = 0;
+        explicit SplitLoad(int n) : passed((size_t) n, false), pinned((size_t) n, false) {}
         void wait(int part) {
             std::unique_lock<std::mutex> lk(mu);
             cv.wait(lk, [&] { return turn >= part; });
@@ -236,6 +237,18 @@ public:
                 std::lock_guard<std::mutex> lk(mu);
                 passed[(size_t) part] = true;
                 while (turn < (int) passed.size() && passed[(size_t) turn]) ++turn;
+            }
+            cv.notify_all();
+        }
+        void wait_pin(int part) {
+            std::unique_lock<std::mutex> lk(mu);
+            cv.wait(lk, [&] { return pin_turn >= part; });
+        }
+        void pass_pin(int part) {
+            {
+                std::lock_guard<std::mutex> lk(mu);
+                pinned[(size_t) part] = true;
+                while (pin_turn < (int) pinned.size() && pinned[(size_t) pin_turn]) ++pin_turn;
             }
             cv.notify_all();
         }

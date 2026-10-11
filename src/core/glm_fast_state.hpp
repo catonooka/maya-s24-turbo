@@ -386,6 +386,7 @@ struct Glm5Model::FastState {
     int n_keys = 0;
     uint8_t* scratch = nullptr;
     std::vector<uint8_t*> stage;   // pinned: disk reads when no RAM slot is free
+    size_t stage_bytes = 0;        // ... each (an expert's blob); the start's uploads go through stage[0] too
     std::mutex mu;   // the service thread vs the between-token boundary
     std::unique_ptr<glmfast::Workers> workers;   // parallel disk reads
     // ---- the CPU LANE (STRATA_GLM_CPU_LANE=<threads>, 0 off): a route's RAM-tier experts split between the device's
