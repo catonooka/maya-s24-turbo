@@ -5,7 +5,8 @@
 // Reads the first 64 experts of the layer straight from its shard (native_experts.txt gives the offsets) - ~450 MB,
 // far past the L3, so every expert comes from DRAM like a real RAM-tier miss - then times gate/up (2 x n_ff rows of
 // n_embd) and down (n_embd rows of n_ff) on each thread count given, rows split evenly over a persistent spinning
-// pool (no thread start per expert) - the shape of a CPU miss path beside the PCIe fetches.
+// pool (no thread start per expert) - the shape of a CPU miss path beside the PCIe fetches.  GLM_CPU_BENCH_TOKENS=k: each
+// row dotted with k activations (a verify window's tokens sharing the expert): the same DRAM reads, k times the dots.
 #include "strata/kernels/cpu/native_expert.hpp"
 
 #include <algorithm>
@@ -133,14 +134,24 @@ int main(int argc, char** argv) {
     }
     std::vector<float> x(n_embd);
     for (int i = 0; i < n_embd; ++i) x[i] = std::sin(0.37f * i) * 0.5f;
-    std::vector<uint8_t> act(strata::kernels::cpu::kNativeActBytes), hq(strata::kernels::cpu::kNativeHBytes);
-    std::vector<float> ff(n_ff), dn(n_embd);
-    strata::kernels::cpu::native_quant_act(f, x.data(), act.data());
+    const int K = std::max(1, std::min(16, getenv("GLM_CPU_BENCH_TOKENS") ? std::atoi(getenv("GLM_CPU_BENCH_TOKENS")) : 1));
+    std::vector<uint8_t> act(K * strata::kernels::cpu::kNativeActBytes), hq(K * strata::kernels::cpu::kNativeHBytes);
+    std::vector<float> ff((size_t) K * n_ff), dn((size_t) K * n_embd);
+    std::vector<const void*> ap(K), hp(K);
+    std::vector<float*> fp(K), dp(K);
+    for (int k = 0; k < K; ++k) {
+        for (int i = 0; i < n_embd; ++i) x[i] = std::sin(0.37f * i + 0.11f * k) * 0.5f;
+        strata::kernels::cpu::native_quant_act(f, x.data(), act.data() + k * strata::kernels::cpu::kNativeActBytes);
+        ap[k] = act.data() + k * strata::kernels::cpu::kNativeActBytes;
+        hp[k] = hq.data() + k * strata::kernels::cpu::kNativeHBytes;
+        fp[k] = ff.data() + (size_t) k * n_ff;
+        dp[k] = dn.data() + (size_t) k * n_embd;
+    }
     std::vector<int> counts;
     for (int i = 3; i < argc; ++i) counts.push_back(std::atoi(argv[i]));
     if (counts.empty()) counts = {1, 6, 12};
-    std::printf("layer %d gu_type %d d_type %d: expert %.2f MB (gate/up %.2f, down %.2f), %d experts cycled from DRAM\n",
-                layer, gu, dt, (double) eb / 1e6, 2.0 * gub / 1e6, dnb / 1e6, n_exp);
+    std::printf("layer %d gu_type %d d_type %d: expert %.2f MB (gate/up %.2f, down %.2f), %d experts cycled from DRAM, "
+                "%d activation(s) a row\n", layer, gu, dt, (double) eb / 1e6, 2.0 * gub / 1e6, dnb / 1e6, n_exp, K);
     for (int nt : counts) {
         Spin pool(nt);
         const int reps = 4 * n_exp;
@@ -150,17 +161,13 @@ int main(int argc, char** argv) {
             const auto t0 = std::chrono::steady_clock::now();
             pool.run([&](int t, int n) {
                 const int r0 = n_ff * t / n, r1 = n_ff * (t + 1) / n;
-                const void* a[1] = {act.data()};
-                float* o[1] = {ff.data()};
-                strata::kernels::cpu::native_gu_rows_split(f, b, b + gub, a, 1, o, r0, r1, 10.0f);
+                strata::kernels::cpu::native_gu_rows_split(f, b, b + gub, ap.data(), K, fp.data(), r0, r1, 10.0f);
             });
             const auto t1 = std::chrono::steady_clock::now();
-            strata::kernels::cpu::native_quant_h(f, ff.data(), hq.data());
+            for (int k = 0; k < K; ++k) strata::kernels::cpu::native_quant_h(f, fp[k], (void*) hp[k]);
             pool.run([&](int t, int n) {
                 const int r0 = n_embd * t / n, r1 = n_embd * (t + 1) / n;
-                const void* h[1] = {hq.data()};
-                float* o[1] = {dn.data()};
-                strata::kernels::cpu::native_down_rows_split(f, b + 2 * gub, h, 1, o, r0, r1);
+                strata::kernels::cpu::native_down_rows_split(f, b + 2 * gub, hp.data(), K, dp.data(), r0, r1);
             });
             const auto t2 = std::chrono::steady_clock::now();
             if (rep < n_exp) continue;   // the first lap warms the pool and the clocks

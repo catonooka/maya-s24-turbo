@@ -37,6 +37,7 @@
 #include <cstddef>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <tuple>
 #include <thread>
@@ -668,6 +669,7 @@ void Glm5Model::reset() {
     pos_ = 0;
     if (fast_ && fast_->route_error_h && cudaStreamSynchronize(fast_->cs) == cudaSuccess)
         *fast_->route_error_h = 0;   // a failed route belongs to the previous request
+    dflash_reset();   // a new sequence: the drafter's cached positions belong to the old one
     if (split_next_) {
         split_next_->reset();
         cudaSetDevice(dev_);
@@ -758,6 +760,7 @@ bool Glm5Model::load_pack_split(const std::string& pack_dir, int64_t max_ctx, co
             p->split_devs_ = devs;
             p->split_load_ = &sl;
             p->defer_lane_ = true;
+            p->dflash_path_ = dflash_path_;   // the drafter: the part with the head loads it, every part sizes for it
             th.emplace_back([&, i, l0, l1, p] {
                 ok[(size_t) i] = p->load_pack(pack_dir, max_ctx, errs[(size_t) i], devs[(size_t) i], l0, l1);
                 sl.pass(i);       // (a part that stopped early, or never reached those turns, lets the others on)
@@ -797,6 +800,7 @@ bool Glm5Model::load_pack_split(const std::string& pack_dir, int64_t max_ctx, co
         m->n_parts_ = n;
         m->part_ = i;
         m->split_devs_ = devs;
+        m->dflash_path_ = dflash_path_;
         if (!m->load_pack(pack_dir, max_ctx, err, devs[(size_t) i], l0, l1)) {
             if (prev != nullptr) prev->split_next_.reset();
             return false;
@@ -938,7 +942,9 @@ static double host_read_bps() {
 //     part (the draft on the last one), and the sum breaks the tie;
 //   - the startability gate (Strata #1094): every part keeps its pool's floor and can lend a 512-token prompt chunk.
 // Two to four GPUs try every placement (memoised per part and range, as Strata's four-way search); more keep the
-// proportional split (glm_auto_bounds).  STRATA_GLM_SPLIT_LOG=1 prints every placement's prediction.
+// proportional split (glm_auto_bounds) - except a DFlash drafter's pipelined window, whose slowest part paces every
+// draft: there a DP over the layers for each cap on the slowest part.  STRATA_GLM_SPLIT_LOG=1 prints every
+// placement's prediction.
 static std::vector<int> glm_search_bounds(const std::string& pack_dir, int64_t max_ctx, const std::vector<int>& devs) {
     std::string err;
     std::vector<std::string> names;
@@ -995,6 +1001,16 @@ static std::vector<int> glm_search_bounds(const std::string& pack_dir, int64_t m
     const double lat = fast ? (double) g.kv_lora * (double) max_ctx / 2 : (double) g.kv_lora * (double) max_ctx;
     const double dsa_state = 4.0 * (lat + 2.0 * g.idx_key * (double) max_ctx + (double) g.idx_key * max_pools);
     const double kda_state = 4.0 * ((double) g.d_inner() * g.kda_head_dim + 3.0 * g.d_inner() * (g.d_conv - 1));
+    // a DFlash drafter (STRATA_GLM_DFLASH): its file and ring on the last part; every part keeps the verify window's
+    // buffers - per KDA layer its state backup and the window's inputs, and ~32 MB of rows and logits
+    double dflash = 0, win_kda = 0, win_fixed = 0;
+    if (const char* df = getenv("STRATA_GLM_DFLASH"); df != nullptr && df[0] != '\0') {
+        std::error_code ec;
+        const auto fsz = std::filesystem::file_size(df, ec);
+        dflash = (ec ? 0.0 : (double) fsz) + (double) (96u << 20);
+        win_kda = kda_state + 4.0 * Glm5Model::kWinMax * (3.0 * g.d_inner() + 2.0 * g.kda_head_dim + g.n_head);
+        win_fixed = (double) (32u << 20);
+    }
     // the experts: a layer's blob and its VRAM slot's stride (native_experts.txt)
     std::vector<double> blob((size_t) L + 1, 0.0), stride((size_t) L + 1, 0.0);
     {
@@ -1040,6 +1056,18 @@ static std::vector<int> glm_search_bounds(const std::string& pack_dir, int64_t m
         }
     }
     const bool pipelined = n == 2 && mtp && getenv("STRATA_GLM_NO_SPEC") == nullptr;
+    // a DFlash drafter's pipelined window (dflash_pipelined): the anchor crosses every part, and each draft kept behind
+    // it costs about the slowest part, so a round of a kept drafts costs sum + a * slowest for a + 1 tokens (a ~1.5 at
+    // the pipelined window's default cut); the batched one crosses the parts in turn (the parts added)
+    const bool df_pipe = dflash > 0 && dflash_pipelined(n);
+    constexpr double kDfKept = 1.5;
+    // ... and there each layer also costs a fixed time a token beyond its reads (launches, the CPU lane's answer, the
+    // hops): Maya-L over 9 GPUs measured ~0.78 ms a layer on a 5060 Ti and ~0.59 on the 3090 (2.1x its bandwidth),
+    // ~0.4 ms of it fixed - priced by reads alone the 3090 took 10 layers and paced every draft (5.9 ms a kept draft;
+    // 8 layers: 4.9 ms, 57.1 / 58.9 -> 61.6 / 63.1 tok/s).  STRATA_GLM_SPLIT_LAYER_MS overrides it
+    const double layer_fixed = !df_pipe ? 0.0
+                               : getenv("STRATA_GLM_SPLIT_LAYER_MS") ? std::atof(getenv("STRATA_GLM_SPLIT_LAYER_MS"))
+                                                                     : 0.4;
     // each layer's routes per expert: this machine's usage, else the pack's routing profile
     std::vector<std::vector<double>> cnt((size_t) L + 1);
     {
@@ -1119,7 +1147,12 @@ static std::vector<int> glm_search_bounds(const std::string& pack_dir, int64_t m
     for (auto& c : cards)
         if (c.bw <= 0) c.bw = 1e11;   // (no reading: every card the same, and the misses decide)
     const double host_bps = host_read_bps();
-    const double miss_bps = std::max(1e9, (host_bps > 0 ? host_bps : 2e10) / n);   // each part's lane, all at once
+    // each part's lane, all at once - except under a DFlash pipelined window (3+ GPUs): there ONE pool serves every
+    // part's misses as they come (fast_setup), at about half the host's all-core read speed (Maya-L over 9 GPUs: 0.14-
+    // 0.27 ms an 8.7 MB expert, 32-62 GB/s of 77; the host's / 9 priced a miss at ~1 ms and kept the 5060 Tis to the
+    // layers their pools held whole, the 3090 to 9-10)
+    const double miss_bps =
+        std::max(1e9, (host_bps > 0 ? host_bps : 2e10) / (df_pipe ? 2.0 : (double) n));
     double max_stride = 0;
     for (double st : stride) max_stride = std::max(max_stride, st);
     const double fixed = 8.0 * max_stride + (double) (256u << 20);   // the scratch slots and the activations
@@ -1138,11 +1171,11 @@ static std::vector<int> glm_search_bounds(const std::string& pack_dir, int64_t m
         if (const auto it = memo.find(key); it != memo.end()) return it->second;
         const bool last = i == n - 1;
         const Card& c = cards[(size_t) i];
-        double used = common + fixed + 4.0 * 2 * g.hc * g.n_embd + (i == 0 ? embd : 0.0);
+        double used = common + fixed + 4.0 * 2 * g.hc * g.n_embd + (i == 0 ? embd : 0.0) + win_fixed;
         double bsum = 0, ssum = 0, smax = 0;
         bool kda = false, dsa = false, dense_ffn = false, moe = false;
         for (int l = lb; l < le; ++l) {
-            used += dense[(size_t) l] + (g.is_recr(l) ? kda_state : dsa_state);
+            used += dense[(size_t) l] + (g.is_recr(l) ? kda_state + win_kda : dsa_state);
             (g.is_recr(l) ? kda : dsa) = true;
             if (moe_layer(l)) {
                 bsum += blob[(size_t) l];
@@ -1154,7 +1187,7 @@ static std::vector<int> glm_search_bounds(const std::string& pack_dir, int64_t m
             }
         }
         if (last) {
-            used += head;
+            used += head + dflash;
             if (mtp) {
                 used += mtp_dense + dsa_state;
                 bsum += blob[(size_t) L];
@@ -1187,7 +1220,7 @@ static std::vector<int> glm_search_bounds(const std::string& pack_dir, int64_t m
                 ev.hits += h;
                 ev.routes += g.n_exp_used;
             }
-            return 1e3 * (gpu / c.bw + cpu / miss_bps);
+            return 1e3 * (gpu / c.bw + cpu / miss_bps) + layer_fixed;
         };
         for (int l = lb; l < le; ++l) ev.ms += layer_ms(l, dense[(size_t) l]);
         if (last) {
@@ -1209,7 +1242,7 @@ static std::vector<int> glm_search_bounds(const std::string& pack_dir, int64_t m
             slow = std::max(slow, ev.back().ms);
             ok = ok && ev.back().ok;
         }
-        obj = pipelined ? slow : sum;
+        obj = pipelined ? slow : df_pipe ? (sum + kDfKept * slow) / (1.0 + kDfKept) : sum;
         tie = pipelined ? sum : slow;
         return ok;
     };
@@ -1241,6 +1274,51 @@ static std::vector<int> glm_search_bounds(const std::string& pack_dir, int64_t m
         for (int k1 = 1; k1 + 2 < L; ++k1)
             for (int k2 = k1 + 1; k2 + 1 < L; ++k2)
                 for (int k3 = k2 + 1; k3 < L; ++k3) { b = {k1, k2, k3}; consider(); }
+    } else if (df_pipe) {
+        // more parts, a DFlash pipelined window: too many placements to try, so for each cap on the slowest part a DP
+        // over the layers finds the least sum whose parts all fit under it (part i on [lb, le), every part a layer
+        // at least); the caps are the part times seen (up to 400 of them, spread over their range)
+        std::vector<double> caps;
+        for (int i = 0; i < n; ++i)
+            for (int lb = i == 0 ? 0 : i; lb + (n - i) <= L && (i > 0 || lb == 0); ++lb)
+                for (int le = lb + 1; le + (n - 1 - i) <= L; ++le) {
+                    if (i == n - 1 && le != L) continue;
+                    const Eval e = stage(i, lb, le);
+                    if (e.ok) caps.push_back(e.ms);
+                }
+        std::sort(caps.begin(), caps.end());
+        caps.erase(std::unique(caps.begin(), caps.end()), caps.end());
+        const size_t nq = std::min<size_t>(caps.size(), 400);
+        const double inf = 1e30;
+        const size_t W = (size_t) L + 1;
+        std::vector<double> f((size_t) (n + 1) * W);
+        std::vector<int> from((size_t) (n + 1) * W, 0);
+        for (size_t q = 0; q < nq; ++q) {
+            const double cap = caps[nq < 2 ? 0 : q * (caps.size() - 1) / (nq - 1)];
+            std::fill(f.begin(), f.end(), inf);
+            f[0] = 0;   // f[i W + l]: the first i parts over layers [0, l)
+            for (int i = 0; i < n; ++i)
+                for (int lb = i; lb + (n - i) <= L; ++lb) {
+                    const double base = f[(size_t) i * W + lb];
+                    if (base >= inf) continue;
+                    for (int le = lb + 1; le + (n - 1 - i) <= L; ++le) {
+                        if (i == n - 1 && le != L) continue;
+                        const Eval e = stage(i, lb, le);
+                        if (!e.ok || e.ms > cap) continue;
+                        double& t = f[(size_t) (i + 1) * W + le];
+                        if (base + e.ms < t) {
+                            t = base + e.ms;
+                            from[(size_t) (i + 1) * W + le] = lb;
+                        }
+                    }
+                }
+            if (f[(size_t) n * W + L] >= inf) continue;
+            for (int i = n, l = L; i > 1; --i) {
+                l = from[(size_t) i * W + l];
+                b[(size_t) i - 2] = l;
+            }
+            consider();
+        }
     } else {
         return {};
     }
@@ -1250,7 +1328,9 @@ static std::vector<int> glm_search_bounds(const std::string& pack_dir, int64_t m
     std::fprintf(stderr, "glm split auto: the host reads RAM at %.0f GB/s (a part's CPU lane: %.0f); the routes from %s; "
                          "%s\n", host_bps / 1e9, miss_bps / 1e9,
                  cover[3].empty() ? "the default coverage curve (no usage counts)" : "the usage counts",
-                 pipelined ? "the pipelined decode: a token costs the slower part" : "a token costs the parts added");
+                 pipelined ? "the pipelined decode: a token costs the slower part"
+                 : df_pipe ? "the DFlash pipelined window: a round of a kept drafts costs the parts added + a x the slowest"
+                           : "a token costs the parts added");
     if (best.empty()) {
         if (best_any.empty()) return {};
         std::fprintf(stderr, "glm split auto: WARNING no placement leaves every part its pool's floor and a 512-token "
@@ -1277,8 +1357,28 @@ static std::vector<int> glm_search_bounds(const std::string& pack_dir, int64_t m
     return best;
 }
 
+// STRATA_GLM_DFLASH=<a DFlash2 GGUF drafted for this model> (the driver's --dflash): the decode drafts blocks with it
+// (decode_dflash).  It sits on the device of the part with the head and replaces the NextN block's drafting, so the
+// NextN block is not loaded (STRATA_GLM_NO_MTP) and the split search prices the drafter instead.
 bool Glm5Model::load_pack_env(const std::string& pack_dir, int64_t max_ctx, std::string& err,
                               const std::string& layer_split) {
+    if (const char* df = getenv("STRATA_GLM_DFLASH"); df != nullptr && df[0] != '\0') {
+        dflash_path_ = df;
+        if (getenv("STRATA_GLM_NO_MTP") == nullptr) {
+#if defined(_WIN32)
+            _putenv_s("STRATA_GLM_NO_MTP", "1");
+#else
+            setenv("STRATA_GLM_NO_MTP", "1", 1);
+#endif
+        }
+        std::fprintf(stderr, "glm dflash: MTP off - the NextN draft block is not loaded, DFlash drafts instead\n");
+    }
+    if (!load_pack_place(pack_dir, max_ctx, err, layer_split)) return false;
+    return dflash_bind(err);
+}
+
+bool Glm5Model::load_pack_place(const std::string& pack_dir, int64_t max_ctx, std::string& err,
+                                const std::string& layer_split) {
     // the layer split is the DEFAULT on multi-GPU hosts (measured at steady state, 640-token GEN on
     // real text: 182 vs 840 MB/tok device bytes, decode 195 vs 506 ms/tok, hit 87-90 vs 64.4% - the
     // pools are per-part, so 2x capacity halves the demand reads).  STRATA_GLM_SPLIT=0 forces one
@@ -1318,10 +1418,12 @@ bool Glm5Model::load_pack_env(const std::string& pack_dir, int64_t max_ctx, std:
         if (devs.size() < 2) return load_pack(pack_dir, max_ctx, err, devs.empty() ? 0 : devs[0]);
         if (devs.size() == 2 && getenv("STRATA_GLM_DEVS") == nullptr)
             if (const char* d1 = getenv("STRATA_GLM_DEV1")) devs[1] = std::atoi(d1);
-        // --layer-split auto: Strata's split search over two to four GPUs; more (or a pack it cannot read) share the
-        // layers by free VRAM - two GPUs at the midpoint, plus two layers for the head half when the tail also runs
+        // --layer-split auto: Strata's split search over two to four GPUs (and over more for a DFlash drafter's
+        // pipelined window); more (or a pack it cannot read) share the layers by free VRAM - two GPUs at the midpoint, plus two layers for the head half when the tail also runs
         // the NextN draft block (2x V100, split 22 / 23 / 24 / 25 / 26 -> 36.3 / 36.7 / 40.0 / 37.3 / 39.4 tok/s)
-        if (devs.size() <= 4) bounds = glm_search_bounds(pack_dir, max_ctx, devs);
+        const char* dfl = getenv("STRATA_GLM_DFLASH");
+        if (devs.size() <= 4 || (dfl != nullptr && dfl[0] != '\0' && dflash_pipelined((int) devs.size())))
+            bounds = glm_search_bounds(pack_dir, max_ctx, devs);
         if (bounds.empty() && devs.size() == 2)
             bounds = {g_.n_layers / 2 +
                       (getenv("STRATA_GLM_NO_MTP") == nullptr && getenv("STRATA_GLM_NO_SPEC") == nullptr ? 2 : 0)};
@@ -2740,6 +2842,14 @@ bool strata::core::Glm5Model::load_pack(const std::string& pack_dir, int64_t max
     pack_ = true;
     loaded_ = true;
     if (fast_mode_) pack_release_views();   // before fast_setup: its RAM tier sees the embedding's heap copy
+    // a DFlash drafter on the part with the head: its weights and ring before the expert pool is sized
+    dflash_on_ = fast_mode_ && !dflash_path_.empty();
+    if (!dflash_path_.empty() && l1_ == g_.n_layers) {
+        if (!fast_mode_)
+            std::fprintf(stderr, "glm dflash: the draft needs the fast path (STRATA_GLM_SLOW is set) - drafting off\n");
+        else if (!dflash_load(dflash_path_, dev_, err))
+            return false;
+    }
     if (fast_mode_ && !fast_setup(err)) return false;
     reset();
     return true;

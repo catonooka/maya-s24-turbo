@@ -582,7 +582,7 @@ class StrataEngine:
         # setup's calibration (tools/calibrate.py): engine settings for this request only, measured without a restart
         tune, tune_keys = sampling.get("strata_tune"), ""
         if isinstance(tune, dict):
-            for k in ("pcie_frac", "spec_min_p"):
+            for k in ("pcie_frac", "spec_min_p", "spec_cum"):
                 v = tune.get(k)
                 if isinstance(v, (int, float)) and not isinstance(v, bool) and 0.0 <= float(v) <= 1.0:
                     tune_keys += f" {k}={float(v)!r}"
@@ -592,6 +592,12 @@ class StrataEngine:
             rc = tune.get("read_chunks")   # ... and the pieces it reads an expert from the SSD in (x3)
             if isinstance(rc, int) and not isinstance(rc, bool) and 1 <= rc <= 16:
                 tune_keys += f" read_chunks={rc}"
+            sw = tune.get("spec")   # the GLM engine's DFlash decode: its verify window (the anchor and drafts), 2..16;
+            if isinstance(sw, int) and not isinstance(sw, bool) and 1 <= sw <= 16:   # 1: no drafting (the token loop)
+                tune_keys += f" spec={sw}"
+            sn = tune.get("spec_n_min")   # ... drafts it keeps whatever their confidence
+            if isinstance(sn, int) and not isinstance(sn, bool) and 0 <= sn <= 15:
+                tune_keys += f" spec_n_min={sn}"
         if isinstance(t, (int, float)) and not isinstance(t, bool) and float(t) <= 0.0:
             # temperature 0 is greedy: the engine reads temperature=0 as that whatever else the line says, and no other
             # sampler key goes (with only a config's top_p the engine took its sampled path: not deterministic)

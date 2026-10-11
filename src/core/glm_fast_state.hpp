@@ -394,6 +394,108 @@ struct Glm5Model::FastState {
     //      weighted sum (cpu_ans_h) before its down combine.  cpu_plan: how many of f RAM-tier experts go to the host.
     //      A split of 3+ GPUs shares one pool across its parts (fast_cpu_lane_setup).
     std::shared_ptr<glmfast::Workers> cpu_pool;
+    // one GPU with a DFlash drafter, on a host of two NUMA nodes or more (STRATA_GLM_WIN_LANES, on): a batched verify
+    // window's tokens' CPU-lane experts go to two lane threads, token t to lane t % 2 - lane 0 drives cpu_pool (then
+    // pinned to the GPU's node), lane 1 a pool of its own on another node - so the window's tokens run on both
+    // sockets at once (a decode's one token keeps the service thread and cpu_pool).  glm_fast_path.cu
+    struct WinLane;
+    WinLane* win_lane[2] = {nullptr, nullptr};
+    // ---- the verify WINDOW (src/core/glm_window.cu): T tokens at consecutive positions through this part's layers in
+    //      one pass; every per-token activation has a row per token (row t at t * its stride), the KDA layers' inputs
+    //      are kept per layer for window_commit's replay
+    struct Win {
+        int tmax = 0;
+        void* arena = nullptr;
+        float* R[2] = {nullptr, nullptr};   // residual rows (hc x n_embd each), double-buffered across the layers
+        int out = 0;                        // which of R holds this part's output rows after the window
+        float *x = nullptr, *mixer = nullptr, *ffn = nullptr, *pre = nullptr, *post = nullptr, *comb = nullptr;
+        void* xq = nullptr;
+        void* gated_q = nullptr;
+        float *qr_raw = nullptr, *qr = nullptr, *kv_raw = nullptr, *ik_raw = nullptr, *ig_raw = nullptr, *iw = nullptr;
+        float *q = nullptr, *iq = nullptr;
+        float *q_abs = nullptr, *ctx = nullptr;   // the absorbed MLA's per-token rows (n_head x kv_lora each)
+        void *qr_q = nullptr, *attn_q = nullptr;
+        float *rlog = nullptr, *sh_g = nullptr, *sh_u = nullptr, *dg = nullptr, *du = nullptr;
+        void* dhq = nullptr;
+        float* head_x = nullptr;
+        void* head_xq = nullptr;
+        float* logits = nullptr;
+        int* tok = nullptr;
+        float* emb = nullptr;
+        size_t xq_s = 0, gq_s = 0, qrq_s = 0, aq_s = 0, dhq_s = 0;   // q8_1 bytes per row
+        // per KDA layer: its tmax tokens' projections q | k | v (d_inner each), then f_a, g_a (head_dim), beta (n_head)
+        float* kin = nullptr;
+        size_t kin_layer = 0;               // floats per layer
+        std::vector<int> kin_of;            // layer -> its slot in kin (-1: not a KDA layer here)
+        int* tok_h = nullptr;               // pinned
+        float* emb_h = nullptr;             // pinned, tmax x n_embd
+        float* hop_h = nullptr;             // pinned, tmax x hc x n_embd: the rows to the next part
+        cudaEvent_t ev_hop = nullptr;
+        cudaEvent_t ev_tok[16] = {};        // window_pipe's hop of each token (its threads record and wait out of turn)
+        cudaEvent_t ev_pick[16] = {};       // ... and (the last part) each token's pick copied out
+        int bank = 0;                       // ... the slots' bank this window (they alternate: kPipeMax a bank)
+        bool pick_sampled = false;          // ... the picks drawn with pick_sp (row t at its counter + t), not argmax
+        // ... the tokens past the first wrong draft skip their heavy kernels: the head part's pinned word per bank
+        // (`from_h`, the host writes the first doomed token there), this part's device flag (`skip_d`, each layer's
+        // skip_gate copies the verdict for its token in) and the word this window reads (`from`)
+        volatile int* from_h = nullptr;
+        int* skip_d = nullptr;
+        const volatile int* from = nullptr;
+        strata::kernels::SamplerParams pick_sp;
+        int64_t p0 = 0;
+        int T = 0;
+        // STRATA_GLM_WIN_PROF=1: an event after each phase of the window's layers, the gaps summed per phase name
+        std::vector<cudaEvent_t> ev;
+        std::vector<const char*> ev_name;
+        size_t ev_n = 0;
+        std::map<std::string, double> ev_ms;
+        int64_t n_prof = 0;
+        double h_setup = 0, h_enqueue = 0, h_wait = 0, h_after = 0;   // window()'s host phases (the first part's)
+        int64_t h_n = 0;
+        // STRATA_GLM_WIN_UNION=1: each MoE layer's routed experts per window token (device, layers x kWinMax x 8), and
+        // the distinct experts a window's layer routes against its picks (how much computing each expert once would save)
+        int* uid = nullptr;
+        std::vector<int> uid_h;
+        int64_t u_layers = 0, u_distinct = 0, u_picks = 0;
+        // ---- the batched MoE (fast_moe_window, gf::moe_win_experts): each token's own route state - plan, fetch
+        //      sources, the host's disk answer, the CPU lane's answer slot (token 0 the lone one, cpu_ans_h) and seq word
+        unsigned long long *mplan_ptr = nullptr, *mfetch = nullptr;
+        float *mplan_w = nullptr, *mcpu_part = nullptr;
+        int *mplan_id = nullptr, *mcpu_flag = nullptr;
+        void* sh_hq = nullptr;              // [tmax] the shared expert's h (q8_1, sh_hq_s bytes a token)
+        size_t sh_hq_s = 0;
+        float* sh_out = nullptr;            // [tmax][n_embd] its down rows
+        void* whq = nullptr;                // [tmax * 8][n_ff / 32] q8_1: each entry's h
+        float* wpart = nullptr;             // [tmax * 8][n_embd]: each entry's down rows
+        unsigned long long* grp_ptr = nullptr;
+        int *grp_start = nullptr, *grp_ent = nullptr, *n_groups = nullptr;
+        unsigned int* scr = nullptr;        // [0] the layer's scratch claims, [1] sticky: a slot taken twice
+        unsigned int* scr_h = nullptr;      // pinned: [1] read after the window
+        unsigned int* cpu_seq_w = nullptr;  // [tmax] seq words 64 bytes apart
+        gf::CpuAnswer* ans_h[16] = {};      // host-mapped answer slots for tokens 1.. (token 0: cpu_ans_h)
+        void* ans_d[16] = {};
+        bool per_token = false;             // the batched MoE off for this pass (the redo after a scratch clash)
+        int pipe_t = -1;                    // window_pipe: the token whose layers are being enqueued (its KDA inputs
+                                            // to kin row pipe_t); -1 otherwise
+        void mark(const char* nm, cudaStream_t st) {
+            if (ev_n >= ev.size()) {
+                cudaEvent_t e = nullptr;
+                cudaEventCreate(&e);
+                ev.push_back(e);
+                ev_name.push_back(nm);
+            }
+            cudaEventRecord(ev[ev_n], st);
+            ev_name[ev_n] = nm;
+            ++ev_n;
+        }
+    } win;
+    // ---- the DFlash drafter's target features (src/core/glm_dflash.cu): at each captured layer here, the input's
+    //      stream mean of the rows a pass leaves for the drafter, n_embd floats a row (cap_rows rows) - copied out to
+    //      the drafter's pinned staging (by position) on this part's stream
+    float* cap = nullptr;
+    int cap_rows = 0;
+    std::atomic<int> bnd_tokens{0};          // pipelined window tokens this part ran since its last tier boundary
+    int64_t pf_end = -1;                     // the prompt's end while one runs (the drafter takes its last positions)
     int cpu_node = -1;                         // the NUMA node the pool is pinned to (-1: unpinned) ...
     std::vector<int> cpu_pin;                  // ... and its CPUs (the service thread runs there too)
     std::string cal_file, cal_key;             // STRATA_GLM_CPU_CAL
@@ -412,6 +514,10 @@ struct Glm5Model::FastState {
     std::vector<strata::kernels::cpu::NativeFmt> cpu_fmt;   // per layer; n_ff == 0: the lane skips that layer
     std::vector<uint8_t> cpu_act, cpu_hq;                    // x's activation quant; 8 h quants
     std::vector<float> cpu_ff, cpu_dn;                       // 8 x n_ff; 8 x n_embd
+    struct CpuWin {                                          // a merged window layer (win_cpu_merged):
+        std::vector<uint8_t> act, hq;                        // each token's activation quant; each entry's h quant
+        std::vector<float> ff, dn;                           // each entry's n_ff / n_embd rows
+    } cpu_win;
     std::atomic<uint64_t> cpu_experts{0}, cpu_routes{0}, cpu_us{0};
     std::thread svc;
     std::atomic<bool> quit{false};
