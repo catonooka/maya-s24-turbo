@@ -322,6 +322,49 @@ static void* numa_pinned(size_t bytes) {
 #endif
 }
 
+#ifdef _WIN32
+// the NUMA node most of [p, p + bytes) physically sits on (-1 unknown).  On a 2-socket host
+// a cudaHostAlloc tier lands on one side or the other as a start-to-start lottery, and the
+// side it picks sets the whole run's decode: the GPU fetches every RAM-tier expert over PCIe,
+// and from the far node those fetches cross the inter-socket link (#56: 0.73 ms an expert with
+// the tier on the GPU's node against 0.86 on the other one, ~30% tok/s on a 2-socket Xeon +
+// one V100; single- and many-thread plain reads are symmetric, so it is the DMA path).
+// Windows offers no way to place a range this size (VirtualAllocExNuma honors its node only
+// for fresh whole allocations - a tier larger than a node cannot have one - and committing a
+// reserved range or first-touching pages follows no node), so this only makes the lottery
+// visible: the log line tells which mode a start drew, and a launcher may restart on it.
+static int win_arena_node(const void* p, size_t bytes) {
+    using QWSE_t = BOOL (WINAPI*)(HANDLE, PVOID, DWORD);
+    static QWSE_t qwse = []() -> QWSE_t {
+        HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+        return k32 ? (QWSE_t) (void*) GetProcAddress(k32, "K32QueryWorkingSetEx") : nullptr;
+    }();
+    if (qwse == nullptr || p == nullptr || bytes < 4096) return -1;
+    const size_t pages = bytes / 4096, step = pages / 512 ? pages / 512 : 1;   // ~512 samples
+    unsigned long long hits[64] = {};
+    unsigned char buf[16 * 64];
+    int total = 0;
+    for (size_t chunk = 0; chunk * 64 * step < pages; ++chunk) {
+        DWORD n = 0;
+        for (size_t i = 0; i < 64 && (chunk * 64 + i) * step < pages; ++i, ++n) {
+            const ULONG64 a = ((ULONG64) p) + (ULONG64) ((chunk * 64 + i) * step * 4096);
+            memcpy(buf + i * 16, &a, 8);
+        }
+        if (n == 0 || !qwse(GetCurrentProcess(), buf, DWORD(n * 16))) break;
+        for (DWORD i = 0; i < n; ++i) {
+            if ((buf[i * 16 + 8] & 1) == 0) continue;   // invalid
+            const int node = (int) (buf[i * 16 + 10]);   // Node: bits 16..23 (19H1+ layout)
+            if (node >= 0 && node < 64) { hits[node]++; total++; }
+        }
+    }
+    if (total < 32) return -1;
+    int best = -1;
+    for (int n = 0; n < 64; ++n)
+        if (best < 0 || hits[n] > hits[best]) best = n;
+    return best >= 0 && hits[best] * 4 > (unsigned long long) total * 3 ? best : -1;   // 75% majority
+}
+#endif
+
 int64_t glmfast::zfs_arc_reclaimable() {
 #ifdef __linux__
     FILE* f = std::fopen("/proc/spl/kstat/zfs/arcstats", "r");   // (rows "name type value" after two header lines)
@@ -371,49 +414,6 @@ static void numa_pinned_free(void* p, size_t bytes) {
 #endif
 }
 
-// Windows with two NUMA nodes or more (#56): each start of the engine runs in ONE processor group (a socket's CPUs,
-// on a PC with more than 64 logical ones) - the next start often in the other - while the driver places the RAM tier's
-// pinned pages where it will, and a CPU lane on the far socket reads them slower (two Xeon E5-2696 v3: 0.85 ms an
-// expert against 0.71, start by start).  Said at start: the group and node the engine runs in, and the nodes of 256
-// of the tier's pages (those Windows reports)
-static void numa_report_win(int dev, const std::vector<std::pair<const uint8_t*, size_t>>& tiers) {
-#ifdef _WIN32
-    ULONG hi = 0;
-    if (!GetNumaHighestNodeNumber(&hi) || hi == 0) return;
-    PROCESSOR_NUMBER pn{};
-    GetCurrentProcessorNumberEx(&pn);
-    USHORT node = 0xffff;
-    GetNumaProcessorNodeEx(&pn, &node);
-    size_t total = 0;
-    for (const auto& t : tiers) total += t.second;
-    std::vector<PSAPI_WORKING_SET_EX_INFORMATION> q;
-    for (size_t i = 0; i < 256 && total > 0; ++i) {
-        size_t at = total / 256 * i, k = 0;
-        while (k < tiers.size() && at >= tiers[k].second) at -= tiers[k++].second;
-        if (k == tiers.size()) break;
-        PSAPI_WORKING_SET_EX_INFORMATION e{};
-        e.VirtualAddress = (PVOID) (tiers[k].first + at);
-        q.push_back(e);
-    }
-    int on[64] = {}, unknown = 0;
-    if (!q.empty() && QueryWorkingSetEx(GetCurrentProcess(), q.data(), (DWORD) (q.size() * sizeof q[0]))) {
-        for (const auto& e : q)
-            if (e.VirtualAttributes.Valid) ++on[e.VirtualAttributes.Node & 63];
-            else ++unknown;
-    } else {
-        unknown = (int) q.size();
-    }
-    std::string where;
-    for (ULONG n = 0; n <= hi && n < 64; ++n) where += (n ? ", node " : "node ") + std::to_string(n) + ": " + std::to_string(on[n]);
-    std::fprintf(stderr, "glm fast: CUDA%d Windows NUMA: %lu nodes, %u processor groups; the engine runs in group %u (node "
-                         "%u); the RAM tier's pages, a sample of %zu: %s%s\n", dev, (unsigned long) hi + 1,
-                 (unsigned) GetActiveProcessorGroupCount(), (unsigned) pn.Group, (unsigned) node, q.size(), where.c_str(),
-                 unknown > 0 ? (", not reported " + std::to_string(unknown)).c_str() : "");
-#else
-    (void) dev;
-    (void) tiers;
-#endif
-}
 
 // a start-time upload of pageable host data through a pinned buffer of ours (the disk staging): a pageable copy needs
 // pinned buffers of the driver's own, and with the RAM tiers just under a pinning cap (Windows) the warmed tables'
@@ -1443,11 +1443,27 @@ bool Glm5Model::fast_setup(std::string& err) {
             for (int i = 0; i < 2; ++i) F->ah_th.emplace_back([this] { fast_ahead_reader(); });
         const char* wv = getenv("STRATA_GLM_WARM");
         if ((wv == nullptr || std::atoi(wv) != 0) && !fast_warm(err)) return false;
-        {
-            std::vector<std::pair<const uint8_t*, size_t>> tiers;
-            for (const auto& R : F->rc) tiers.push_back({R.base, (size_t) R.n * R.stride});
-            numa_report_win(dev_, tiers);
+#ifdef _WIN32
+        {   // #56: which node the tier drew this start - visibility only, the engine cannot place it
+            int tier_node = -1, seen = 0;
+            for (const auto& R : F->rc)
+                if (R.base != nullptr && R.n > 0) {
+                    const int node = win_arena_node(R.base, (size_t) R.n * R.stride);
+                    if (node >= 0) { tier_node = node; ++seen; }
+                }
+            if (tier_node >= 0 && seen > 0) {
+                int host_node = -1;
+                if (cudaDeviceGetAttribute(&host_node, cudaDevAttrHostNumaId, dev_) != cudaSuccess || host_node < 0)
+                    host_node = -1;   // not reported on Volta + 582.78
+                std::fprintf(stderr, "glm fast: CUDA%d the RAM tier sits on node %d of %d seen%s\n",
+                             dev_, tier_node, seen,
+                             host_node >= 0 && host_node != tier_node
+                                 ? (std::string(" (the GPU's host node is ") + std::to_string(host_node) +
+                                    ": every RAM-tier fetch crosses the socket link)").c_str()
+                                 : "");
+            }
         }
+#endif
         // RAM-resident mode is all-or-nothing: after the warm, every expert must be in VRAM or the RAM tier -
         // one that fits neither would be read from disk at runtime (STRATA_GLM_WARM=0 fills on demand: no check)
         if (F->ram_resident && (wv == nullptr || std::atoi(wv) != 0)) {
