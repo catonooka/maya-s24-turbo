@@ -1357,8 +1357,53 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
         const char* v = getenv("STRATA_GLM_DISK_QD");
         return std::max(1, std::min(kMaxDiskQd, v ? std::atoi(v) : 2));
     }();
+    // STRATA_GLM_DISK_READERS=<n>: n reader threads, each with one expert in flight (its three parts read whole), every
+    // expert handed on the moment it and those before it landed - instead of one reader reading disk_qd experts at a
+    // time across the workers and handing the batch on when all of it landed.  A DRAM-less NVMe (Kingston NV3) reads
+    // 1.6 GB/s in the 256 KB pieces the workers read and 3.0 GB/s in 2 MB ones; a deeper batch bought short prompts the
+    // throughput (514 tokens: 6.8 -> 5.9 s) but cost long ones the first expert's wait (8k tokens: 9.7 -> 10.7 s)
+    static const int n_readers = [] {
+        const char* v = getenv("STRATA_GLM_DISK_READERS");
+        return v ? std::max(0, std::min(16, std::atoi(v))) : 0;
+    }();
+    std::atomic<int> rnext{0};
+    std::mutex land_mu;
+    std::vector<int> land_seq((size_t) std::max(1, KL), -1);
+    const auto reader_one = [&] {
+        cudaSetDevice(dev_);
+        for (;;) {
+            const int k = rnext.fetch_add(1);
+            for (int spin = 0; dq.n.load(std::memory_order_acquire) <= k ||
+                               (k >= KL && dq.copied.load(std::memory_order_acquire) < k - KL + 1);
+                 ++spin) {
+                if (dq.stop.load()) return;
+                if (spin < 1024) std::this_thread::yield();
+                else std::this_thread::sleep_for(std::chrono::microseconds(20));
+            }
+            cudaEventSynchronize(S->ev_land[(size_t) (k % KL)]);   // the slot's last copy (this chunk's or earlier)
+            std::pair<int, int> it;
+            {
+                std::lock_guard<std::mutex> lk(dq.mu);
+                it = dq.q[(size_t) k];
+            }
+            uint8_t* land = S->gpin + (size_t) (k % KL) * S->gstride;
+            for (int part = 0; part < 3; ++part) fast_read_part(it.first, it.second, part, land, 0, 1);
+            std::lock_guard<std::mutex> lk(land_mu);
+            land_seq[(size_t) (k % KL)] = k;
+            int l = dq.landed.load(std::memory_order_relaxed);
+            while (land_seq[(size_t) (l % KL)] == l) ++l;
+            dq.landed.store(l, std::memory_order_release);
+        }
+    };
     std::thread reader([&] {
         cudaSetDevice(dev_);
+        if (n_readers > 0) {
+            std::vector<std::thread> more;
+            for (int i = 1; i < n_readers; ++i) more.emplace_back(reader_one);
+            reader_one();
+            for (auto& t : more) t.join();
+            return;
+        }
         // each part in pieces across the workers, as the decode's disk path (STRATA_GLM_READ_CHUNKS)
         static const int kChunks = [] {
             const char* v = getenv("STRATA_GLM_READ_CHUNKS");
