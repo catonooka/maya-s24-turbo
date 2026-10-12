@@ -119,6 +119,29 @@ class FromDir(unittest.TestCase):
         self.assertEqual(Tokenizer.from_dir(self.write(None)).pre, "qwen35")
 
 
+class PlainSpans(unittest.TestCase):
+    """encode(..., plain=spans): a literal that starts inside a span is text, BPE'd with the text around it; every
+    other literal (a CONTROL one with parse_special, a USER_DEFINED one always) is still its token."""
+
+    def setUp(self):
+        tokens = list(BYTE_TO_UNICODE.values()) + ["<think>", "<|user|>"]
+        types = [1] * (len(tokens) - 2) + [4, 3]
+        self.tk = Tokenizer(tokens, [], types, pre="glm5")
+        self.think, self.user = len(tokens) - 2, len(tokens) - 1
+
+    def test_spans(self):
+        text = "<|user|>a<think>b<|user|>c<think>"
+        self.assertEqual(self.tk.encode(text, parse_special=True).count(self.user), 2)
+        got = self.tk.encode(text, parse_special=True, plain=[(9, 16), (17, 25)])   # the middle <think> and <|user|>
+        self.assertEqual([t for t in got if t in (self.think, self.user)], [self.user, self.think])
+        self.assertEqual(got[0], self.user)
+        self.assertEqual(got[-1], self.think)
+        self.assertEqual(b"".join(self.tk.token_bytes(t) for t in got[1:-1]), b"a<think>b<|user|>c")
+        # unsorted spans, and no spans at all, as before
+        self.assertEqual(self.tk.encode(text, parse_special=True, plain=[(17, 25), (9, 16)]), got)
+        self.assertEqual(self.tk.encode(text, parse_special=True, plain=[]), self.tk.encode(text, parse_special=True))
+
+
 class PreSchemeGuard(unittest.TestCase):
     def test_unknown_scheme_refused(self):
         with self.assertRaises(ValueError):

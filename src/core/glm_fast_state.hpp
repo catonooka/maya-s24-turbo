@@ -199,6 +199,10 @@ void route_dump(int layer, int k, const int* ids, const float* w);
 // STRATA_GLM_USAGE=<file>; unset or 0, none - the warm-up and the split search then go by the expert profile
 std::string usage_file();
 
+// STRATA_GLM_TRUNK_KEEP / _MAP: the route rank from which layer il leaves out its experts that are not in VRAM (8: none)
+// - the token path's routes and the verify windows' alike
+int trunk_skip_from(int il);
+
 }  // namespace glmfast
 
 namespace gf = strata::kernels::glmf;
@@ -525,6 +529,13 @@ struct Glm5Model::FastState {
     double cal_ref = 0.0;                      // decode's CPU ms an expert after calibrating (0: not measured yet)
     uint64_t drift_e0 = 0, drift_us0 = 0;
     int drift_n = 0, drift_dir = 0;            // windows in a row >15% off, and which way
+    // lane_retime: the split re-planned from the lane's own cost in decode (only one the start-up timing chose)
+    bool cpu_retime = false;
+    uint64_t rt_e0 = 0, rt_us0 = 0, rt_r0 = 0; // the counters at the window's start
+    int rt_windows = 0, rt_changes = 0;        // windows looked at, splits changed
+    double rt_c_ms = 0.0;                      // the CPU's cost an expert the split in use was planned with
+    int rt_dir = 0;                            // the last window's way off it (+1 slower, -1 faster, 0 within 15%)
+    double rt_prev_ms = 0.0;                   // ... and its cost an expert
     bool lane_pending = false;                 // the lane and the service thread wait for fast_setup_finish
     int64_t ram_check_head = 0;                // a parallel load: the headroom ram_left_check holds the free RAM to
     double cpu_c_ms = 0.0, cpu_p_ms = 0.0;   // the lane's calibration: an expert on the CPU, one over PCIe

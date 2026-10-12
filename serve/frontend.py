@@ -17,7 +17,10 @@ and the formats change often; the engine boundary is token ids in, text deltas o
 from __future__ import annotations
 
 import json
+import re
+import threading
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -157,12 +160,135 @@ def images_of(messages: list[dict]) -> list[str]:
             for item in m["content"] if item.get("type") == "image"]
 
 
+# A special token's text written INSIDE a message is that text, not the token.  The rendered prompt is encoded with the
+# special literals parsed (and GLM's type-4 ones - <think>, </think>, <tool_call>, <tool_response>, <arg_key>, ... - are
+# matched even without), so a user quoting "</think>", a file an agent reads that holds "<|user|>", or a tool result
+# that prints "</tool_response>" handed the model a real end of thinking, a new turn or the end of the result.  Before
+# the template is rendered every such literal in the messages and tools is swapped for a private-use character; the
+# server turns them back into their text after rendering and encodes those spans as ordinary text
+# (Tokenizer.encode(..., plain=spans)).  Only the literals the template itself writes stay special tokens.
+LITERAL_MARK0 = 0xF0E00
+# typed on purpose: GLM's "/nothink" in a user message turns thinking off for that turn, as the model was trained
+KEPT_LITERALS = {"/nothink"}
+# a client replaying the model's own raw call text in an assistant message sends the tokens the model wrote
+CALL_TAGS = {"<tool_call>", "</tool_call>", "<arg_key>", "</arg_key>", "<arg_value>", "</arg_value>"}
+
+
+def literal_tags(specials) -> dict[str, str]:
+    """{literal: its mark} for the tokenizer's special literals (both kinds), longest first as the tokenizer matches
+    them - a literal inside a longer one is not marked before it.  {} without any (a tokenizer that has none)."""
+    names = sorted({s for s in specials or () if s and s not in KEPT_LITERALS}, key=lambda s: (-len(s), s))
+    return {s: chr(LITERAL_MARK0 + k) for k, s in enumerate(names)}
+
+
+def _mark(text: str, tags: dict[str, str]) -> str:
+    for tag, mark in tags.items():
+        if tag in text:
+            text = text.replace(tag, mark)
+    return text
+
+
+def _mark_deep(v, tags: dict[str, str]):
+    if isinstance(v, str):
+        return _mark(v, tags)
+    if isinstance(v, dict):
+        return {k: _mark_deep(x, tags) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_mark_deep(x, tags) for x in v]
+    return v
+
+
+def _has_tag(v, tags: dict[str, str]) -> bool:
+    if isinstance(v, str):
+        return any(tag in v for tag in tags)
+    if isinstance(v, dict):
+        return any(_has_tag(x, tags) for x in v.values())
+    if isinstance(v, list):
+        return any(_has_tag(x, tags) for x in v)
+    return False
+
+
+def mark_literals(messages: list[dict], tools: list[dict] | None, tags: dict[str, str]):
+    """-> (messages, tools, changed): every special literal in the messages' and tools' text swapped for its mark.
+    Nothing to mark: the same objects back and False - such a prompt renders and encodes exactly as before.
+    An assistant message keeps the call tags it wrote (its raw call text, replayed) and, when its content opens with a
+    whole <think>...</think> block (clients that send the reasoning inline), that one block's two tags: the template
+    takes the reasoning apart at them.  Its structured tool_calls are data: everything in them is marked."""
+    if not tags or (not _has_tag(messages, tags) and not _has_tag(tools, tags)):
+        return messages, tools, False
+    own = {t: v for t, v in tags.items() if t not in CALL_TAGS}
+    out = []
+    for m in messages:
+        m = dict(m)
+        assistant = m.get("role") == "assistant"
+        content = m.get("content")
+        for k, v in m.items():
+            if k != "role":
+                m[k] = _mark_deep(v, own if assistant and k != "tool_calls" else tags)
+        if assistant and isinstance(content, str) and content.lstrip().startswith("<think>") and "</think>" in content:
+            i, j = content.index("<think>") + len("<think>"), content.index("</think>")
+            m["content"] = content[:i] + _mark(content[i:j], own) + "</think>" + _mark(content[j + len("</think>"):], own)
+        out.append(m)
+    return out, _mark_deep(tools, tags), True
+
+
+def unmark_literals(prompt: str, tags: dict[str, str]) -> tuple[str, list[tuple[int, int]]]:
+    """The rendered prompt with the marks turned back into their literals' text, and the (start, end) spans of those
+    literals in it - the spans the tokenizer encodes as ordinary text."""
+    marks = {v: k for k, v in tags.items()}
+    if not marks:
+        return prompt, []
+    out, spans, pos, n = [], [], 0, 0
+    for m in re.finditer("[" + "".join(map(re.escape, marks)) + "]", prompt):
+        out.append(prompt[pos:m.start()])
+        n += m.start() - pos
+        tag = marks[m.group(0)]
+        out.append(tag)
+        spans.append((n, n + len(tag)))
+        n += len(tag)
+        pos = m.end()
+    if not spans:
+        return prompt, []
+    out.append(prompt[pos:])
+    return "".join(out), spans
+
+
 def _late_system_to_user(messages: list[dict]) -> list[dict]:
     """The chat template takes a system message only at the start ("System message must be at the beginning").
     Clients also send them mid-conversation - Claude Code's hook context as {"role": "system"} after the first user
     turn, some OpenAI clients a late "developer" message (issue #56) - so those become user messages, in place:
     merging them into the first one would change the prompt's start and cost the conversation cache every turn."""
     return [dict(m, role="user") if m.get("role") == "system" and i > 0 else m for i, m in enumerate(messages)]
+
+
+_TOOL_ORDERS: "OrderedDict[frozenset, tuple]" = OrderedDict()   # a set of tool names -> the order it first came in
+_TOOL_ORDERS_LOCK = threading.Lock()
+_TOOL_ORDERS_MAX = 64
+
+
+def stable_tool_order(tools: list[dict] | None) -> list[dict] | None:
+    """The same set of tools comes back in the order it was first seen.  Clients send their tools in the order their
+    MCP servers finished registering, which can differ from one request (or one client restart) to the next, and the
+    template renders the tool list at the start of the prompt: one swap moved the shared prefix back to the system
+    prompt and the whole conversation was read again.  A tool set's first request is left as sent (its prompt is what
+    the client asked for); later ones with the same names in another order are put back in that first order.
+    Duplicate or missing names, or fewer than two tools: as sent."""
+    if not tools or len(tools) < 2:
+        return tools
+    names = [t.get("name") if isinstance(t, dict) else None for t in tools]
+    if not all(isinstance(n, str) for n in names) or len(set(names)) != len(names):
+        return tools
+    key = frozenset(names)
+    with _TOOL_ORDERS_LOCK:
+        order = _TOOL_ORDERS.get(key)
+        if order is None:
+            _TOOL_ORDERS[key] = tuple(names)
+            while len(_TOOL_ORDERS) > _TOOL_ORDERS_MAX:
+                _TOOL_ORDERS.popitem(last=False)
+            return tools
+        _TOOL_ORDERS.move_to_end(key)
+    pos = {n: k for k, n in enumerate(order)}
+    return sorted(tools, key=lambda t: pos[t["name"]])
 
 
 def openai_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dict]:
@@ -187,8 +313,8 @@ def openai_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dict]:
         if role == "assistant" and not out["content"] and not out.get("tool_calls") and not out.get("reasoning_content"):
             continue   # an empty turn is not rendered: a history of them teaches the model to answer with nothing
         messages.append(out)
-    tools = [t.get("function", t) if isinstance(t, dict) and t.get("type") == "function" else t
-             for t in req.get("tools") or []] or None
+    tools = stable_tool_order([t.get("function", t) if isinstance(t, dict) and t.get("type") == "function" else t
+                               for t in req.get("tools") or []] or None)
     tc = req.get("tool_choice")
     if tc == "none":   # the tools stay declared to the client, but none is offered to the model
         tools = None
@@ -243,8 +369,8 @@ def anthropic_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dic
             if calls:
                 out["tool_calls"] = calls
             messages.append(out)
-    tools = [{"name": t["name"], "description": t.get("description", ""), "parameters": t.get("input_schema", {})}
-             for t in req.get("tools") or []] or None
+    tools = stable_tool_order([{"name": t["name"], "description": t.get("description", ""),
+                                "parameters": t.get("input_schema", {})} for t in req.get("tools") or []] or None)
     if isinstance(req.get("tool_choice"), dict) and req["tool_choice"].get("type") == "none":
         tools = None
     kwargs = {}

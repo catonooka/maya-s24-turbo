@@ -2104,6 +2104,28 @@ static std::string cal_vals(double c, double p, double ps, double ref) {
     return v;
 }
 
+// the CPU lane's lane-call overhead the split plans with (ms a call), and the split itself: of f RAM-tier experts,
+// the k the host computes so the slower lane finishes first - max(PCIe (f - k) p, overhead + k c); ties keep the PCIe
+// lane.  `tab`: the k's, one per f, for the log
+constexpr double kLaneOverMs = 0.04;
+static unsigned long long lane_plan(double c_ms, double p_ms, std::string* tab = nullptr) {
+    unsigned long long plan = 0;
+    for (int f = 0; f <= 8; ++f) {
+        int k = 0;
+        double best = p_ms * f;
+        for (int kk = 1; kk <= f; ++kk) {
+            const double t = std::max(p_ms * (f - kk), kLaneOverMs + c_ms * kk);
+            if (t < best - 1e-9) {
+                best = t;
+                k = kk;
+            }
+        }
+        plan |= (unsigned long long) k << (4 * f);
+        if (tab != nullptr) *tab += " " + std::to_string(k);
+    }
+    return plan;
+}
+
 // The CPU LANE, on by default: one thread per physical core (split evenly across the parts of a layer split);
 // STRATA_GLM_CPU_LANE=<threads> sets the count, 0 turns it off; STRATA_GLM_CPU_LANE<n>=<threads> sets one GPU's own
 // (CUDA<n>: a slow link wants more threads than a fast one).  Measures this machine once - one expert on the CPU
@@ -2408,32 +2430,24 @@ bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
     F->cpu_c_ms = c_ms;   // (the prompt path splits its staged experts by them too)
     F->cpu_p_ms = p_ms;
     F->cpu_ps_ms = ps_ms;
-    // the split: k of f to the host minimises max(PCIe (f - k) p, lane overhead + k c); ties keep the PCIe lane
-    const double over_ms = 0.04;
+    // the split: k of f to the host minimises max(PCIe (f - k) p, lane overhead + k c) (lane_plan)
     unsigned long long plan = 0;
     std::string tab;
     const char* pv = getenv("STRATA_GLM_CPU_PLAN");
     // STRATA_GLM_PCIE_SHARE=<0..1> (setup's calibration): the share of a route's RAM-tier experts that go over PCIe
     const char* sv = getenv("STRATA_GLM_PCIE_SHARE");
     const double share = sv != nullptr ? std::max(0.0, std::min(1.0, std::atof(sv))) : -1.0;
-    for (int f = 0; f <= 8; ++f) {
-        int k = 0;
-        if (pv != nullptr) {
-            k = f < (int) std::strlen(pv) ? std::max(0, std::min(f, pv[f] - '0')) : 0;
-        } else if (share >= 0.0) {
-            k = f - (int) std::lround(share * f);
-        } else {
-            double best = p_ms * f;
-            for (int kk = 1; kk <= f; ++kk) {
-                const double t = std::max(p_ms * (f - kk), over_ms + c_ms * kk);
-                if (t < best - 1e-9) {
-                    best = t;
-                    k = kk;
-                }
-            }
+    if (pv == nullptr && share < 0.0) {
+        plan = lane_plan(c_ms, p_ms, &tab);
+        F->cpu_retime = true;   // a split the timing chose: decode may time it again (lane_retime)
+        F->rt_c_ms = c_ms;
+    } else {
+        for (int f = 0; f <= 8; ++f) {
+            const int k = pv != nullptr ? (f < (int) std::strlen(pv) ? std::max(0, std::min(f, pv[f] - '0')) : 0)
+                                        : f - (int) std::lround(share * f);
+            plan |= (unsigned long long) k << (4 * f);
+            tab += " " + std::to_string(k);
         }
-        plan |= (unsigned long long) k << (4 * f);
-        tab += " " + std::to_string(k);
     }
     if (plan == 0ull) {
         std::fprintf(stderr, "glm fast: CUDA%d CPU lane off: an expert %.3f ms on the CPU vs %.3f ms over PCIe\n", dev_,
@@ -3115,6 +3129,61 @@ void Glm5Model::lane_drift_check() {
             cal_put(F->cal_file, F->cal_key, "");
             F->cal_key.clear();
         }
+    }
+}
+
+// THE CPU LANE'S SPLIT, TIMED AGAIN IN DECODE.  The start-up timing is one moment, and a busy CPU then skews the split
+// for the engine's life: one start timed 0.611 ms an expert against the usual ~0.24, and a near tie in a plan turned
+// promotions off (16.3 against 19.4 tok/s).  Decode times the lane for real: (its time - the overhead a call x its
+// calls) / its experts is an expert's cost on this CPU under load.  Over the first windows of 2,000 lane experts each
+// (at most eight; the first one only warms up), when two in a row differ from the cost the split was planned with by
+// more than 15% the same way, the split is planned again from their mean (the PCIe side keeps its start-up timing: the
+// link is steady) - at most three times.  Only a split the timing
+// chose (not STRATA_GLM_CPU_PLAN / STRATA_GLM_PCIE_SHARE, setup's tuning), and only from windows run on that split (a
+// request's own pcie_frac is setup's calibration at work).  STRATA_GLM_CPU_RETIME=0 turns it off.
+void Glm5Model::lane_retime() {
+    static const bool on = [] {
+        const char* v = getenv("STRATA_GLM_CPU_RETIME");
+        return v == nullptr || std::atoi(v) != 0;
+    }();
+    if (!on) return;
+    for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) {
+        FastState* F = m->fast_;
+        if (F == nullptr || F->cpu_pool == nullptr || !F->cpu_retime || F->rt_windows >= 8 || F->rt_changes >= 3)
+            continue;
+        const uint64_t e = F->cpu_experts.load(), us = F->cpu_us.load(), r = F->cpu_routes.load();
+        if (F->cpu_plan != F->cpu_plan_start) {   // a request's own split: its window is not this one's
+            F->rt_e0 = e, F->rt_us0 = us, F->rt_r0 = r;
+            continue;
+        }
+        if (e - F->rt_e0 < 2000) continue;
+        const double ms = ((double) (us - F->rt_us0) / 1000.0 - kLaneOverMs * (double) (r - F->rt_r0)) /
+                          (double) (e - F->rt_e0);
+        F->rt_e0 = e, F->rt_us0 = us, F->rt_r0 = r;
+        // the first window warms the lane up (Maya-L on nine GPUs: 0.49-0.59 ms an expert, then 0.31-0.38 against the
+        // start's 0.28) and is not used; after it a change takes two windows in a row off the same way, and plans with
+        // their mean - one noisy window swung the split back and forth
+        const int dir = !(ms > 0.0)                ? 0
+                        : ms > 1.15 * F->rt_c_ms   ? 1
+                        : ms < F->rt_c_ms / 1.15   ? -1
+                                                   : 0;
+        if (++F->rt_windows == 1 || dir == 0 || dir != F->rt_dir) {
+            F->rt_dir = F->rt_windows == 1 ? 0 : dir;
+            F->rt_prev_ms = ms;
+            continue;
+        }
+        const double c_ms = 0.5 * (ms + F->rt_prev_ms);
+        F->rt_dir = 0;
+        std::string tab;
+        const unsigned long long plan = lane_plan(c_ms, F->cpu_p_ms, &tab);
+        const double was = F->rt_c_ms;
+        F->rt_c_ms = c_ms;
+        if (plan == 0ull || plan == F->cpu_plan_start) continue;   // (a lane that would stop stays: the CPU may recover)
+        F->cpu_plan = F->cpu_plan_start = plan;   // (the next route reads it; set_pcie_share(-1) restores this one)
+        ++F->rt_changes;
+        std::fprintf(stderr, "glm fast: CUDA%d CPU lane timed again in decode: an expert %.3f ms (planned with %.3f) "
+                             "-> RAM-tier experts to the CPU, of 0..8:%s (PCIe share %.2f)\n",
+                     m->dev_, c_ms, was, tab.c_str(), plan_share(plan));
     }
 }
 
@@ -4353,8 +4422,9 @@ static int mtp_skip_from() {
 // exact.  The lowest-ranked experts carry the least weight and are the coldest, so they are the ones most often off
 // the card.  STRATA_GLM_TRUNK_KEEP_MAP=<digits>: the same per layer, character il for layer il ('1'..'8'; any other
 // character, or a layer past the string's end, takes STRATA_GLM_TRUNK_KEEP) - GLM-5.3's early layers notice a left-out
-// expert far more than its late ones.  Unset (8): every expert is computed, as before.
-static int trunk_skip_from(int il) {
+// expert far more than its late ones.  Unset (8): every expert is computed, as before.  The verify windows (DFlash, the
+// batched window) leave out the same ones, so a window's tokens are the token path's.
+int glmfast::trunk_skip_from(int il) {
     static const int v = [] {
         const char* k = getenv("STRATA_GLM_TRUNK_KEEP");
         return k != nullptr ? std::max(1, std::min(8, std::atoi(k))) : 8;
@@ -4432,7 +4502,7 @@ bool Glm5Model::fast_moe_experts(int il, const MoeIo& io, bool pred, int n_ah, c
                   g.n_embd, md, io.sh_g, io.sh_u, g.swiglu_shexp, FFs, F->sh_hq, s,
                   pred ? F->plog : nullptr, pred ? F->L[(size_t) il + 1].router_bias : nullptr,
                   pred ? F->max_pf : 0, n_ah > 0 ? F->alog : nullptr, ah_bias, n_ah,
-                  il == mtp_il_ ? mtp_skip_from() : trunk_skip_from(il), lane ? F->cpu_plan : 0ull, promote_min,
+                  il == mtp_il_ ? mtp_skip_from() : glmfast::trunk_skip_from(il), lane ? F->cpu_plan : 0ull, promote_min,
                   pf_rank, near_n, 0, nullptr, 0, il == mtp_il_ ? 8 : F->disk_skip_from,
                   il == mtp_il_ ? 0.0f : F->disk_skip_w);
     if (F->prof_on) F->mark("moe_route");
@@ -5501,6 +5571,107 @@ bool Glm5Model::snapshot_restore() {
     }
     // the drafter's positions from here on belong to the previous continuation
     if (cap_d_ != nullptr) cap_d_->reset(pos_);
+    cudaSetDevice(dev_);
+    return true;
+}
+
+// ---------------------------------------------------------------- conversation checkpoints
+// A checkpoint is the snapshot's content at another position, kept in (pageable) host RAM: each half's KDA runs in
+// layer order, then its open pool's rows (per DSA layer kpool-1 ik rows, then kpool-1 ig rows; snap_pool_copy's layout).
+
+// the open pool's rows at `pos` (pool start .. + kpool - 2: contiguous in the ring) <-> host; on fast_->cs
+void Glm5Model::ckpt_pool_copy(int64_t pos, float* host, bool restore) {
+    const Glm5Geometry& g = g_;
+    const std::vector<int> ls = dsa_layers();
+    const int64_t rows = (int64_t) (g.idx_kpool - 1) * g.idx_key;   // floats per cache
+    if (ls.empty() || rows <= 0 || ik_ring_ <= 0) return;
+    const int64_t at = (int64_t) g.idx_key * ((pos - pos % g.idx_kpool) % ik_ring_);
+    for (size_t i = 0; i < ls.size(); ++i) {
+        float* ring[2] = {state_ + dsa_ik_[(size_t) ls[i]] + at, state_ + dsa_ig_[(size_t) ls[i]] + at};
+        for (int c = 0; c < 2; ++c) {
+            float* keep = host + (i * 2 + (size_t) c) * rows;
+            cudaMemcpyAsync(restore ? ring[c] : keep, restore ? keep : ring[c], (size_t) rows * sizeof(float),
+                            restore ? cudaMemcpyHostToDevice : cudaMemcpyDeviceToHost, fast_->cs);
+        }
+    }
+}
+
+bool Glm5Model::ckpt_save(int slot, std::string& err) {
+    if (slot < 0) {
+        err = "checkpoint: no slot";
+        return false;
+    }
+    for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get())
+        if (m->fast_ == nullptr) {
+            err = "checkpoint: needs the fast path";
+            return false;
+        }
+    for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) {
+        const Glm5Geometry& g = m->g_;
+        const size_t run = (size_t) g.d_inner() * g.kda_head_dim + (size_t) 3 * g.d_inner() * (g.d_conv - 1);
+        int n_rec = 0;
+        for (int il = m->l0_; il < m->l1_; ++il) n_rec += g.is_recr(il);
+        const size_t pool = m->dsa_layers().size() * 2 * (size_t) (g.idx_kpool - 1) * (size_t) g.idx_key;
+        if ((int) m->ckpt_buf_.size() <= slot) {
+            m->ckpt_buf_.resize((size_t) slot + 1);
+            m->ckpt_pos_.resize((size_t) slot + 1, -1);
+        }
+        std::vector<float>& b = m->ckpt_buf_[(size_t) slot];
+        m->ckpt_pos_[(size_t) slot] = -1;
+        try {
+            b.resize((size_t) n_rec * run + pool);
+        } catch (const std::bad_alloc&) {
+            b.clear();
+            b.shrink_to_fit();
+            err = "checkpoint: no RAM for it";
+            return false;
+        }
+        cudaSetDevice(m->dev_);
+        int k = 0;
+        for (int il = m->l0_; il < m->l1_; ++il)
+            if (g.is_recr(il))
+                cudaMemcpyAsync(b.data() + (size_t) k++ * run, m->state_ + m->kda_S_[(size_t) il], run * sizeof(float),
+                                cudaMemcpyDeviceToHost, m->fast_->cs);
+        m->ckpt_pool_copy(m->pos_, b.data() + (size_t) n_rec * run, false);
+        if (cudaStreamSynchronize(m->fast_->cs) != cudaSuccess) {
+            err = std::string("checkpoint: ") + cudaGetErrorString(cudaGetLastError());
+            cudaSetDevice(dev_);
+            return false;
+        }
+        m->ckpt_pos_[(size_t) slot] = m->pos_;
+    }
+    cudaSetDevice(dev_);
+    return true;
+}
+
+bool Glm5Model::ckpt_restore(int slot, std::string& err) {
+    for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get())
+        if (m->fast_ == nullptr || slot < 0 || (int) m->ckpt_pos_.size() <= slot || m->ckpt_pos_[(size_t) slot] < 0 ||
+            m->ckpt_pos_[(size_t) slot] != ckpt_pos_[(size_t) slot]) {
+            err = "checkpoint: slot " + std::to_string(slot) + " holds none";
+            return false;
+        }
+    for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) {
+        const Glm5Geometry& g = m->g_;
+        const size_t run = (size_t) g.d_inner() * g.kda_head_dim + (size_t) 3 * g.d_inner() * (g.d_conv - 1);
+        int n_rec = 0;
+        for (int il = m->l0_; il < m->l1_; ++il) n_rec += g.is_recr(il);
+        const std::vector<float>& b = m->ckpt_buf_[(size_t) slot];
+        const int64_t pos = m->ckpt_pos_[(size_t) slot];
+        cudaSetDevice(m->dev_);
+        int k = 0;
+        for (int il = m->l0_; il < m->l1_; ++il)
+            if (g.is_recr(il))
+                cudaMemcpyAsync(m->state_ + m->kda_S_[(size_t) il], b.data() + (size_t) k++ * run, run * sizeof(float),
+                                cudaMemcpyHostToDevice, m->fast_->cs);
+        m->ckpt_pool_copy(pos, const_cast<float*>(b.data()) + (size_t) n_rec * run, true);
+        if (cudaStreamSynchronize(m->fast_->cs) != cudaSuccess) {
+            err = std::string("checkpoint restore: ") + cudaGetErrorString(cudaGetLastError());
+            cudaSetDevice(dev_);
+            return false;
+        }
+        m->pos_ = pos;
+    }
     cudaSetDevice(dev_);
     return true;
 }

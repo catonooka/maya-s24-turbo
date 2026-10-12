@@ -25,6 +25,9 @@ struct SamplerParams {
     uint64_t seed = 0;           // drives Philox, which is counter-based on (seed, token index)
     uint64_t counter = 0;        // absolute draw index of row 0; advance across decode calls
     bool greedy = false;
+    // a request's logit_bias: a DEVICE array of n_vocab floats on the sampling device, added to every row's logits
+    // before the penalties and the filters (-inf bans a token); nullptr = none
+    const float* logit_bias = nullptr;
 };
 
 // logits (n_tokens, n_vocab) -> one sampled token id per row in `out`.
