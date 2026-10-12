@@ -864,6 +864,7 @@ bool Glm5Model::load_pack_split(const std::string& pack_dir, int64_t max_ctx, co
             p->split_load_ = &sl;
             p->defer_lane_ = true;
             p->dflash_path_ = dflash_path_;   // the drafter: the part with the head loads it, every part sizes for it
+            p->profile_path_ = profile_path_;   // every part reads the same profile
             th.emplace_back([&, i, l0, l1, p] {
                 ok[(size_t) i] = p->load_pack(pack_dir, max_ctx, errs[(size_t) i], devs[(size_t) i], l0, l1);
                 sl.pass(i);       // (a part that stopped early, or never reached those turns, lets the others on)
@@ -904,6 +905,7 @@ bool Glm5Model::load_pack_split(const std::string& pack_dir, int64_t max_ctx, co
         m->part_ = i;
         m->split_devs_ = devs;
         m->dflash_path_ = dflash_path_;
+        m->profile_path_ = profile_path_;   // every part reads the same profile
         if (!m->load_pack(pack_dir, max_ctx, err, devs[(size_t) i], l0, l1)) {
             if (prev != nullptr) prev->split_next_.reset();
             return false;
@@ -1038,8 +1040,8 @@ static double host_read_bps() {
 //   - a part's room for experts: its free VRAM less its layers' dense weights and state at the context (index.txt and
 //     the GGUF directory, as load_pack sizes them), the head and the draft block on the last part, its scratch, and
 //     the reserve fast_setup keeps (pool_avail); the pool gives every layer the same number of slots;
-//   - the experts those slots hold: each layer's most routed, their share of its routes read off this machine's usage
-//     counts (expert_usage.txt; the pack's expert_counts.txt without them; Strata's coverage curve 1 - (1 - f)^3,
+//   - the experts those slots hold: each layer's most routed, their share of its routes read off the usage file's
+//     counts (STRATA_GLM_USAGE, opt-in; the pack's expert_counts.txt without it; Strata's coverage curve 1 - (1 - f)^3,
 //     STRATA_SPLIT_COVER_B, without either - that is what Strata has to assume, its profile carries only a ranking);
 //   - a layer's time on its card: the bytes it reads (its dense weights and its VRAM experts' share of the routed
 //     ones) over the card's memory bandwidth - Strata scales a fitted per-layer time by SMs x clock; and each miss:
@@ -1205,12 +1207,10 @@ static std::vector<int> glm_search_bounds(const std::string& pack_dir, int64_t m
     const double layer_fixed = !df_pipe ? 0.0
                                : getenv("STRATA_GLM_SPLIT_LAYER_MS") ? std::atof(getenv("STRATA_GLM_SPLIT_LAYER_MS"))
                                                                      : 0.4;
-    // each layer's routes per expert: this machine's usage, else the pack's routing profile
+    // each layer's routes per expert: the usage file (opt-in), else the pack's routing profile
     std::vector<std::vector<double>> cnt((size_t) L + 1);
     {
-        const char* u = getenv("STRATA_GLM_USAGE");
-        const std::string up = u != nullptr ? (std::string(u) == "0" ? std::string() : std::string(u))
-                                            : pack_dir + "/expert_usage.txt";
+        const std::string up = glmfast::usage_file();
         std::ifstream uf(up);
         std::string line;
         while (!up.empty() && std::getline(uf, line)) {
