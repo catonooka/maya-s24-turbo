@@ -64,6 +64,7 @@ sys.path.insert(0, str(HERE / "tools"))
 import setup as S  # noqa: E402  Strata's installer: PC checks, pip, llama.cpp, downloads (nothing runs on import)
 from setup import ask, fail, ok, run, say, step, warn  # noqa: E402
 import calibrate_glm as CAL  # noqa: E402  the CPU lane's tuning for this PC (./maya.sh --calibrate)
+import calibrate_draft as CD  # noqa: E402  the speed calibration: DFlash2 or the MTP block on this PC
 
 WIN = S.WIN
 ME = "START-MAYA.bat" if WIN else "./maya.sh"      # how this is started, for the messages
@@ -921,7 +922,8 @@ def choose_draft(a, pc: dict, inst: dict) -> str:
     """"mtp" (the model's own MTP block; the default) or "dflash2" (a DFlash2 drafter, downloaded in step 5): --draft,
     else asked - the earlier setup's answer is the default.  AMD (HIP) setups keep MTP: DFlash2 is measured on NVIDIA.
     So do NVIDIA GPUs before sm_80 (RTX 30 / A100): on Tesla V100s DFlash2 decoded slower than the MTP block (one GPU
-    and two)."""
+    and two).  A DFlash2 answer is then checked on this PC by the speed calibration (speed_calibration): it stays only
+    where it is faster."""
     if getattr(a, "draft", None):
         return a.draft
     if pc.get("backend") == "hip":
@@ -934,9 +936,10 @@ def choose_draft(a, pc: dict, inst: dict) -> str:
              "more; one GPU decodes without drafting."),
             (f"a DFlash2 drafter (download {DFLASH['bytes'] / 1e9:.1f} GB from Hugging Face)", None,
              "A small drafter made for GLM-5.3-Flash drafts up to 7 tokens a round, which the model then checks: the "
-             "same answers. Maya-L: +44% on nine GPUs and +12% on two against the MTP block, +19% on one RTX 3090; "
-             "where most experts come from RAM the MTP block can stay faster - measure yours with --bench. The "
-             f"drafter's license is {DFLASH['license']}: non-commercial use only.")]
+             "same answers, faster. Maya-L: +44% on nine GPUs and +12% on two against the MTP block, +19% on one "
+             "RTX 3090. A speed calibration then measures it against the MTP block on this PC (5-20 minutes) and "
+             "keeps it only if it is faster here. The drafter's license is "
+             f"{DFLASH['license']}: non-commercial use only.")]
     pick = choose("Drafting?", ["How the model drafts tokens ahead (the answers are the same either way):"], rows,
                   DRAFTS.index(default), a.yes)
     return DRAFTS[pick]
@@ -2014,6 +2017,107 @@ def calibrate_config(cfg_path: Path) -> bool:
     return True
 
 
+def drafter_file(cfg: dict) -> Path | None:
+    """The DFlash2 drafter this config drafts with (--dflash), else the one a setup downloaded into its models folder
+    when it is there; None: no drafter on this PC."""
+    args = cfg.get("args") or []
+    if "--dflash" in args[:-1]:
+        return Path(args[args.index("--dflash") + 1])
+    models = (cfg.get("installer") or {}).get("models_dir")
+    f = Path(models) / "GLM-5.3-Flash-DFlash2" / DFLASH["file"] if models else None
+    return f if f is not None and f.is_file() else None
+
+
+def parallel_of(cfg: dict) -> int:
+    args = cfg.get("args") or []
+    v = args[args.index("--parallel") + 1] if "--parallel" in args[:-1] else "1"
+    return int(v) if str(v).isdigit() else 1
+
+
+def needs_speed_calibration(cfg: dict) -> bool:
+    """A config that drafts with DFlash2 but has no speed calibration yet (set up before there was one, or its
+    calibration could not run then - the GPUs were busy): its next start measures first.  Not with --parallel above 1:
+    the engine then decodes without the drafter."""
+    args = cfg.get("args") or []
+    return "--dflash" in args[:-1] and parallel_of(cfg) <= 1 and \
+        "speed_calibration" not in (cfg.get("installer") or {})
+
+
+def speed_calibration(cfg_path: Path, why: str = "") -> bool:
+    """The speed calibration (tools/calibrate_draft.py): this config's sustained decode speed with the DFlash2 drafter
+    and without it (the MTP block; one GPU: no drafting), measured on this PC.  The config keeps the faster - DFlash2
+    only when it wins by more than CD.MIN_GAIN - and the result (installer.speed_calibration), so it runs once: a setup
+    that chooses DFlash2, or --speed-calibration, measures again.  False: not measured (the reason is shown; nothing
+    changed, and a failure is recorded so that a start does not try again by itself)."""
+    cfg = read_json(cfg_path)
+    drafter = drafter_file(cfg)
+    if drafter is None or not drafter.is_file():
+        warn("the speed calibration compares the DFlash2 drafter with the MTP block, and the drafter is not on this "
+             f"PC: {ME} --setup --draft dflash2 downloads it")
+        return False
+    if parallel_of(cfg) > 1:
+        warn("with --parallel above 1 the engine decodes without the DFlash2 drafter: no speed calibration")
+        return False
+    one = len(cfg.get("gpu") or [0]) < 2
+    other = "no drafting" if one else "the MTP block"
+    busy = busy_gpus(cfg)
+    if busy:
+        warn("the speed calibration needs the GPU(s) to itself: " +
+             ", ".join(f"GPU {i} has {m} MiB in use" for i, m in busy) +
+             f" (a model server still running?) - it runs at the next start, or: {ME} --speed-calibration")
+        return False
+    without = CD.without_dflash(cfg)
+    cal = saved_calibration(without)                   # the CPU lane tuned on this PC without DFlash2: that side as so
+    if cal is not None and cal.get("settings") is not None:
+        env = CAL.apply(without.get("env") or {}, cal["settings"])
+        if env:
+            without["env"] = env
+        else:
+            without.pop("env", None)
+    with_d = CD.with_dflash(cfg, drafter)
+    say()
+    say("  Speed calibration: DFlash2 or " + other + "?" + (f" ({why})" if why else ""))
+    say("  DFlash2 makes some PCs faster and others slower: it depends on how much of the model fits in the GPUs'")
+    say("  memory, and on the CPU and the RAM. So Maya measures both here, the way you will use it. It loads the")
+    say(f"  model twice ({other}, then DFlash2); each time it reads a long document, writes about {CD.MIN_TOKENS} "
+        "tokens")
+    say("  of answers after a warm-up, and the sustained speeds are compared. About 5-20 minutes; the PC is busy.")
+    log = cfg.get("log")
+    since = os.path.getsize(log) if log and os.path.isfile(log) else 0
+    try:
+        res = CD.run(without, with_d, say=say, other_label=other)
+    except Exception as e:                             # never stops a setup or a start: the config stays as it was
+        now = "DFlash2" if "--dflash" in (cfg.get("args") or [])[:-1] else other
+        warn(f"the speed calibration did not finish ({e}): nothing changed - Maya keeps {now}; "
+             f"{ME} --speed-calibration tries again")
+        why_not = CAL.engine_error(log, since)
+        if why_not:
+            say(f"       the engine said: {why_not}")
+        cfg.setdefault("installer", {})["speed_calibration"] = {"date": time.strftime("%Y-%m-%d %H:%M"),
+                                                                "failed": str(e)[:300]}
+        cfg_path.write_text(json.dumps(cfg, indent=1), encoding="utf-8")
+        return False
+    o, d = res["other"]["tok_s"], res["dflash2"]["tok_s"]
+    keep = res["keep"] == "dflash2"
+    out = with_d if keep else without
+    inst = out.setdefault("installer", {})
+    inst["draft"] = "dflash2" if keep else "mtp"
+    inst["speed_calibration"] = {"date": time.strftime("%Y-%m-%d %H:%M"), "version": maya_version(),
+                                 "dflash2_tok_s": d, ("no_drafting" if one else "mtp") + "_tok_s": o,
+                                 "tokens": [res["other"]["tokens"], res["dflash2"]["tokens"]], "kept": inst["draft"]}
+    cfg_path.write_text(json.dumps(out, indent=1), encoding="utf-8")
+    say()
+    if keep:
+        ok(f"speed calibration: DFlash2 is faster on this PC - {d:.1f} against {o:.1f} tokens/s with {other} "
+           f"(+{res['gain'] * 100:.0f}%): Maya drafts with DFlash2")
+    else:
+        ok(f"speed calibration: DFlash2 is not faster on this PC - {d:.1f} against {o:.1f} tokens/s with {other}: "
+           "Maya " + ("decodes without drafting" if one else "drafts with the MTP block"))
+        say(f"       (saved in {cfg_path.name}; to draft with DFlash2 anyway: {ME} --setup --draft dflash2 "
+            "--no-speed-calibration)")
+    return True
+
+
 def server_command(cfg_path: Path, a) -> tuple:
     """The dashboard's server for an installed config: (its command, its environment, what the setup's screen shows of
     it).  The engine is compiled again first when its source changed (an update)."""
@@ -2033,6 +2137,10 @@ def server_command(cfg_path: Path, a) -> tuple:
         ok(f"{cfg_path.name}: starts from the shipped expert profile now (--expert-profile {PROFILE})")
     cfg_path.touch()                                   # the most recently used model
     refresh_engine(cfg)
+    if needs_speed_calibration(cfg):                   # DFlash2 set up before the speed calibration: measured once
+        if speed_calibration(cfg_path, "once, for a setup that drafts with DFlash2 - new in this version"):
+            cfg = read_json(cfg_path)
+            args = cfg.get("args") or []
     port = a.port or cfg.get("port") or 8080
     host = a.host or cfg.get("host") or "127.0.0.1"
     key = a.api_key or cfg.get("api_key")
@@ -2481,6 +2589,17 @@ def set_up(a, prev: dict) -> Path | None:
     pack = pack_step(a, d, shards, llama, quant)       # 6
     vision = vision_step(a, pc, meta, llama, d, quant)  # 7
     cfg_path = write_config(a, pc, meta, pack, quant, ctx, models, vision, choice, dflash)   # 8
+    if dflash is not None:                             # DFlash2: kept only if it makes THIS PC faster (measured)
+        if getattr(a, "no_speed_calibration", False):
+            c = read_json(cfg_path)
+            c.setdefault("installer", {})["speed_calibration"] = {"date": time.strftime("%Y-%m-%d %H:%M"),
+                                                                  "skipped": "--no-speed-calibration"}
+            cfg_path.write_text(json.dumps(c, indent=1), encoding="utf-8")
+            ok("speed calibration skipped (--no-speed-calibration): Maya drafts with DFlash2")
+        else:
+            if S.UI is not None:                       # (the screen shows it in the tuning's tab)
+                S.UI.step(9, "speed calibration: DFlash2 or the MTP block")
+            speed_calibration(cfg_path)
     # the tuning: asked for (--calibrate), or offered when nothing was tuned for this PC and model yet and someone
     # answers (--yes and --no-start setups are not held up by it)
     tuned = None
@@ -2569,6 +2688,12 @@ def main() -> int:
     ap.add_argument("--calibrate", action="store_true",
                     help="tune the engine's CPU lane for this PC (the PCIe share and the CPU threads, ~10-15 minutes), "
                          "then start the model (with --no-start: only tune)")
+    ap.add_argument("--speed-calibration", action="store_true",
+                    help="measure on this PC whether the DFlash2 drafter decodes faster than the MTP block (sustained "
+                         "speed, ~5-20 minutes, the model loaded twice) and keep the faster; then start the model "
+                         "(with --no-start: only measure)")
+    ap.add_argument("--no-speed-calibration", action="store_true",
+                    help="with --draft dflash2: keep DFlash2 without measuring it against the MTP block")
     ap.add_argument("--config", type=Path, help="the installed JSON config to start (its run-maya-<model>.sh does), or "
                                               "for --bench or --report (default: most recently used)")
     a = ap.parse_args()
@@ -2601,7 +2726,7 @@ def main() -> int:
     else:
         a.backend = "hip" if have and read_json(have[0]).get("backend") == "hip" else "cuda"
     setting_up = a.setup or a.check or a.gguf_dir or a.model or a.rebuild or a.repack or a.download_model
-    if have and not setting_up and (a.calibrate or not a.no_start):
+    if have and not setting_up and (a.calibrate or a.speed_calibration or not a.no_start):
         pick = have[0]
         if len(have) > 1:
             say()
@@ -2614,6 +2739,11 @@ def main() -> int:
                 say()
                 warn("this PC is NOT tuned (the reason is above): the model " +
                      ("keeps" if a.no_start else "starts with") + " the engine's own settings")
+            if a.no_start:
+                return 0
+        if a.speed_calibration:
+            refresh_engine(read_json(pick))            # (the engine it measures is the current one)
+            speed_calibration(pick, "asked for")
             if a.no_start:
                 return 0
         return start(pick, a)

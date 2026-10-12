@@ -22,8 +22,10 @@ It takes 20-40 minutes plus the download:
 6. builds the *pack* - the engine's index of the model files, about 1 GB, written into the model folder;
 7. **pictures**: compiles the image encoder (10-20 minutes, once) and fetches its files (1.1 GB, shown and asked
    first); `--no-vision` skips it;
-8. writes `maya-<model>.json` and `run-maya-<model>.sh` - with the settings [tuned for this PC](SETTINGS.md) earlier, or
-   it offers the tuning (about 10-15 minutes; `./maya.sh --calibrate` any time) - and starts the dashboard.
+8. writes `maya-<model>.json` and `run-maya-<model>.sh`; with DFlash2 it runs the
+   [speed calibration](SETTINGS.md#the-speed-calibration) (5-20 minutes: DFlash2 stays only if it is faster on your
+   PC); then the settings [tuned for this PC](SETTINGS.md) earlier, or it offers the tuning (about 10-15 minutes;
+   `./maya.sh --calibrate` any time) - and starts the dashboard.
 
 > **The start takes a few minutes**: the engine pins most of the free RAM (all but about 6 GB) for its expert tier
 > and warms its caches. Other programs get little RAM while Maya runs.
@@ -50,7 +52,7 @@ is not downloaded again, and your settings stay. By hand: `git pull`, then `./se
 | `--download-model` | download the model without asking (the commands and size are still printed) |
 | `--model NAME` | which model, without asking: `Maya-S-v2-IQ2_XXS` (Maya-S), `Maya-S24`, `Maya-M`, `Maya-M-Derisked`, `Maya-L`, or `EXL3-3.05bpw` - an experimental EXL3 quant at 3.05 bits per weight ([on Hugging Face](https://huggingface.co/turboderp/GLM-5.3-Flash-exl3/tree/3.05bpw), 125.3 GB, with the MTP block) that the engine reads in place from its safetensors: NVIDIA only, tested on Linux (the setup offers it there; on Windows only through `--model`, where an EXL3 model stopped at its first prompt - #129), not measured against the FP8 model |
 | `--no-vision` | text only: no image encoder |
-| `--draft mtp` / `--draft dflash2` | how the model drafts tokens ahead: its MTP block (the default), or a DFlash2 drafter - downloaded (0.7 GB) into `DIR/GLM-5.3-Flash-DFlash2/` and passed as `--dflash` (Maya-L: +44% on nine GPUs, +12% on two, +19% on one GPU; NVIDIA RTX 30 / A100 and newer - older cards keep the MTP block unless you pass this; the drafter's license is CC BY-NC-ND 4.0, non-commercial use only) |
+| `--draft mtp` / `--draft dflash2` | how the model drafts tokens ahead: its MTP block (the default), or a DFlash2 drafter - downloaded (0.7 GB) into `DIR/GLM-5.3-Flash-DFlash2/` and passed as `--dflash` (Maya-L: +44% on nine GPUs, +12% on two, +19% on one GPU; NVIDIA RTX 30 / A100 and newer - older cards keep the MTP block unless you pass this; the drafter's license is CC BY-NC-ND 4.0, non-commercial use only). The [speed calibration](SETTINGS.md#the-speed-calibration) then keeps it only if it is faster on your PC |
 | `--gpu N` / `--gpus 0,1,2,3` | one GPU, or several (up to 16) that split the model's layers |
 | `--context N` | context length in tokens: 8192, 32768 (default), 65536, 131072 |
 | `--port N`, `--host 0.0.0.0 --api-key KEY` | another port; reachable from your network (always set a key; several: `KEY1,KEY2`) |
@@ -58,6 +60,8 @@ is not downloaded again, and your settings stay. By hand: `git pull`, then `./se
 | `--host-compiler g++-12` | when your g++ is newer than your CUDA accepts ("unsupported GNU version") |
 | `--rebuild`, `--repack` | compile the engine / build the pack again |
 | `--calibrate` | tune the engine's CPU lane for this PC (see [Tuning](SETTINGS.md)), then start; with `--no-start` only tune |
+| `--speed-calibration` | measure again whether DFlash2 or the MTP block decodes faster on this PC ([how](SETTINGS.md#the-speed-calibration); 5-20 minutes, with Maya stopped) and keep the faster, then start; with `--no-start` only measure |
+| `--no-speed-calibration` | with `--draft dflash2`: keep DFlash2 without the speed calibration |
 | `--yes` | the recommended answers (the model download still needs `--download-model`) |
 | `--plain` | the setup in plain text with typed answers, and Maya in the terminal, not on their own screen (a pipe gets this too, and `--yes` a plain setup); the setup screen's whole output is in `maya-setup.log` |
 

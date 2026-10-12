@@ -156,8 +156,9 @@ the size. With N above 1 the engine decodes without a [DFlash2 drafter](#draftin
 [on Hugging Face](https://huggingface.co/Anbeeld/GLM-5.3-Flash-DFlash2-GGUF); its license is CC BY-NC-ND 4.0:
 non-commercial use only) and passes it as `--dflash GGUF` in the config's `"args"`; NVIDIA GPUs, one request at a time
 (`--parallel 1`). The setup offers it on RTX 30 / A100 and newer (sm_80): on Tesla V100s it decoded slower than the MTP
-block, on one GPU and on two, and so it did where most experts come from RAM (an RTX 3090 + 3060 with Maya-M, #127):
-measure yours with `--bench`.
+block, on one GPU and on two. How much it gains also depends on the PC - where most experts come from RAM, checking
+the drafts can cost more than they save (an RTX 3090 + 3060 with Maya-M, #127) - so the setup measures it there
+([the speed calibration](#the-speed-calibration)).
 
 A DFlash2 drafter made for GLM-5.3-Flash - a small block drafter that reads
 the model's hidden states at five of its layers and drafts up to 7 tokens in one pass, with the model's own embedding
@@ -207,3 +208,15 @@ One RTX 3090 (the MTP block is not loaded on one GPU: plain decode), and the 309
 | 3090, DFlash2 (two runs) | 19.4 | 20.6 | 20.2 | 17.1 | 16.4 | **18.8 (+19%)** |
 | 3090 + 5060 Ti, the MTP block (three runs) | 20.9 | 21.3 | 21.9 | 16.7 | 19.4 | 19.7 |
 | 3090 + 5060 Ti, DFlash2 (three runs) | 23.2 | 24.2 | 25.8 | 19.4 | 19.2 | **22.1 (+12%)** |
+
+### The speed calibration
+
+When the setup drafts with DFlash2 - and once, at the first start after an update, for a config that already drafts
+with it - Maya measures it on your PC against the MTP block (one GPU: against decoding without drafting) and keeps
+the faster. It loads the model twice, the same config without and with `--dflash`. Each time it reads a long document
+(about 8,000 tokens, the depth of a real conversation) and answers once to warm up - not counted - then answers fresh
+questions about it, sampled as the dashboard samples (the same questions and seeds both times), until about 1,500
+tokens are written. The sustained speed - all those tokens over all the time spent writing them - decides: DFlash2
+stays only when it is more than 5% faster. It takes 5-20 minutes and shows each step as it goes. The result is kept in
+the config (`installer.speed_calibration`); `./maya.sh --speed-calibration` measures again (new GPUs, more RAM), and
+`--draft dflash2 --no-speed-calibration` keeps DFlash2 without measuring.
