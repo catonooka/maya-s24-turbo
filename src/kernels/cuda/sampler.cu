@@ -170,9 +170,15 @@ __global__ void sampler_greedy_kernel(const float* __restrict__ logits, int n_vo
 /// serial scan's strict `>` keeps the first maximum it meets), so the kept sequence - both its set and its
 /// order - is unchanged; `top_p`'s cut reads that order in double arithmetic as before; temperature and the
 /// Philox draw apply after the cut.  `sampler_parity` pins all of it against the host reference.
+// MODE 0 = the draw (sample_tokens, unchanged); 1 = speculative sampling's draft (sample_draft: the draw from the
+// draft block's logits, on a Philox stream of its own, and its kept list in ql[t]); 2 = its verify (sample_verify:
+// the draft draft[t] with probability min(1, p/q), else a draw from max(0, p - q)).  The selection is shared.
+constexpr uint64_t kSpecDraftKey = 0x5bd1e9955bd1e995ull, kSpecAcceptKey = 0x9e3779b97f4a7c15ull,
+                   kSpecResidKey = 0xc2b2ae3d27d4eb4full;
+template <int MODE>
 __global__ void sampler_kernel(const float* __restrict__ logits, int n_vocab, int n_tokens,
                                const int* __restrict__ history, int history_len, const SamplerParams p,
-                               int* __restrict__ out) {
+                               int* __restrict__ out, SpecList* __restrict__ ql, const int* __restrict__ draft) {
     const int t = blockIdx.x;
     if (t >= n_tokens) return;
     const float* l = logits + (size_t) t * n_vocab;
@@ -425,14 +431,75 @@ __global__ void sampler_kernel(const float* __restrict__ logits, int n_vocab, in
     for (int i = 1; i < n_keep; ++i) smx = fmaxf(smx, scaled(i));
     double sum = 0.0;
     for (int i = 0; i < n_keep; ++i) sum += exp((double) scaled(i) - (double) smx);
-    const float u = philox_uniform(p.seed, p.counter + (uint64_t) t);
-    double cum = 0.0;
-    int pick = sel_ids[n_keep - 1];
-    for (int i = 0; i < n_keep; ++i) {
-        cum += exp((double) scaled(i) - (double) smx) / sum;
-        if ((double) u < cum) { pick = sel_ids[i]; break; }
+    if constexpr (MODE == 0) {
+        const float u = philox_uniform(p.seed, p.counter + (uint64_t) t);
+        double cum = 0.0;
+        int pick = sel_ids[n_keep - 1];
+        for (int i = 0; i < n_keep; ++i) {
+            cum += exp((double) scaled(i) - (double) smx) / sum;
+            if ((double) u < cum) { pick = sel_ids[i]; break; }
+        }
+        if (threadIdx.x == 0) out[t] = pick;
+    } else {
+        double w[KMAX];   // the kept list's probabilities, as the plain draw computes them
+        for (int i = 0; i < n_keep; ++i) w[i] = exp((double) scaled(i) - (double) smx) / sum;
+        // the plain draw over w with a given uniform (MODE 0's loop)
+        auto draw = [&](float u) -> int {
+            double cum = 0.0;
+            int pick = sel_ids[n_keep - 1];
+            for (int i = 0; i < n_keep; ++i) {
+                cum += w[i];
+                if ((double) u < cum) { pick = sel_ids[i]; break; }
+            }
+            return pick;
+        };
+        if constexpr (MODE == 1) {
+            SpecList* q = ql + t;
+            q->n = n_keep;
+            for (int i = 0; i < n_keep; ++i) { q->ids[i] = sel_ids[i]; q->p[i] = w[i]; }
+            out[t] = draw(philox_uniform(p.seed ^ kSpecDraftKey, p.counter + (uint64_t) t));
+        } else {
+            const SpecList* q = ql + t;
+            const int d = draft[t];
+            const int qn = q->n < KMAX ? q->n : KMAX;
+            auto qof = [&](int id) -> double {
+                for (int j = 0; j < qn; ++j)
+                    if (q->ids[j] == id) return q->p[j];
+                return 0.0;
+            };
+            double pd = 0.0;
+            for (int i = 0; i < n_keep; ++i)
+                if (sel_ids[i] == d) { pd = w[i]; break; }
+            const double qd = qof(d);
+            int pick = -1;
+            if (qd <= 0.0) {
+                pick = draw(philox_uniform(p.seed, p.counter + (uint64_t) t));   // not a draft from q: the plain draw
+            } else if ((double) philox_uniform(p.seed ^ kSpecAcceptKey, p.counter + (uint64_t) t) * qd < pd) {
+                pick = d;                                                        // kept: probability min(1, p(d)/q(d))
+            } else {
+                // rejected: a draw from max(0, p - q), renormalised - over p's kept list (p is 0 outside it)
+                double r[KMAX], z = 0.0;
+                for (int i = 0; i < n_keep; ++i) {
+                    const double x = w[i] - qof(sel_ids[i]);
+                    r[i] = x > 0.0 ? x : 0.0;
+                    z += r[i];
+                }
+                const float u = philox_uniform(p.seed ^ kSpecResidKey, p.counter + (uint64_t) t);
+                if (z > 0.0) {
+                    double cum = 0.0;
+                    for (int i = 0; i < n_keep; ++i) {
+                        if (r[i] <= 0.0) continue;
+                        pick = sel_ids[i];   // the last one with residual mass, if rounding leaves cum below u
+                        cum += r[i] / z;
+                        if ((double) u < cum) break;
+                    }
+                } else {
+                    pick = draw(u);   // p == q to the last bit: a rejection had probability 0 - never in practice
+                }
+            }
+            out[t] = pick;
+        }
     }
-    if (threadIdx.x == 0) out[t] = pick;
 }
 
 }  // namespace
@@ -456,8 +523,8 @@ void sample_tokens(const float* logits, int n_tokens, int n_vocab, const int* hi
     } else {
         // The same block-per-token shape: the selection's k argmax rounds reduce inside the block.  See
         // `sampler_kernel`'s header for what the old one-thread-per-token launch cost.
-        sampler_kernel<<<(unsigned) n_tokens, 1024, shmem, (cudaStream_t) stream>>>(
-            logits, n_vocab, n_tokens, history, history_len, p, out);
+        sampler_kernel<0><<<(unsigned) n_tokens, 1024, shmem, (cudaStream_t) stream>>>(
+            logits, n_vocab, n_tokens, history, history_len, p, out, nullptr, nullptr);
     }
     const cudaError_t e = cudaGetLastError();
     if (e != cudaSuccess) {
@@ -465,6 +532,43 @@ void sample_tokens(const float* logits, int n_tokens, int n_vocab, const int* hi
         std::exit(1);
     }
     if (stream == nullptr) cudaDeviceSynchronize();
+}
+
+namespace {
+void spec_check(const char* who, int n_tokens, int n_vocab, const SamplerParams& p) {
+    if (p.greedy || p.temperature <= 0.0f || p.penalty_last_n > 0 || n_vocab <= 0) {
+        std::fprintf(stderr, "%s: a sampled request without penalties only (greedy %d, temperature %g, penalty_last_n "
+                             "%d, n_vocab %d)\n", who, (int) p.greedy, p.temperature, p.penalty_last_n, n_vocab);
+        std::exit(1);
+    }
+    (void) n_tokens;
+}
+void spec_launched(const char* who, void* stream) {
+    const cudaError_t e = cudaGetLastError();
+    if (e != cudaSuccess) {
+        std::fprintf(stderr, "%s launch: %s\n", who, cudaGetErrorString(e));
+        std::exit(1);
+    }
+    if (stream == nullptr) cudaDeviceSynchronize();
+}
+}  // namespace
+
+void sample_draft(const float* logits, int n_tokens, int n_vocab, const SamplerParams& p, SpecList* q, int* out,
+                  void* stream) {
+    if (n_tokens <= 0) return;
+    spec_check("sample_draft", n_tokens, n_vocab, p);
+    sampler_kernel<1><<<(unsigned) n_tokens, 1024, 0, (cudaStream_t) stream>>>(logits, n_vocab, n_tokens, nullptr, 0,
+                                                                                p, out, q, nullptr);
+    spec_launched("sample_draft", stream);
+}
+
+void sample_verify(const float* logits, int n_tokens, int n_vocab, const SamplerParams& p, const SpecList* q,
+                   const int* draft, int* out, void* stream) {
+    if (n_tokens <= 0) return;
+    spec_check("sample_verify", n_tokens, n_vocab, p);
+    sampler_kernel<2><<<(unsigned) n_tokens, 1024, 0, (cudaStream_t) stream>>>(logits, n_vocab, n_tokens, nullptr, 0,
+                                                                                p, out, const_cast<SpecList*>(q), draft);
+    spec_launched("sample_verify", stream);
 }
 
 }  // namespace strata::kernels
