@@ -768,10 +768,19 @@ bool Glm5Model::load(const std::string& gguf_path, int64_t max_ctx, std::string&
 void Glm5Model::reset() {
     if (!loaded_) return;
     cudaSetDevice(dev_);
-    cudaMemset(state_, 0, state_bytes_);
+    // The state zeroed on the stream that reads it next, and waited for: the fast path's streams are non-blocking, so
+    // nothing orders a legacy-stream memset before them. Windows' HIP runtime submits queued work only when the host
+    // waits on it - the next conversation's prompt read the previous one's state, and the memset landed in the middle
+    // of it (#133: a conversation taken back from a slot answered the other one's question, then looped).
+    if (fast_ != nullptr) {
+        cudaMemsetAsync(state_, 0, state_bytes_, fast_->cs);
+        if (cudaStreamSynchronize(fast_->cs) == cudaSuccess && fast_->route_error_h)
+            *fast_->route_error_h = 0;   // a failed route belongs to the previous request
+    } else {
+        cudaMemset(state_, 0, state_bytes_);
+        cudaStreamSynchronize(0);
+    }
     pos_ = 0;
-    if (fast_ && fast_->route_error_h && cudaStreamSynchronize(fast_->cs) == cudaSuccess)
-        *fast_->route_error_h = 0;   // a failed route belongs to the previous request
     dflash_reset();   // a new sequence: the drafter's cached positions belong to the old one
     if (split_next_) {
         split_next_->reset();
