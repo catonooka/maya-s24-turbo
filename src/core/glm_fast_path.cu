@@ -1096,6 +1096,14 @@ bool Glm5Model::fast_setup(std::string& err) {
                         nsl[(size_t) il] = fl;
                         used += (size_t) fl * slot_stride(il);
                     }
+                // the draft layer (the NextN block, loaded on a split's last part) runs on every drafted token, so a
+                // miss there holds up each draft: it keeps at least the per-layer equal share, whatever its share of
+                // the routes (2x V100, Maya-S: the shipped profile left it 56 slots against 154-206 for the layers
+                // around it, decode 29.8 -> 28.6 tok/s).  The others hold the floor, so the budget has room for it.
+                if (mtp_il_ >= l0_ && mtp_il_ < lt_ && F->L[(size_t) mtp_il_].moe && per > fl) {
+                    used += (size_t) (per - fl) * slot_stride(mtp_il_);
+                    nsl[(size_t) mtp_il_] = per;
+                }
                 // the value of layer l's next slot: the routing share of its next expert (spares past the 288th serve none)
                 const auto gain = [&](int il) {
                     const auto& sh = share[(size_t) il];
@@ -1208,8 +1216,12 @@ bool Glm5Model::fast_setup(std::string& err) {
         F->cnt.assign((size_t) NL * g.n_expert, 0);
         F->usage.assign((size_t) NL * g.n_expert, 0);
         F->pred_of.assign((size_t) NL, std::array<int, 8>{-1, -1, -1, -1, -1, -1, -1, -1});
-        std::fprintf(stderr, "glm fast: CUDA%d layers [%d,%d) expert pool %.2f GB, %d-%d slots/layer (%lld total)\n",
-                     dev_, l0_, l1_, (double) tot / 1073741824.0, nmin, nmax, (long long) F->pool_slots);
+        const std::string draft_sl = mtp_il_ >= l0_ && mtp_il_ < lt_ && F->L[(size_t) mtp_il_].moe
+                                         ? ", the draft layer " + std::to_string(nsl[(size_t) mtp_il_])
+                                         : std::string();
+        std::fprintf(stderr, "glm fast: CUDA%d layers [%d,%d) expert pool %.2f GB, %d-%d slots/layer%s (%lld total)\n",
+                     dev_, l0_, l1_, (double) tot / 1073741824.0, nmin, nmax, draft_sl.c_str(),
+                     (long long) F->pool_slots);
         if (getenv("STRATA_GLM_TIMING") != nullptr) {
             std::string sl;
             for (int il = l0_; il < lt_; ++il)

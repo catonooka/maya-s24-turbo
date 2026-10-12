@@ -92,7 +92,8 @@ These settings change what the engine chooses (put them in the config with `--en
 
 **The expert profile** (Strata's `profile.bin`). At start the engine fills VRAM with the experts a profile ranks
 first. That profile ranks every (layer, expert) pair, and its order also decides how many VRAM slots each layer
-gets. Setup passes the shipped one, `data/expert-profile-glm.bin`, to every model (`--expert-profile` in the config's
+gets - except the MTP draft layer on a split, which runs on every drafted token and so keeps at least an equal share
+of its card's slots. Setup passes the shipped one, `data/expert-profile-glm.bin`, to every model (`--expert-profile` in the config's
 `"args"`; a config written before it gets it at its next start, so an update needs no setup). It comes from the
 router's routing, so it serves every quant of GLM-5.3-Flash: a routing trace of Maya-L with the MTP draft block
 running, over 66 requests (code, math with thinking, chat, eight languages, tool calls, long documents). Maya-L on an
