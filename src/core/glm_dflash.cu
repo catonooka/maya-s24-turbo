@@ -1048,6 +1048,9 @@ void GlmDflash::reset(int64_t from) {
     cudaSetDevice(m.dev);
     cudaDeviceSynchronize();
     cudaMemcpy(m.kv_pos, m.kv_pos_h.data(), (size_t) m.ring * sizeof(long long), cudaMemcpyHostToDevice);
+    // waited for: a copy from pageable memory can return before it landed, and the drafter's own stream is not
+    // ordered after the legacy one
+    cudaDeviceSynchronize();
     cudaSetDevice(cur);
 }
 
