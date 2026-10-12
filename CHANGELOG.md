@@ -4,6 +4,44 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.0 - 2026-10-12
+
+Three big additions at once: Maya answers several requests together, drafts with a DFlash2 drafter, and runs EXL3
+quants. Also: web pages on another address can call the API (opt-in), and a clearer Windows start line.
+
+- **Several requests at once** (`--parallel N`, up to 8; #115). `./maya.sh --parallel 4` (Windows:
+  `START-MAYA.bat --parallel 4`) keeps it in the config. Maya then answers up to N requests at the same time instead of
+  one after another.
+  - **One GPU:** a token of each request goes through the model together. The dense weights (attention projections,
+    shared experts, dense layers, the output head) are read once for all of them; the attention and the routed experts
+    run per request. Each request gets exactly the tokens it would get alone.
+  - Real chat questions on a V100 that streams most of Maya-S's experts from RAM: x1.41 in all for two at once, x1.35
+    for four. With every expert in GPU memory (a Strix Halo with Maya-S): x1.67 for two and x2.02 for four. Each
+    conversation brings its own experts, so the more of the model VRAM holds, the more it gains.
+  - **Two GPUs or more:** each card works on a different request, one behind the other.
+  - A request alone decodes as fast as before. Each extra request keeps its own context state in VRAM, taken from the
+    expert pool at the start.
+- **Faster answers with a DFlash2 drafter** (#106 by @needmorevram; NVIDIA RTX 30 / A100 and newer).
+  `./maya.sh --setup --draft dflash2` downloads a small drafter (0.7 GB) that drafts up to 7 tokens a round; the model
+  checks them and keeps the right ones, so the answers are the same. Maya-L: +44% on nine GPUs and +12% on two against
+  the MTP block, +19% on one RTX 3090. The MTP block stays the default; older cards keep it (on Tesla V100s the drafter
+  was slower). The drafter's license is CC BY-NC-ND 4.0: non-commercial use only. With `--parallel` above 1 the engine
+  decodes without it.
+- **EXL3 quants** (#75 by @needmorevram; experimental, NVIDIA). The engine reads EXL3 quants in place from their
+  safetensors, with their own kernels for decode, prompts and the CPU lane. The setup can download one at 3.05 bits
+  per weight (`./maya.sh --setup --model EXL3-3.05bpw`, 125.3 GB, with the MTP block). Tested on Linux; not measured
+  against the FP8 model yet.
+- **Web pages on another address can call the API** (#116 by @sociolog, opt-in). `"cors_origins":
+  ["http://127.0.0.1:8090"]` in the config lets a browser page served elsewhere (a local chat client, say) use `/v1/*`;
+  `["*"]` lets every page in - only with an `api_key`. Settings and tools stay for Maya's own page. Without it nothing
+  changes.
+- **Windows: which NUMA node the RAM tier landed on** (#112 by @noahark, from #56). On a two-socket PC the RAM tier
+  lands on one socket or the other from start to start, and the far one is slower. The start now says
+  `glm fast: CUDA0 the RAM tier sits on node 1 of 2 seen`, so you (or a launcher) can restart when it drew the far side.
+  It replaces v1.0.34's longer NUMA line.
+- **Fixed:** a rare crash in the CPU lane's thread pool when one batch of work started while a straggler of the
+  previous one was still finishing (#75).
+
 ## v1.0.34 - 2026-10-11
 
 Fixes from your reports: a two-GPU Windows PC whose RAM tier came out smaller in v1.0.33, and builds on CUDA 12.0-12.2.
