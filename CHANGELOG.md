@@ -4,6 +4,21 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.4 - 2026-10-12
+
+The EXL3 quant works with the DFlash2 drafter, and on Windows + AMD a conversation taken back from a slot answers its
+own question again.
+
+- **EXL3 with the DFlash2 drafter** (#141 by @needmorevram). The drafter's verify window read each token's embedding
+  at the wrong row size for EXL3's BF16 table, so the answers turned to noise (#129, #140, #142), and on one and two
+  GPUs the window had no kernels for EXL3's experts. Both are fixed. A prompt asked again no longer drafts from the
+  previous answer, with every model. On two GPUs EXL3 decodes faster with the MTP block for now, and the speed
+  calibration keeps it there.
+- **Windows + AMD: a conversation taken back from a slot answered the other conversation's question, then looped**
+  (#133). A new conversation's state was zeroed on the GPU's default queue, which nothing made the engine's own queues
+  wait for, and Windows' HIP runtime holds queued work until the program waits on the GPU: the next conversation
+  started from the previous one's state. The state is now zeroed on the engine's compute queue and waited for.
+
 ## v1.1.3 - 2026-10-12
 
 DFlash2 kept only where it is faster (a speed calibration on your PC), an expert profile that fills VRAM well from
