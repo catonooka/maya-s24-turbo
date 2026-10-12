@@ -141,9 +141,31 @@ bool Glm5Model::seq_alloc_arenas(std::string& err) {
         c.state = a;
         more += c.bytes;
     }
+    // every sequence's snapshot (its recurrent states and the open key pool: the prompt cache, PAUSE) now as well:
+    // made on demand, after the expert pool had taken the card, only the first found room
+    const Glm5Geometry& g = g_;
+    const size_t run = (size_t) g.d_inner() * g.kda_head_dim + (size_t) 3 * g.d_inner() * (g.d_conv - 1);
+    int n_rec = 0;
+    for (int il = l0_; il < l1_; ++il) n_rec += g.is_recr(il) ? 1 : 0;
+    const size_t pool_floats = dsa_layers().size() * 2 * (size_t) ((g.idx_kpool - 1) * g.idx_key);
+    for (int s = 0; s < n; ++s) {
+        float*& snap = s == 0 ? snap_ : seq_[(size_t) s].snap;
+        float*& snap_pool = s == 0 ? snap_pool_ : seq_[(size_t) s].snap_pool;
+        if ((snap == nullptr && n_rec > 0 && cudaMalloc(&snap, (size_t) n_rec * run * sizeof(float)) != cudaSuccess) ||
+            (snap_pool == nullptr && pool_floats > 0 &&
+             cudaMalloc(&snap_pool, pool_floats * sizeof(float)) != cudaSuccess)) {
+            cudaGetLastError();
+            err = "pack: the snapshot of sequence " + std::to_string(s) + " of " + std::to_string(n) +
+                  " does not fit on CUDA" + std::to_string(dev_) + " - fewer conversations at once (--parallel)";
+            return false;
+        }
+        more += (uint64_t) ((n_rec > 0 ? (size_t) n_rec * run : 0) + pool_floats) * sizeof(float);
+    }
     std::fprintf(stderr, "glm multi: CUDA%d %d sequence states: the first for %lld tokens (%.2f GB), %d more for %lld "
-                 "(%.2f GB in all)\n", dev_, n, (long long) max_ctx_, (double) state_bytes_ / 1e9, n - 1,
-                 (long long) ctx, (double) more / 1e9);
+                 "(%.2f GB in all, with every sequence's snapshot)\n", dev_, n, (long long) max_ctx_,
+                 (double) state_bytes_ / 1e9, n - 1, (long long) ctx, (double) more / 1e9);
+    // one GPU: the sequences decode together (glm_rows.cu), their activations allocated here, before the pool
+    if (n_parts_ == 1) return rows_alloc(err);
     return true;
 }
 

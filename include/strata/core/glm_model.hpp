@@ -389,6 +389,17 @@ public:
     bool fast_layers(int64_t p, bool hop_in, std::string& err);
     bool fast_dsa(int il, int64_t p, std::string& err);     // one DSA mixer (x -> mixer)
     bool fast_moe(int il, bool& pf_pending, std::string& err);   // one MoE FFN (x -> ffn)
+    // ... its routed experts, once the router and the shared expert's gate / up have run: the token path's own
+    // activations, or one row of a batched step's (multi_rows)
+    struct MoeIo {
+        const float* x;
+        const void* xq;
+        const float* rlog;
+        const float* sh_g;
+        const float* sh_u;
+        float* ffn;
+    };
+    bool fast_moe_experts(int il, const MoeIo& io, bool pred, int n_ah, const float* const* ah_bias, bool& pf_pending);
     void fast_service();
     // gate / up / down of one expert from the shards (or its chunk-th of n_chunks pieces)
     void fast_read_part(int il, int e, int role, uint8_t* blob, int chunk = 0, int n_chunks = 1);
@@ -514,6 +525,20 @@ public:
     int multi_take(int s, std::string& err);
     /// Every part idle, then the between-token tier work (fast_boundary) on each: once every few rounds.
     bool multi_boundary(std::string& err);
+    /// ONE GPU (no split; src/core/glm_rows.cu): one token of each of n sequences through the model together.  The
+    /// dense weights - the attention projections, the shared experts, the dense FFN, the head - are read once for all
+    /// n; the residual mixing, the attention against each sequence's caches and the routed experts run per sequence
+    /// through the token path's own kernels, so each sequence gets the token the token path would give it.
+    /// tokens_out[i]: sequence seqs[i]'s next token after tokens[i] (greedy, or sampled with sps[i]); every
+    /// sequence's position advances by one.  n <= rows_max().
+    bool rows_ok() const { return rows_ != nullptr && split_next_ == nullptr && fast_ != nullptr; }
+    static int rows_max();
+    bool multi_rows(const int* seqs, const int32_t* tokens, const strata::kernels::SamplerParams* sps, int n,
+                    int* tokens_out, std::string& err);
+    struct RowsState;
+    RowsState* rows_ = nullptr;
+    bool rows_alloc(std::string& err);                     // load, several sequences on one GPU: before the pool
+    void rows_destroy();
 
     // ---- the batched prompt path (src/core/glm_prefill.cu)
     struct PrefillState;

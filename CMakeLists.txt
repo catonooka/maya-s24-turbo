@@ -316,7 +316,8 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
   # about arithmetic, and this one knows the ORDER the arithmetic happens in.
   add_library(strata_engine STATIC src/core/layer.cpp src/core/session.cpp src/core/expert_source.cpp src/core/remote_experts.cpp
     src/core/expert_cache.cpp src/core/native_head.cpp src/core/native_dense.cpp src/core/verify.cpp src/core/mtp.cpp
-    src/core/glm_model.cu src/core/glm_fast_path.cu src/core/glm_prefill.cu src/core/glm_multi.cu)
+    src/core/glm_model.cu src/core/glm_fast_path.cu src/core/glm_prefill.cu src/core/glm_multi.cu
+    src/core/glm_rows.cu)
   target_include_directories(strata_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(strata_engine PUBLIC strata_core strata_kernels strata_kernels_cpu ${_strata_gpu_runtime_target})
   if(STRATA_BUILD_TESTS AND STRATA_ENABLE_CUDA)
@@ -796,6 +797,17 @@ if(STRATA_NATIVE_EXPERTS)
     add_executable(native_split_test src/kernels/cpu/native_split_test.cpp)
     target_link_libraries(native_split_test PRIVATE strata_kernels_cpu)
     add_test(NAME native_split_test COMMAND native_split_test)
+  endif()
+  if(STRATA_BUILD_TESTS AND (STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP))
+    # the dense GEMV for several conversations at once (mv_nt) against the one-conversation GEMV, bit for bit; the
+    # second run with the generic kernel alone (synthetic weights from ggml's quantizers)
+    add_executable(glm_mv_nt_test tests/glm_mv_nt_test.cu)
+    target_include_directories(glm_mv_nt_test PRIVATE ${_strata_gpu_include_directories})
+    target_link_libraries(glm_mv_nt_test PRIVATE strata_kernels ggml-base ${_strata_gpu_runtime_target})
+    add_test(NAME glm_mv_nt_test COMMAND glm_mv_nt_test)
+    add_test(NAME glm_mv_nt_generic COMMAND glm_mv_nt_test)
+    set_tests_properties(glm_mv_nt_generic PROPERTIES ENVIRONMENT STRATA_GLM_MV_GENERIC=1)
+    set_tests_properties(glm_mv_nt_test glm_mv_nt_generic PROPERTIES TIMEOUT 300)
   endif()
   if(STRATA_ENABLE_CUDA)
     # prompt-speed plan step 2b: llama.cpp's MMQ kernels (ggml-cuda, MIT) for the prompt path's experts, compiled

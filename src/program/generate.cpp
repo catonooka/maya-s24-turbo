@@ -327,6 +327,9 @@ void usage() {
                  "                       or lower --max-context). Env: STRATA_GLM_RAM_RESIDENT=1\n"
                  "  --glm-ram-slack N    extra RAM-tier slots per MoE layer (STRATA_GLM_RAM_SLACK; default 16 when\n"
                  "                       resident, 0 otherwise)\n"
+                 "  --parallel N         --serve: up to N requests decode at once (1-8, default 1). One GPU decodes\n"
+                 "                       them together (each weight read once for all); a split pipelines them\n"
+                 "                       across its cards. Each extra conversation keeps its own context state\n"
                  "  --tokens LIST        the prompt as comma-separated token IDS (required)\n"
                  "  --tokens-file PATH   pretokenized prompt, commas or whitespace (alternative to --tokens)\n"
                  "  --ple-gguf PATH      required PLE table (original second GGUF shard)\n"
@@ -2150,6 +2153,40 @@ static int glm_pack_generate(const Options& o) {
             gen_sweep();
             return;
         }
+        // a request admitted alone that the speculative path does not take: its first token, from its prompt's logits
+        if (!resolve_ready()) {
+            multi_fail(err);
+            return;
+        }
+        // ONE GPU: every request with a token to feed goes through one step together, each weight read once for all
+        if (model.rows_ok()) {
+            std::vector<Gen*> rg;
+            std::vector<int> seqs, out;
+            std::vector<int32_t> toks;
+            std::vector<strata::kernels::SamplerParams> sps;
+            for (auto& gp : gens)
+                if (!gp->done && gp->pending >= 0 && (int) rg.size() < strata::core::Glm5Model::rows_max()) {
+                    rg.push_back(gp.get());
+                    seqs.push_back(gp->ctx);
+                    toks.push_back(gp->pending);
+                    sps.push_back(gp->sp);
+                }
+            if (!rg.empty()) {
+                out.resize(rg.size());
+                if (!model.multi_rows(seqs.data(), toks.data(), sps.data(), (int) rg.size(), out.data(), err)) {
+                    multi_fail(err);
+                    return;
+                }
+                for (size_t i = 0; i < rg.size(); ++i) {   // (the step keeps the tiers' boundary itself)
+                    Gen& g = *rg[i];
+                    g.sp.counter += 1;
+                    g.pending = -1;
+                    gen_took(g, out[i]);
+                }
+            }
+            gen_sweep();
+            return;
+        }
         for (auto& gp : gens) {
             Gen& g = *gp;
             if (g.done || g.inflight || g.pending < 0) continue;
@@ -2228,26 +2265,34 @@ static int glm_pack_generate(const Options& o) {
                 return 1;
             }
         }
-        // the reference: sequence 0 alone, the classic token path
-        std::vector<int> solo;
+        // the reference: sequence 0 alone, the classic token path - once untimed first (the tiers warm up on it, as
+        // they would before any timed run; and is the token path itself repeatable here?), then timed
+        std::vector<int> solo, solo2;
         model.seq_bind_all(0);
-        model.snapshot_restore();
-        if (!model.forward({prompts[0].back()}, lg, err)) { std::fprintf(stderr, "multi bench: %s\n", err.c_str()); return 1; }
-        auto t0 = now();
-        solo.push_back(model.last_tok_);
-        while ((int) solo.size() < G) {
-            if (!model.forward({(int32_t) solo.back()}, lg, err)) { std::fprintf(stderr, "multi bench: %s\n", err.c_str()); return 1; }
-            solo.push_back(model.last_tok_);
+        double solo_s = 0;
+        strata::core::Glm5Model::FastStats st_a, st_b;   // the expert tiers over each timed phase
+        const auto tiers = [](const char* what, const strata::core::Glm5Model::FastStats& a,
+                              const strata::core::Glm5Model::FastStats& b, int tokens) {
+            const double h = (double) (b.hits - a.hits), m = (double) (b.misses - a.misses), t = std::max(1, tokens);
+            std::printf("  %s: VRAM hit %.1f%%, a token: %.1f RAM fetches, %.2f disk reads, %.1f promotions, %.1f CPU "
+                        "experts\n", what, 100.0 * h / std::max(1.0, h + m), (double) (b.ram_hits - a.ram_hits) / t,
+                        (double) (b.disk_reads - a.disk_reads) / t, (double) (b.promotions - a.promotions) / t,
+                        (double) (b.cpu_experts - a.cpu_experts) / t);
+        };
+        for (std::vector<int>* run : {&solo2, &solo}) {
+            model.snapshot_restore();
+            st_a = model.fast_stats();
+            if (!model.forward({prompts[0].back()}, lg, err)) { std::fprintf(stderr, "multi bench: %s\n", err.c_str()); return 1; }
+            const auto t0 = now();
+            run->push_back(model.last_tok_);
+            while ((int) run->size() < G) {
+                if (!model.forward({(int32_t) run->back()}, lg, err)) { std::fprintf(stderr, "multi bench: %s\n", err.c_str()); return 1; }
+                run->push_back(model.last_tok_);
+            }
+            solo_s = secs(t0, now());
+            st_b = model.fast_stats();
         }
-        const double solo_s = secs(t0, now());
-        std::vector<int> solo2;   // the reference again: is the token path itself repeatable here?
-        model.snapshot_restore();
-        if (!model.forward({prompts[0].back()}, lg, err)) { std::fprintf(stderr, "multi bench: %s\n", err.c_str()); return 1; }
-        solo2.push_back(model.last_tok_);
-        while ((int) solo2.size() < G) {
-            if (!model.forward({(int32_t) solo2.back()}, lg, err)) { std::fprintf(stderr, "multi bench: %s\n", err.c_str()); return 1; }
-            solo2.push_back(model.last_tok_);
-        }
+        const strata::core::Glm5Model::FastStats solo_a = st_a, solo_b = st_b;
         // all n through the pipelined decode
         std::vector<std::vector<int>> out((size_t) n);
         for (int s = 0; s < n; ++s) {
@@ -2257,12 +2302,26 @@ static int glm_pack_generate(const Options& o) {
             out[(size_t) s].push_back(model.last_tok_);
         }
         std::deque<int> q;
-        t0 = now();
-        for (int s = 0; s < n; ++s) {
+        st_a = model.fast_stats();
+        const auto t0 = now();
+        int since = 0, boundaries = 0;
+        const bool rows = model.rows_ok();   // one GPU: all n together, one step per token of each
+        if (rows) {
+            std::vector<int> seqs((size_t) n), next((size_t) n);
+            std::vector<int32_t> toks((size_t) n);
+            const std::vector<strata::kernels::SamplerParams> sps((size_t) n, g0);
+            for (int s = 0; s < n; ++s) seqs[(size_t) s] = s;
+            while ((int) out[0].size() < G) {
+                for (int s = 0; s < n; ++s) toks[(size_t) s] = out[(size_t) s].back();
+                if (!model.multi_rows(seqs.data(), toks.data(), sps.data(), n, next.data(), err)) { std::fprintf(stderr, "multi bench: %s\n", err.c_str()); return 1; }
+                for (int s = 0; s < n; ++s) out[(size_t) s].push_back(next[(size_t) s]);
+                ++boundaries;   // (one before every step, in the step itself)
+            }
+        }
+        for (int s = 0; s < n && !rows; ++s) {
             if (!model.multi_issue(s, out[(size_t) s].back(), g0, err)) { std::fprintf(stderr, "multi bench: %s\n", err.c_str()); return 1; }
             q.push_back(s);
         }
-        int since = 0, boundaries = 0;
         while (!q.empty()) {
             const int s = q.front();
             q.pop_front();
@@ -2290,19 +2349,23 @@ static int glm_pack_generate(const Options& o) {
             }
         }
         const double multi_s = secs(t0, now());
+        st_b = model.fast_stats();
+        tiers("solo", solo_a, solo_b, G);
+        tiers(model.rows_ok() ? "together" : "pipelined", st_a, st_b, n * G);
         const auto agree = [](const std::vector<int>& a, const std::vector<int>& b) {
             size_t k = 0;
             while (k < a.size() && k < b.size() && a[k] == b[k]) ++k;
             return k;
         };
         const size_t same = agree(solo, out[0]);
-        std::printf("  solo vs solo again: %zu of %zu agree\n", agree(solo, solo2), solo.size());
+        std::printf("  solo vs its untimed warm-up run: %zu of %zu agree\n", agree(solo, solo2), solo.size());
         for (int s = 1; s < n; ++s)
             std::printf("  seq %d vs seq 0: %zu agree, vs solo: %zu\n", s, agree(out[(size_t) s], out[0]),
                         agree(out[(size_t) s], solo));
-        std::printf("MULTI BENCH %d seqs, prompt %d, %d tokens each: solo %.1f tok/s | pipelined %.1f tok/s total, "
+        std::printf("MULTI BENCH %d seqs, prompt %d, %d tokens each: solo %.1f tok/s | %s %.1f tok/s total, "
                     "%.1f per sequence (%d boundaries) | sequence 0 same tokens: %zu of %zu\n", n, L, G,
-                    (G - 1) / solo_s, (double) n * (G - 1) / multi_s, (G - 1) / multi_s, boundaries, same, solo.size());
+                    (G - 1) / solo_s, rows ? "together" : "pipelined", (double) n * (G - 1) / multi_s,
+                    (G - 1) / multi_s, boundaries, same, solo.size());
         for (int s = 0; s < n; ++s) {
             std::printf("  seq %d:", s);
             for (int i = 0; i < 12 && i < (int) out[(size_t) s].size(); ++i) std::printf(" %d", out[(size_t) s][(size_t) i]);
@@ -2717,6 +2780,11 @@ int main(int argc, char** argv) {
 #else
             setenv("STRATA_GLM_RAM_RESIDENT", "1", 1);
 #endif
+        }
+        else if (a == "--parallel") {   // the sequence states (STRATA_GLM_SEQS): n conversations at once
+            const int n = std::atoi(next("--parallel"));
+            if (n < 1 || n > 8) { std::fprintf(stderr, "--parallel takes 1..8\n"); return 2; }
+            set_env("STRATA_GLM_SEQS", std::to_string(n).c_str());
         }
         else if (a == "--glm-ram-slack") {
             const char* v = next("--glm-ram-slack");

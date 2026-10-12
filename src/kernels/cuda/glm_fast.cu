@@ -977,6 +977,20 @@ struct MvBatch {
 };
 constexpr int MV_ROWS = 8;   // rows (warps) per block
 
+// a GEMV's output: alpha * s + bias, the product rounded and then the sum, in every GEMV kernel alike - left to the
+// compiler, the two were fused in some kernels and not in others (CUDA: none of the one-activation ones; ROCm: it
+// depended on the instantiation), so a batched output could differ in its last bit from the same one alone.  Without a
+// bias (every call of the decode) both ways give the same bits.
+__device__ __forceinline__ float mv_out(float alpha, float s, float bias) {
+#if defined(STRATA_USE_HIP)
+    float m = alpha * s;
+    asm volatile("" : "+v"(m));   // the product materialised: never fused with the sum
+    return m + bias;
+#else
+    return __fadd_rn(__fmul_rn(alpha, s), bias);
+#endif
+}
+
 __global__ void __launch_bounds__(256) mv_kernel(const __grid_constant__ MvBatch b) {
     const int bid = blockIdx.x;
     int ji = 0;
@@ -987,7 +1001,7 @@ __global__ void __launch_bounds__(256) mv_kernel(const __grid_constant__ MvBatch
     const int lane = threadIdx.x & 31;
     if (row >= J.n_out) return;
     const float s = any_row_dot(J.type, J.w, row, J.xq, J.xf, J.n_in, lane);
-    if (lane == 0) J.y[row] = J.alpha * s + (J.bias ? J.bias[row] : 0.0f);
+    if (lane == 0) J.y[row] = mv_out(J.alpha, s, J.bias ? J.bias[row] : 0.0f);
 }
 
 // ... the same for jobs of ONE quantized type: compiled for that type alone (the switch over every type costs the
@@ -1004,7 +1018,124 @@ __global__ void __launch_bounds__(256) mv_kernel_t(const __grid_constant__ MvBat
     if (row >= J.n_out) return;
     const float s = row_dot<T>((const uint8_t*) J.w + (size_t) row * rbytes<T>(J.n_in), (const block_q8_1*) J.xq,
                                J.n_in, lane);
-    if (lane == 0) J.y[row] = J.alpha * s + (J.bias ? J.bias[row] : 0.0f);
+    if (lane == 0) J.y[row] = mv_out(J.alpha, s, J.bias ? J.bias[row] : 0.0f);
+}
+
+// ---------------------------------------------------------------- the same GEMVs for NT activations at once (mv_nt)
+// Several conversations' tokens through one layer: activation t is xs q8_1 blocks (or n_in floats) after activation
+// t - 1, output t n_out floats after output t - 1.  Each lane makes row_dot's calls in row_dot's order for every
+// activation, and each sum ends in the same warp_sum, so column t is bit for bit the one-activation kernel's; the
+// weight row is fetched from memory once for all NT.  Separate kernels: the one-activation ones keep their registers.
+template<int T, int NT>
+__device__ __forceinline__ void row_dot_nt(const uint8_t* row, const block_q8_1* x, size_t xs, int n_in, int lane,
+                                           float (&s)[NT]) {
+    using Fm = F<T>;
+    const int nb = n_in / Fm::qk;
+    float acc[NT];
+#pragma unroll
+    for (int t = 0; t < NT; ++t) acc[t] = 0.0f;
+    for (int k = lane; k < nb * Fm::ipb; k += 32) {
+        const int kbx = k / Fm::ipb, iqs = Fm::step * (k % Fm::ipb);
+#pragma unroll
+        for (int t = 0; t < NT; ++t) acc[t] += Fm::dot(row, x + (size_t) t * xs + kbx * (Fm::qk / 32), kbx, iqs);
+    }
+#pragma unroll
+    for (int t = 0; t < NT; ++t) s[t] = warp_sum(acc[t]);
+}
+template<int NT>
+__device__ __forceinline__ void row_dot_f32_nt(const float* row, const float* x, int n_in, int lane, float (&s)[NT]) {
+    float acc[NT];
+#pragma unroll
+    for (int t = 0; t < NT; ++t) acc[t] = 0.0f;
+    const float4* r4 = (const float4*) row;
+    for (int k = lane; k < n_in / 4; k += 32) {
+        const float4 a = r4[k];
+#pragma unroll
+        for (int t = 0; t < NT; ++t) {
+            const float4 b = ((const float4*) (x + (size_t) t * n_in))[k];
+            acc[t] += a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+        }
+    }
+#pragma unroll
+    for (int t = 0; t < NT; ++t) s[t] = warp_sum(acc[t]);
+}
+template<int NT>
+__device__ __forceinline__ void row_dot_bf16_nt(const uint16_t* row, const float* x, int n_in, int lane,
+                                                float (&s)[NT]) {
+    float acc[NT];
+#pragma unroll
+    for (int t = 0; t < NT; ++t) acc[t] = 0.0f;
+    const uint4* r8 = (const uint4*) row;
+    for (int k = lane; k < n_in / 8; k += 32) {
+        const uint4 w = r8[k];
+#pragma unroll
+        for (int t = 0; t < NT; ++t) {
+            const float4* x4 = (const float4*) (x + (size_t) t * n_in);
+            const float4 a = x4[2 * k], b = x4[2 * k + 1];
+            acc[t] += __uint_as_float(w.x << 16) * a.x + __uint_as_float(w.x & 0xffff0000u) * a.y +
+                      __uint_as_float(w.y << 16) * a.z + __uint_as_float(w.y & 0xffff0000u) * a.w +
+                      __uint_as_float(w.z << 16) * b.x + __uint_as_float(w.z & 0xffff0000u) * b.y +
+                      __uint_as_float(w.w << 16) * b.z + __uint_as_float(w.w & 0xffff0000u) * b.w;
+        }
+    }
+#pragma unroll
+    for (int t = 0; t < NT; ++t) s[t] = warp_sum(acc[t]);
+}
+template<int NT>
+__device__ __forceinline__ void any_row_dot_nt(int type, const void* w, int row, const void* xq, const float* xf,
+                                               int n_in, int lane, float (&s)[NT]) {
+    switch (type) {
+        case kTypeF32: row_dot_f32_nt<NT>((const float*) w + (size_t) row * n_in, xf, n_in, lane, s); return;
+        case kTypeBF16: row_dot_bf16_nt<NT>((const uint16_t*) w + (size_t) row * n_in, xf, n_in, lane, s); return;
+#define GF_CASE_NT(T)                                                                                               \
+    case T:                                                                                                         \
+        row_dot_nt<T, NT>((const uint8_t*) w + (size_t) row * rbytes<T>(n_in), (const block_q8_1*) xq,             \
+                          (size_t) (n_in / 32), n_in, lane, s);                                                     \
+        return;
+        GF_CASE_NT(12) GF_CASE_NT(13) GF_CASE_NT(14) GF_CASE_NT(8) GF_CASE_NT(16) GF_CASE_NT(18) GF_CASE_NT(19)
+        GF_CASE_NT(23) GF_CASE_NT(10) GF_CASE_NT(11) GF_CASE_NT(17) GF_CASE_NT(22) GF_CASE_NT(21) GF_CASE_NT(29)
+#undef GF_CASE_NT
+        default:
+#pragma unroll
+            for (int t = 0; t < NT; ++t) s[t] = 0.0f;
+    }
+}
+template<int NT>
+__global__ void __launch_bounds__(256) mv_kernel_nt(const __grid_constant__ MvBatch b) {
+    const int bid = blockIdx.x;
+    int ji = 0;
+    while (ji < b.n - 1 && bid >= b.blk_end[ji]) ++ji;
+    const MvJob& J = b.j[ji];
+    const int blk0 = ji ? b.blk_end[ji - 1] : 0;
+    const int row = (bid - blk0) * MV_ROWS + (threadIdx.x >> 5);
+    const int lane = threadIdx.x & 31;
+    if (row >= J.n_out) return;
+    float s[NT];
+    any_row_dot_nt<NT>(J.type, J.w, row, J.xq, J.xf, J.n_in, lane, s);
+    if (lane == 0) {
+        const float bias = J.bias ? J.bias[row] : 0.0f;
+#pragma unroll
+        for (int t = 0; t < NT; ++t) J.y[(size_t) t * J.n_out + row] = mv_out(J.alpha, s[t], bias);
+    }
+}
+template<int T, int NT>
+__global__ void __launch_bounds__(256) mv_kernel_t_nt(const __grid_constant__ MvBatch b) {
+    const int bid = blockIdx.x;
+    int ji = 0;
+    while (ji < b.n - 1 && bid >= b.blk_end[ji]) ++ji;
+    const MvJob& J = b.j[ji];
+    const int blk0 = ji ? b.blk_end[ji - 1] : 0;
+    const int row = (bid - blk0) * MV_ROWS + (threadIdx.x >> 5);
+    const int lane = threadIdx.x & 31;
+    if (row >= J.n_out) return;
+    float s[NT];
+    row_dot_nt<T, NT>((const uint8_t*) J.w + (size_t) row * rbytes<T>(J.n_in), (const block_q8_1*) J.xq,
+                      (size_t) (J.n_in / 32), J.n_in, lane, s);
+    if (lane == 0) {
+        const float bias = J.bias ? J.bias[row] : 0.0f;
+#pragma unroll
+        for (int t = 0; t < NT; ++t) J.y[(size_t) t * J.n_out + row] = mv_out(J.alpha, s[t], bias);
+    }
 }
 
 #if defined(STRATA_USE_HIP)
@@ -3292,6 +3423,72 @@ bool mv(const MvJob* jobs, int n, cudaStream_t s) {
         mv_kernel<<<acc, 256, 0, s>>>(b);
     }
     launch_check("mv");
+    return true;
+}
+
+namespace {
+template<int NT>
+void mv_nt_launch(const MvJob* jobs, int n, bool typed, bool* done, cudaStream_t s) {
+    constexpr int kTyped[] = {14, 8, 12, 13};
+    if (typed) {
+        for (const int T : kTyped) {
+            MvBatch b{};
+            int acc = 0, m = 0;
+            for (int i = 0; i < n; ++i)
+                if (!done[i] && jobs[i].type == T) {
+                    b.j[m] = jobs[i];
+                    acc += (jobs[i].n_out + MV_ROWS - 1) / MV_ROWS;
+                    b.blk_end[m++] = acc;
+                    done[i] = true;
+                }
+            if (m == 0) continue;
+            b.n = m;
+            switch (T) {
+                case 14: mv_kernel_t_nt<14, NT><<<acc, 256, 0, s>>>(b); break;
+                case 8: mv_kernel_t_nt<8, NT><<<acc, 256, 0, s>>>(b); break;
+                case 12: mv_kernel_t_nt<12, NT><<<acc, 256, 0, s>>>(b); break;
+                case 13: mv_kernel_t_nt<13, NT><<<acc, 256, 0, s>>>(b); break;
+            }
+        }
+    }
+    MvBatch b{};
+    int acc = 0, m = 0;
+    for (int i = 0; i < n; ++i) {
+        if (done[i]) continue;
+        b.j[m] = jobs[i];
+        acc += (jobs[i].n_out + MV_ROWS - 1) / MV_ROWS;
+        b.blk_end[m++] = acc;
+    }
+    if (m > 0) {
+        b.n = m;
+        mv_kernel_nt<NT><<<acc, 256, 0, s>>>(b);
+    }
+}
+}  // namespace
+
+bool mv_nt(const MvJob* jobs, int n, int nt, cudaStream_t s) {
+    if (nt <= 1) return mv(jobs, n, s);
+    if (n <= 0 || n > kMaxMvJobs || nt > kMaxMvCols) return false;
+    for (int i = 0; i < n; ++i)
+        if (!mv_type_ok(jobs[i].type)) {
+            std::fprintf(stderr, "glm_fast mv_nt: type %d unsupported\n", jobs[i].type);
+            return false;
+        }
+    static const bool typed = getenv("STRATA_GLM_MV_GENERIC") == nullptr;
+    bool done[kMaxMvJobs] = {};
+#if defined(STRATA_USE_HIP)
+    if (typed) mv_rdna(jobs, n, nt, done, s);   // (RDNA3: its Q6_K and BF16 kernels take NT activations already)
+#endif
+    switch (nt) {
+        case 2: mv_nt_launch<2>(jobs, n, typed, done, s); break;
+        case 3: mv_nt_launch<3>(jobs, n, typed, done, s); break;
+        case 4: mv_nt_launch<4>(jobs, n, typed, done, s); break;
+        case 5: mv_nt_launch<5>(jobs, n, typed, done, s); break;
+        case 6: mv_nt_launch<6>(jobs, n, typed, done, s); break;
+        case 7: mv_nt_launch<7>(jobs, n, typed, done, s); break;
+        default: mv_nt_launch<8>(jobs, n, typed, done, s); break;
+    }
+    launch_check("mv_nt");
     return true;
 }
 

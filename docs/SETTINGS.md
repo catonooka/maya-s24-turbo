@@ -48,7 +48,7 @@ These settings change what the engine chooses (put them in the config with `--en
 | `STRATA_GLM_SLOTS` | 4 | conversations kept aside on the SSD, so switching back to one doesn't re-read its prompt; `0` = off |
 | `STRATA_GLM_SLOT_MIN`, `STRATA_GLM_SLOT_GB`, `STRATA_GLM_SLOT_DIR` | 1024, 16, `<pack>/slots` | the shortest conversation kept aside (tokens, down to 1), their total size on disk (GB), and the folder |
 | `STRATA_GLM_SLOT_KEEP`, `STRATA_GLM_SLOT_DAYS` | off, 7 | `1`: the kept conversations outlive the engine - the folder is not emptied at start (a slot is kept when its `.meta` names this model, engine version and pack, else removed), the conversation in the model is kept when the engine ends, and a slot unused for `STRATA_GLM_SLOT_DAYS` days is removed. With a supervisor that stops the model when it idles (llama-swap), the next request after a restart reads only its new tokens (a 4K-token conversation back in 0.2 s instead of re-read) |
-| `STRATA_GLM_SEQS`, `STRATA_GLM_SEQ_CTX` | 1, the context | two GPUs or more: n conversations decode at once - the engine keeps n sequence states (the first for the whole context, the others for `STRATA_GLM_SEQ_CTX` tokens) and a token of each goes through the split's GPUs one behind the other, so every GPU works on a different conversation instead of waiting for the others. One request alone keeps the speculative decode. 4x RTX 4090, Maya-S24: 110 tok/s alone, 132 in all for two, 225 for four; each extra state takes its size from the expert pool (three at 64K: 3.5 GB). On one GPU it gains nothing (4.0 tok/s alone, 4.3 in all for two): leave it at 1 |
+| `STRATA_GLM_SEQS`, `STRATA_GLM_SEQ_CTX` | 1, the context | the first is `--parallel` (above): n conversations at once, n sequence states - the first for the whole context, the others for `STRATA_GLM_SEQ_CTX` tokens. On a split a token of each goes through the GPUs one behind the other, so every GPU works on a different conversation (4x RTX 4090, Maya-S24: 110 tok/s alone, 132 in all for two, 225 for four); each extra state takes its size from the expert pool (three at 64K: 3.5 GB) |
 | `STRATA_GLM_MULTI_ROOM`, `STRATA_GLM_MULTI_BOUNDARY`, `STRATA_GLM_MULTI_SPEC` | 16384, 32, on | with `STRATA_GLM_SEQS`: the room a conversation state must leave after a prompt (a longer prompt waits for the first, large state; max tokens are cut to the state), how many tokens a conversation decodes between two updates of the expert tiers, and whether a request alone uses the speculative decode |
 | `STRATA_GLM_PROMOTE` | 8 | when the CPU computes every RAM-tier expert (it beats the PCIe link), experts moved between VRAM and RAM in the background per token, so VRAM follows what you use; `0` = off |
 | `STRATA_GLM_PROMOTE_MIN` | 0 | a fetched expert is kept in VRAM only when its aged route count is at least this. `0` or `1` is the old rule (keep it whenever a spare is free). A flat route table promotes one-off experts and then evicts them; `6` stopped that churn on one 4090 D with 128 GB of RAM; with little RAM it costs (2x V100, 30 GB: 29.6 -> 28.3 tokens/s) |
@@ -101,3 +101,22 @@ what you changed there):
 
 One card streams nearly every expert over PCIe for each chunk, so fewer, larger chunks pay off on long prompts. On a
 split, a prompt that fits one chunk runs the cards one after the other, while two or more keep both busy.
+
+**Several requests at once** (`--parallel N`, 1-8, default 1). `./maya.sh --parallel 4` (Windows:
+`START-MAYA.bat --parallel 4`) keeps it in the config's `"args"`. Maya then answers up to N requests at the same time,
+and the ones after them wait their turn. The dashboard shows how many answers are being written, and `/v1/status`
+reports N as its concurrency.
+- **One GPU:** a token of each request goes through the model together. Every dense weight (the attention
+  projections, the shared experts, the dense FFN layers and the output head) is read once for all of them, while the
+  attention and the routed experts run per request. Each request gets exactly the tokens it would get alone (greedy,
+  CPU lane off: checked with 2 and 4 at once). Real chat questions on a V100 32 GB that streams most of Maya-S's
+  experts from RAM: 21.2 tok/s in all for two at once against 15.0 one after another (x1.41), x1.35 for four. Each
+  conversation brings its own experts, so on a card that holds only part of them they share its VRAM; the more of the
+  model VRAM holds, the less they compete. With every expert in GPU memory (a Strix Halo with Maya-S): x1.67 for two at
+  once and x2.02 for four.
+- **Two GPUs or more:** each card works on a different request, one behind the other.
+- **A request alone** decodes as fast as before (on a split, with the speculative decode).
+
+Each extra request keeps its own context state in VRAM (the attention caches, the recurrent states and a snapshot),
+taken from the expert pool at the start, so a larger N leaves fewer experts in VRAM; the log's `glm multi:` line gives
+the size.

@@ -35,6 +35,12 @@ struct MvJob {
 constexpr int kMaxMvJobs = 8;
 /// One launch for up to kMaxMvJobs independent GEMVs (they share nothing but the launch).
 bool mv(const MvJob* jobs, int n, cudaStream_t s);
+/// The most activations mv_nt() takes at once.
+constexpr int kMaxMvCols = 8;
+/// mv() for nt activations at once (nt <= kMaxMvCols; 1 = mv()): each job's xq / xf hold nt activations one after
+/// another (n_in values each) and its y nt outputs (n_out each).  Output t is bit for bit what mv() gives for
+/// activation t alone, and each weight row is read from memory once for all of them.
+bool mv_nt(const MvJob* jobs, int n, int nt, cudaStream_t s);
 /// Whether mv() serves this weight type.
 bool mv_supported(int type);
 /// Whether moe_gate_up() / moe_down() serve routed experts of this type.

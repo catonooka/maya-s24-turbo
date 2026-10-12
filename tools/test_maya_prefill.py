@@ -94,6 +94,21 @@ class PrefillConfigTests(unittest.TestCase):
         self.assertEqual(again[again.index("--prefill") + 1], "32768")
         self.assertEqual(again.count("--prefill"), 1)
 
+    def test_parallel_is_written_kept_and_given_again(self):
+        # --parallel N: absent by default, written when given, kept by a later setup, a new value wins
+        _, args = self.write([0])
+        self.assertNotIn("--parallel", args)
+        self.a.parallel = 4
+        _, args = self.write([0])
+        self.assertEqual(args[args.index("--parallel") + 1], "4")
+        self.a.parallel = None
+        _, args = self.write([0])
+        self.assertEqual(args[args.index("--parallel") + 1], "4")
+        self.a.parallel = 2
+        _, args = self.write([0])
+        self.assertEqual(args[args.index("--parallel") + 1], "2")
+        self.assertEqual(args.count("--parallel"), 1)
+
     def test_prefill_tips_follow_strata(self):
         self.assertEqual(maya.prefill_tips(["--prefill", "auto"], 177, 1), [])      # one GPU: auto takes 32768
         self.assertEqual(maya.prefill_tips(["--prefill", "32768"], 32, 1), [])

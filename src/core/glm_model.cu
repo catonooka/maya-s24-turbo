@@ -494,6 +494,7 @@ Glm5Model::~Glm5Model() {
         }
         seq_.clear();
     }
+    rows_destroy();
     fast_destroy();
     if (!stage_workers_.empty()) {
         // stop the staging pool: without this the workers block in stage_cv_ forever and the

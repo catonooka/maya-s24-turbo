@@ -1459,6 +1459,7 @@ class Service:
             s = dict(self.status)
             hist = list(self.history)
             totals = dict(self.totals)
+            active = self.active
         now = time.time()
         progress = getattr(self.engine, "progress", None)
         if s.get("busy") and s.get("first_token") is None:
@@ -1467,7 +1468,8 @@ class Service:
             state = "generating"
         else:
             state = "idle"
-        live = {"state": state, "queued": s.get("queued", 0), "phase": s.get("phase") if s.get("busy") else None,
+        live = {"state": state, "queued": s.get("queued", 0), "active": active,   # (answering at once: --parallel)
+                "phase": s.get("phase") if s.get("busy") else None,
                 "prompt_tokens": s.get("prompt_tokens") if s.get("busy") else None,
                 "prompt_read": None, "prompt_total": None, "generated": s.get("generated") if s.get("busy") else None,
                 "max_tokens": s.get("max_tokens") if s.get("busy") else None,
@@ -1503,8 +1505,10 @@ class Service:
         with self.status_lock:
             s, totals = dict(self.status), dict(self.totals)
             last_t, last_at = (dict(self.last_timings) if self.last_timings else None), self.last_request_at
+            active = self.active
         tel = self.telemetry.snapshot() if getattr(self, "telemetry", None) else {"now": {}, "static": {}}
         hw, static = tel.get("now") or {}, tel.get("static") or {}
+        places = max(1, int(getattr(self.engine, "multi", 0) or 0))   # requests the engine answers at once
 
         def scaled(v, unit, digits=0):
             return round(v / unit, digits) if isinstance(v, (int, float)) else None
@@ -1517,10 +1521,11 @@ class Service:
             "started": int(self.started_at), "uptime_s": int(time.time() - self.started_at),
             "cache_max_tokens": ctx,
             "context": {"native": ctx, "max_positions": ctx},
-            "concurrency": {"serving": 1, "requested": 1},       # one request at a time; more wait their turn
+            "concurrency": {"serving": places, "requested": places},   # more than that wait their turn
             "dialects": ["/v1/chat/completions", "/v1/messages"],
             "vision": {"enabled": images, "available": images, "error": None},
-            "activity": {"requests": totals["requests"] + int(busy), "in_flight": int(busy) + int(s.get("queued") or 0),
+            "activity": {"requests": totals["requests"] + max(int(busy), active),
+                         "in_flight": max(int(busy), active) + int(s.get("queued") or 0),
                          "last_request_at": int(last_at) if last_at else None},
             "last_timings": last_t,
             "machine": {
@@ -3171,7 +3176,7 @@ def main() -> int:
                   fit_max_tokens=a.fit_max_tokens or cfg.get("fit_max_tokens") is True)
     if getattr(engine, "multi", 0) > 1:                 # n conversations at once: n places in the FIFO
         svc.fifo.set_capacity(engine.multi)
-        print(f"[maya] {engine.multi} conversations at once (STRATA_GLM_SEQS)", flush=True)
+        print(f"[maya] {engine.multi} conversations at once (--parallel)", flush=True)
     if cfg.get("reasoning_effort"):
         try:
             effort_kwargs(cfg["reasoning_effort"])

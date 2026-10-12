@@ -370,7 +370,8 @@ function render(m) {
     const pct = live.prompt_total ? Math.round((100 * live.prompt_read) / live.prompt_total) : null;
     setPill("reading", pct != null ? `Reading · ${pct}%` : "Reading");
   } else if (live.state === "generating") {
-    setPill("generating", live.tok_s ? `${fmt(live.tok_s, 1)} tok/s` : "Writing");
+    const many = live.active > 1 ? ` · ${live.active} at once` : "";   // (--parallel: answers written together)
+    setPill("generating", (live.tok_s ? `${fmt(live.tok_s, 1)} tok/s` : "Writing") + many);
   } else {
     setPill("idle", "Idle");
   }
@@ -492,6 +493,7 @@ function renderMonitor(live, hw, st, eng, h, last, requests, totals, kept) {
     delete prog.dataset.tone;
     detail = `last answer: ${fmt(last.output_tokens)} tokens${took(last.duration_s)}`;
   }
+  if (live.active > 1) label = `${label} · ${live.active} answers at once`;
   if (live.queued > 0) label = `${label} · ${live.queued} queued`;
   badge.textContent = label;
   badge.dataset.s = state;

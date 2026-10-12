@@ -922,6 +922,11 @@ class UsageAndStatus(unittest.TestCase):
         self.assertEqual(s["model"], self.svc.model)
         self.assertEqual(s["context"]["max_positions"], CTX)
         self.assertEqual(s["concurrency"]["serving"], 1)
+        self.engine.multi = 4   # an engine that answers 4 at once (READY ... multi=4, --parallel 4)
+        try:
+            self.assertEqual(json.loads(self.request("/v1/status")[1])["concurrency"]["serving"], 4)
+        finally:
+            self.engine.multi = 0
         self.assertFalse(s["vision"]["available"])
         self.assertEqual(s["activity"]["in_flight"], 0)
         self.assertGreaterEqual(s["activity"]["requests"], 1)

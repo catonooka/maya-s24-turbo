@@ -1577,9 +1577,11 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vi
     cfg["log"] = str(cfg_path.with_suffix(".log"))
     local = choice[1] if choice and choice[0] == "local" else None   # (choose_model's answer)
     if cfg_path.exists():
-        kept = keep_args(read_json(cfg_path).get("args") or [], cfg["args"], ("--prefill",))
+        kept = keep_args(read_json(cfg_path).get("args") or [], cfg["args"], ("--prefill", "--parallel"))
         if kept:
             ok("kept from the config before: " + ", ".join(kept))
+    if getattr(a, "parallel", None):
+        set_arg(cfg["args"], "--parallel", a.parallel)
     for line in prefill_tips(cfg["args"], mem_gb()[0], len(pc["gpus"])):
         ok(line)
     gguf_dir = local.parent if local else Path(a.gguf_dir).expanduser().resolve() if a.gguf_dir else None
@@ -1619,6 +1621,14 @@ def prefill_tips(args: list, ram: float, gpus: int = 2) -> list:
         return [f"tip: with {ram:.0f} GB of RAM, --prefill 32768 in the config's args read prompts 21-35% faster in "
                 "community benchmarks; not set, nothing changes"]
     return []
+
+
+def set_arg(args: list, flag: str, value) -> None:
+    """`flag value` in the engine arguments: its value replaced, or the pair added (`args` is changed in place)."""
+    if flag in args[:-1]:
+        args[args.index(flag) + 1] = str(value)
+    else:
+        args += [flag, str(value)]
 
 
 def keep_args(old: list, new: list, flags: tuple) -> list:
@@ -1757,6 +1767,9 @@ def server_command(cfg_path: Path, a) -> tuple:
     """The dashboard's server for an installed config: (its command, its environment, what the setup's screen shows of
     it).  The engine is compiled again first when its source changed (an update)."""
     cfg = read_json(cfg_path)
+    if getattr(a, "parallel", None):                   # --parallel given at a start: kept in the config
+        set_arg(cfg.setdefault("args", []), "--parallel", a.parallel)
+        cfg_path.write_text(json.dumps(cfg, indent=1), encoding="utf-8")
     select_build_backend(cfg.get("backend", "cuda"))
     args = cfg.get("args") or []
     pack = Path(args[args.index("--glm-pack") + 1]) if "--glm-pack" in args[:-1] else None
@@ -2271,6 +2284,10 @@ def main() -> int:
     ap.add_argument("--gpus", help=f"split the model's layers across these GPUs (up to {MAX_GPUS}), e.g. 0,1 or "
                                    "0,1,2,3")
     ap.add_argument("--context", type=int, help=f"context length in tokens (default {DEFAULT_CONTEXT})")
+    ap.add_argument("--parallel", type=int, choices=range(1, 9), metavar="N",
+                    help="answer up to N requests at once (1-8, default 1), kept in the config: on one GPU they are "
+                         "decoded together, more tokens per second in all; each extra conversation keeps its own "
+                         "context in VRAM, which the expert cache gives up")
     ap.add_argument("--port", type=int, help="the dashboard's and the API's port (default 8080)")
     ap.add_argument("--host", help="where the server listens: 127.0.0.1 = this machine only (default), 0.0.0.0 = also "
                                    "other devices on your network (set --api-key too)")
