@@ -6,6 +6,7 @@
 // serial reference kernels - the values agree to float rounding, which the fast-vs-reference check in
 // glm_pack_test pins on the real model.
 #include "strata/kernels/glm_fast.hpp"
+#include "strata/kernels/exl3.hpp"
 #if defined(STRATA_USE_HIP)
 #include "strata/kernels/glm_expert_bench.hpp"
 #include <cstring>
@@ -3869,6 +3870,7 @@ int mv_type_ok(int t) {
     switch (t) {
         case kTypeF32: case kTypeBF16: case 12: case 13: case 14: case 8: case 16: case 18: case 19: case 23: case 10: case 11:
         case 17: case 22: case 21: case 29: return 1;
+        case exl3::kTypeEXL3: return 1;   // forwarded to the EXL3 kernels (mv below)
         default: return 0;
     }
 }
@@ -3892,7 +3894,7 @@ bool moe_supported(int type) {   // moe_gate_up's and moe_down's instantiations
            type == 18 || type == 19 || type == 21 || type == 22 || type == 23 || type == 29;
 }
 
-int launch_errors() { return g_launch_errors.load(std::memory_order_relaxed); }
+int launch_errors() { return g_launch_errors.load(std::memory_order_relaxed) + exl3::launch_errors(); }
 
 size_t row_bytes(int type, int64_t n_in) {
     switch (type) {
@@ -4028,6 +4030,36 @@ void mv_config(int r, int u, int wpb, int lds) {
 }  // namespace hip_expert_bench
 #endif
 
+// A batch's EXL3 jobs (w: an exl3::Mat) through exl3::mv, marked done: every column one EXL3 job, in launches of up to
+// exl3::kMaxMvJobs - nt > 0: nt activations one after another (mv_nt's layout), else each job's ncol at its strides
+static bool exl3_jobs(const MvJob* jobs, int n, int nt, bool* done, cudaStream_t s) {
+    exl3::MvJob xj[exl3::kMaxMvJobs];
+    int nx = 0;
+    for (int i = 0; i < n; ++i) {
+        const MvJob& j = jobs[i];
+        if (j.type != exl3::kTypeEXL3) continue;
+        const int ncol = nt > 0 ? nt : j.ncol;
+        const int64_t xq_cs = nt > 0 ? (int64_t) (j.n_in / 32) * (int64_t) sizeof(block_q8_1) : j.xq_cstride;
+        const int64_t xf_cs = nt > 0 ? j.n_in : j.xf_cstride;
+        const int64_t y_cs = nt > 0 ? j.n_out : j.y_cstride;
+        for (int c = 0; c < ncol; ++c) {
+            exl3::MvJob& x = xj[nx++];
+            x.m = (const exl3::Mat*) j.w;
+            x.xf = j.xf != nullptr ? j.xf + c * xf_cs : nullptr;
+            x.xq = j.xq != nullptr ? (const void*) ((const uint8_t*) j.xq + c * xq_cs) : nullptr;
+            x.y = j.y + c * y_cs;
+            x.bias = j.bias;
+            x.alpha = j.alpha;
+            if (nx == exl3::kMaxMvJobs) {
+                if (!exl3::mv(xj, nx, s)) return false;
+                nx = 0;
+            }
+        }
+        done[i] = true;
+    }
+    return nx == 0 || exl3::mv(xj, nx, s);
+}
+
 bool mv(const MvJob* jobs, int n, cudaStream_t s) {
     if (n <= 0 || n > kMaxMvJobs) return false;
     for (int i = 0; i < n; ++i)
@@ -4045,6 +4077,14 @@ bool mv(const MvJob* jobs, int n, cudaStream_t s) {
     static const bool typed = getenv("STRATA_GLM_MV_GENERIC") == nullptr;
     constexpr int kTyped[] = {14, 8, 12, 13};
     bool done[kMaxMvJobs] = {};
+    // EXL3 weights (w: an exl3::Mat): their own kernels, F32 input when the job has it, else the q8_1 - a job of
+    // several columns (a verify window's tokens) as one EXL3 job a column
+    if (!exl3_jobs(jobs, n, 0, done, s)) return false;
+    {
+        bool all = true;
+        for (int i = 0; i < n; ++i) all = all && done[i];
+        if (all) return true;
+    }
 #if defined(STRATA_USE_HIP)
     // (one-column batches only: a verify window's several-column jobs go to the tiled kernels below)
     bool one_col = true;
@@ -4237,12 +4277,13 @@ bool mv_nt(const MvJob* jobs, int n, int nt, cudaStream_t s) {
     if (nt <= 1) return mv(jobs, n, s);
     if (n <= 0 || n > kMaxMvJobs || nt > kMaxMvNt) return false;
     for (int i = 0; i < n; ++i)
-        if (!mv_type_ok(jobs[i].type)) {
-            std::fprintf(stderr, "glm_fast mv_nt: type %d unsupported\n", jobs[i].type);
+        if (!mv_type_ok(jobs[i].type) || jobs[i].ncol != 1) {
+            std::fprintf(stderr, "glm_fast mv_nt: type %d / %d columns unsupported\n", jobs[i].type, jobs[i].ncol);
             return false;
         }
     static const bool typed = getenv("STRATA_GLM_MV_GENERIC") == nullptr;
     bool done[kMaxMvJobs] = {};
+    if (!exl3_jobs(jobs, n, nt, done, s)) return false;   // (EXL3: one EXL3 job an activation)
 #if defined(STRATA_USE_HIP)
     if (typed) mv_rdna(jobs, n, nt, done, s);   // (RDNA3: its Q6_K and BF16 kernels take NT activations already)
 #endif

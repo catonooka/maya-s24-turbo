@@ -34,6 +34,11 @@ The setup asks which one to download and recommends one for your PC. How they're
 [MAYA-S24](bench/results/MAYA-S24.md), [MAYA-M](bench/results/MAYA-M.md), [MAYA-L](bench/results/MAYA-L.md). On
 [Hugging Face](https://huggingface.co/peasantsmith/GLM-5.3-Flash-Maya-GGUF).
 
+The setup can also download turboderp's [EXL3 quant](https://huggingface.co/turboderp/GLM-5.3-Flash-exl3/tree/3.05bpw)
+at 3.05 bits per weight (125.3 GB, exllamav3's format, with the MTP block), which the engine reads in place from
+its safetensors: experimental, NVIDIA only, tested on Linux, and not measured against the FP8 model -
+`./maya.sh --setup --model EXL3-3.05bpw`.
+
 ## How fast is it?
 
 Real machines, real numbers, most of them measured with `./maya.sh --bench`. A token is about ¾ of a word.

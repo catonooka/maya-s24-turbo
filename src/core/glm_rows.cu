@@ -290,9 +290,9 @@ bool Glm5Model::multi_rows(const int* seqs, const int32_t* tokens, const strata:
 
         if (Ly.recr) {
             gf::MvJob j[6];
-            j[0] = {Ly.q.q, S->xq, nullptr, S->proj[0], nullptr, 1.0f, Ly.q.type, E, DI};
-            j[1] = {Ly.k.q, S->xq, nullptr, S->proj[1], nullptr, 1.0f, Ly.k.type, E, DI};
-            j[2] = {Ly.v.q, S->xq, nullptr, S->proj[2], nullptr, 1.0f, Ly.v.type, E, DI};
+            j[0] = {Ly.q.q, S->xq, S->x, S->proj[0], nullptr, 1.0f, Ly.q.type, E, DI};
+            j[1] = {Ly.k.q, S->xq, S->x, S->proj[1], nullptr, 1.0f, Ly.k.type, E, DI};
+            j[2] = {Ly.v.q, S->xq, S->x, S->proj[2], nullptr, 1.0f, Ly.v.type, E, DI};
             j[3] = {Ly.f_a, nullptr, S->x, S->fa, nullptr, 1.0f, gf::kTypeBF16, E, g.kda_head_dim};
             j[4] = {Ly.g_a, nullptr, S->x, S->ga, nullptr, 1.0f, gf::kTypeBF16, E, g.kda_head_dim};
             j[5] = {Ly.beta, nullptr, S->x, S->beta, nullptr, 1.0f, gf::kTypeBF16, E, g.n_head};
@@ -361,9 +361,12 @@ bool Glm5Model::multi_rows(const int* seqs, const int32_t* tokens, const strata:
                 gf::dsa_prep(d, s);
             }
             gf::MvJob j2[2];
-            j2[0] = {Ly.q_b.q, S->qr_q, nullptr, S->q, nullptr, 1.0f, Ly.q_b.type, g.q_lora, g.n_head * g.qk_nope};
-            j2[1] = {Ly.idx_q_b, nullptr, S->qr, S->iq, nullptr, 1.0f, gf::kTypeBF16, g.q_lora,
-                     g.idx_heads * g.idx_key};
+            j2[0] = {Ly.q_b.q, S->qr_q, S->qr, S->q, nullptr, 1.0f, Ly.q_b.type, g.q_lora, g.n_head * g.qk_nope};
+            j2[1] = Ly.idx_q_b_x.q != nullptr   // (an EXL3 pack quantizes the indexer's q_b)
+                        ? gf::MvJob{Ly.idx_q_b_x.q, S->qr_q, S->qr, S->iq, nullptr, 1.0f, Ly.idx_q_b_x.type, g.q_lora,
+                                    g.idx_heads * g.idx_key}
+                        : gf::MvJob{Ly.idx_q_b, nullptr, S->qr, S->iq, nullptr, 1.0f, gf::kTypeBF16, g.q_lora,
+                                    g.idx_heads * g.idx_key};
             if (!mv(j2, 2, "dsa q")) return false;
             for (int i = 0; i < n; ++i) {
                 const int64_t p = rw[i].p;
@@ -397,8 +400,8 @@ bool Glm5Model::multi_rows(const int* seqs, const int32_t* tokens, const strata:
 
         if (!Ly.moe) {
             gf::MvJob j[2];
-            j[0] = {Ly.ffn_gate.q, S->xq, nullptr, S->dg, nullptr, 1.0f, Ly.ffn_gate.type, E, g.n_ff_dense};
-            j[1] = {Ly.ffn_up.q, S->xq, nullptr, S->du, nullptr, 1.0f, Ly.ffn_up.type, E, g.n_ff_dense};
+            j[0] = {Ly.ffn_gate.q, S->xq, S->x, S->dg, nullptr, 1.0f, Ly.ffn_gate.type, E, g.n_ff_dense};
+            j[1] = {Ly.ffn_up.q, S->xq, S->x, S->du, nullptr, 1.0f, Ly.ffn_up.type, E, g.n_ff_dense};
             if (!mv(j, 2, "dense ffn")) return false;
             for (int i = 0; i < n; ++i)
                 gf::swiglu_q8(rows(S->dg, g.n_ff_dense, i), rows(S->du, g.n_ff_dense, i), g.swiglu_shexp,
@@ -411,13 +414,13 @@ bool Glm5Model::multi_rows(const int* seqs, const int32_t* tokens, const strata:
             // shared expert's down, which rides their launch) through the token path's own code
             gf::MvJob j[3];
             j[0] = {Ly.router, nullptr, S->x, S->rlog, nullptr, 1.0f, gf::kTypeBF16, E, g.n_expert};
-            j[1] = {Ly.sh_gate.q, S->xq, nullptr, S->sh_g, nullptr, 1.0f, Ly.sh_gate.type, E, FFs};
-            j[2] = {Ly.sh_up.q, S->xq, nullptr, S->sh_u, nullptr, 1.0f, Ly.sh_up.type, E, FFs};
+            j[1] = {Ly.sh_gate.q, S->xq, S->x, S->sh_g, nullptr, 1.0f, Ly.sh_gate.type, E, FFs};
+            j[2] = {Ly.sh_up.q, S->xq, S->x, S->sh_u, nullptr, 1.0f, Ly.sh_up.type, E, FFs};
             if (!mv(j, 3, "router / shared expert")) return false;
             for (int i = 0; i < n; ++i) {
                 const MoeIo io = {rows(S->x, E, i), rows_q(S->xq, E, i), rows(S->rlog, g.n_expert, i),
                                   rows(S->sh_g, FFs, i), rows(S->sh_u, FFs, i), rows(S->ffn, E, i)};
-                fast_moe_experts(il, io, false, 0, no_bias, pf_pending);
+                if (!fast_moe_experts(il, io, false, 0, no_bias, pf_pending, err)) return false;
             }
         }
     }
