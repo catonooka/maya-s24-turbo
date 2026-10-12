@@ -312,27 +312,17 @@ class Exl3Download(unittest.TestCase):
         return quant, "\n".join(lines)
 
     def test_offered_on_nvidia_as_experimental_never_the_default(self):
-        with patch.object(maya, "WIN", False):   # (Linux: Windows does not offer it, below)
-            quant, text = self.offered("cuda")
-        self.assertIn(f"{self.Q}: download 125.3 GB from Hugging Face   (experimental)", text)
-        self.assertNotEqual(quant, self.Q)
+        for win in (False, True):   # Linux and Windows alike
+            with patch.object(maya, "WIN", win):
+                quant, text = self.offered("cuda")
+            self.assertIn(f"{self.Q}: download 125.3 GB from Hugging Face   (experimental)", text)
+            self.assertNotEqual(quant, self.Q)
 
     def test_not_offered_with_amd(self):
         self.assertNotIn(self.Q, self.offered("hip")[1])
         args = SimpleNamespace(gguf_dir=None, model=self.Q, yes=True, backend="hip")
         with patch.object(maya.S, "say"), self.assertRaises(SystemExit):
             maya.choose_model(args, Path("."), {})
-
-    def test_not_offered_on_windows_but_asked_for_with_a_warning(self):
-        with patch.object(maya, "WIN", True):
-            self.assertNotIn(self.Q, self.offered("cuda")[1])
-            args = SimpleNamespace(gguf_dir=None, model=self.Q, yes=True, backend="cuda")
-            warned = []
-            with patch.object(maya, "warn", side_effect=warned.append):
-                self.assertEqual(maya.choose_model(args, Path("."), {}), ("download", self.Q))
-            self.assertTrue(any("#129" in w for w in warned))
-        with patch.object(maya, "WIN", False):
-            self.assertIn(self.Q, self.offered("cuda")[1])
 
     def test_every_file_of_the_branch_with_size_and_hash(self):
         m = maya.MODELS[self.Q]
