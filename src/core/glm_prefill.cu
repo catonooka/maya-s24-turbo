@@ -885,9 +885,10 @@ Glm5Model::PinnedPrompt Glm5Model::prefill_pinned() const {
     return p;
 }
 
-std::pair<size_t, size_t> Glm5Model::prefill_bytes_for(size_t T) const {
+std::pair<size_t, size_t> Glm5Model::prefill_bytes_for(size_t T, size_t kv_stage) const {
     const PrefillState* S = pf_;
-    const size_t kv_stage = (size_t) kv_stage_bytes_;   // (the first sequence's, the longest context: fixed at load)
+    // (the whole stage: the first sequence's, the longest context, fixed at load - what the chunk is sized with)
+    if (kv_stage == SIZE_MAX) kv_stage = (size_t) kv_stage_bytes_;
     return chunk_bytes(g_, T, S->has_kda, S->has_dsa, S->has_dense, S->has_moe, S->max_pools, S->sub_env, mtp_il_ >= 0,
                        kv_stage);
 }
@@ -913,12 +914,19 @@ size_t glm_prefill_lend_bytes(const Glm5Geometry& g, size_t T, bool has_kda, boo
 
 // the prompt path's device buffers for chunks of T tokens, carved from the start of the lendable region; returns the
 // bytes that layout uses (a short prompt borrows - and evicts - only that much of the pool's tail)
-size_t Glm5Model::prefill_carve(int Tn) {
+size_t Glm5Model::prefill_carve(int Tn, int64_t end) {
     PrefillState* S = pf_;
     const Glm5Geometry& g = g_;
     const size_t T = (size_t) Tn, E = (size_t) g.n_embd;
     S->sub = mixer_sub(T, g, S->has_kda, S->has_dsa, S->has_dense, S->has_moe, S->max_pools, S->sub_env);
-    const auto [pers, uni] = prefill_bytes_for(T);
+    // KV streaming: the stage holds the positions up to the prompt's end (whole pages), not the whole context - at 1M
+    // positions the whole one is 1 GB a part, which every prompt would take from the expert pool
+    size_t stage = (size_t) kv_stage_bytes_;
+    if (stage > 0 && end >= 0 && kv_ != nullptr) {
+        const int64_t pg = kv_->page, rows = std::min<int64_t>((int64_t) kv_->n_blocks * pg, (end + pg - 1) / pg * pg);
+        stage = std::min(stage, (size_t) rows * (size_t) kv_->row_bytes);
+    }
+    const auto [pers, uni] = prefill_bytes_for(T, stage);
     Carve c{S->region};
     S->arena = c.take<uint8_t>(pers + uni);
     S->w16 = c.take<uint16_t>((size_t) S->w16_elems);
@@ -938,7 +946,7 @@ size_t Glm5Model::prefill_carve(int Tn) {
     S->ss = a.take<float>(T);
     S->mix = a.take<float>(T * 24);
     S->iota = a.take<int>(T * (size_t) g.n_exp_used);
-    S->kv_stage = kv_stage_bytes_ > 0 ? a.take<uint8_t>((size_t) kv_stage_bytes_) : nullptr;
+    S->kv_stage = stage > 0 ? a.take<uint8_t>(stage) : nullptr;
     S->uni = S->arena + a.off;
     cublasSetWorkspace(S->blas, S->ws, S->ws_bytes);
     S->T_bound = Tn;
@@ -2849,7 +2857,7 @@ bool Glm5Model::prefill(const std::vector<int32_t>& tokens, std::string& err, in
     progress_at("the prompt: lending the expert pool's tail");   // (the serve watchdog's stages, issue #40)
     for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) {
         cudaSetDevice(m->dev_);
-        m->prefill_carve(Trun);
+        m->prefill_carve(Trun, pos_ + nn);
         if (!m->prefill_lend(err)) { ok = false; break; }
     }
     // STRATA_GLM_STALL_TEST=<s> (a test of the serve watchdog): every batched prompt stops here for s seconds

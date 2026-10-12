@@ -694,13 +694,17 @@ public:
     size_t prefill_borrow_bytes() const;                   // device bytes the prompt path borrows from the pool's tail
     size_t prefill_trim_prestage(size_t max_borrow);       // ... at most this many: a smaller prestage buffer (the new bytes)
     bool prefill_bind(uint8_t* region, size_t bytes, std::string& err);   // its buffers inside the borrowed region
-    size_t prefill_carve(int T);                           // ... laid out for chunks of T (the bytes it uses)
+    // ... laid out for chunks of T (the bytes it uses); end: the prompt's last position + 1, which the KV streaming stage
+    // must hold (-1: the whole context)
+    size_t prefill_carve(int T, int64_t end = -1);
     bool prefill_lend(std::string& err);                    // the tail slots -> the prompt path (drops their experts)
     bool prefill_return(std::string& err);                  // ... and back to the expert pool
     void prefill_destroy();
     void prefill_cap(int T, const char* why);              // its pinned staging for chunks of at most T
     void prefill_settle(double pinned_share);              // --prefill auto's lend cap from the pinned share (85/90%)
-    std::pair<size_t, size_t> prefill_bytes_for(size_t T) const;   // a chunk's device buffers {kept rows, scratch}
+    // a chunk's device buffers {kept rows, scratch}; kv_stage: the KV streaming stage's bytes (SIZE_MAX: the whole
+    // context's, kv_stage_bytes_)
+    std::pair<size_t, size_t> prefill_bytes_for(size_t T, size_t kv_stage = SIZE_MAX) const;
     // the pinned host bytes a part's prompt path takes at its start (the token rows and the disk landing ring) and the
     // residual rows a part that hands on adds - this part's sizes
     struct PinnedPrompt {
