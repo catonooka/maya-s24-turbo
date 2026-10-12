@@ -2,7 +2,7 @@
 
 <p align="center"><b>A 321-billion-parameter AI model on your own GPU</b><br>
 GLM-5.3-Flash, private and fast · one NVIDIA GPU or up to 16 · AMD and Windows (experimental) · chat, pictures,
-OpenAI- and Anthropic-compatible API</p>
+OpenAI- and Anthropic-compatible API · several requests at once</p>
 
 <p align="center"><a href="https://buymeacoffee.com/peasantsmith">☕ Support Project Maya - buy me a coffee</a></p>
 
@@ -15,6 +15,8 @@ and SSD and tunes itself to them. Nothing leaves your machine.
 - **Fast:** up to 118 tokens/s on four RTX 4090s, 30+ on a single RTX 5090. Real numbers from real users below.
 - **Close to the original:** Maya's own quants keep 97.7-99.2% of the FP8 model's zero-shot accuracy.
 - **Plugs into your tools:** OpenAI- and Anthropic-compatible API with tool calls, ready for coding agents.
+- **Several requests at once:** up to 8 answered together - for agents that run several sessions, or several people
+  on one PC.
 - **Everything in the box:** a chat and a live monitor in the browser, pictures, thinking levels, a one-command setup.
 
 ## The models
@@ -55,6 +57,12 @@ Prefill is an 8K-token prompt. The speed holds as a conversation grows, and the 
 slowest while the caches fill with what you use. Share yours: `--bench`, then `--report`, in a
 [GitHub issue](https://github.com/mw00/project-maya/issues).
 
+**Several requests at once** (`--parallel`) add up: on one GPU a token of each goes through the model together, so
+the dense weights are read once for all of them. In tokens per second for all of them together, against the same
+questions one after another: x1.41 for two and x1.35 for four on a V100 that streams most of Maya-S's experts from
+RAM, x1.67 for two and x2.02 for four on a Strix Halo that holds every expert in GPU memory. The more of the model
+VRAM holds, the more it gains ([how](docs/SETTINGS.md#several-requests-at-once)).
+
 ## What you need
 
 | | |
@@ -91,15 +99,16 @@ builds everything once (20-40 minutes plus the download) and **starts the model*
   **Monitor** of the model and your hardware, and a context size you can change in Settings.
 - **Your apps and coding agents:** an OpenAI-compatible API at `http://127.0.0.1:8080/v1`, and Anthropic's at
   `http://127.0.0.1:8080/v1/messages` (Claude Code: `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`). Tool calls are
-  streamed as the model writes them.
+  streamed as the model writes them. A web page served from another address can call it too once you allow its
+  address (`"cors_origins"`, [docs/SETUP.md](docs/SETUP.md#web-pages-on-another-address)).
 - **Thinking:** Off, Low, High (the default) or Max, in Settings or per request.
 - **Pictures:** attach one in the chat, or send image parts through either API.
 - **From another device:** `./maya.sh --setup --host 0.0.0.0 --api-key <secret>`. Always set a key.
 - **Tuning:** `./maya.sh --calibrate` tunes the engine to your hardware in 10-15 minutes. Every setting:
   [docs/SETTINGS.md](docs/SETTINGS.md).
-- **Several requests at once:** `./maya.sh --parallel 4` (up to 8) answers them together - on one GPU the model's
-  dense weights are read once for all of them: x1.41 in all for two on a V100, x2.02 for four with every expert in
-  GPU memory ([how](docs/SETTINGS.md#several-requests-at-once)).
+- **Several requests at once:** `./maya.sh --parallel 4` (Windows: `START-MAYA.bat --parallel 4`; up to 8) keeps
+  it in the config, and the dashboard shows how many answers are being written. Each extra request keeps its own
+  context in VRAM, so a few fewer experts fit there ([how](docs/SETTINGS.md#several-requests-at-once)).
 - **Faster answers with a DFlash2 drafter:** `./maya.sh --setup --draft dflash2` (NVIDIA RTX 30 / A100 and newer)
   downloads a small drafter that drafts up to 7 tokens a round and gives the same answers - Maya-L +44% on nine GPUs
   and +12% on two (against the MTP block), +19% on one RTX 3090 ([how](docs/SETTINGS.md#drafting-with-dflash2)). The
@@ -133,7 +142,14 @@ Speed reports, bug reports and pull requests are welcome: [CONTRIBUTING.md](CONT
   [ggml / llama.cpp](https://github.com/ggml-org/llama.cpp)** (MIT License, Copyright (c) 2023-2026 The ggml
   authors): the quantization formats, the CPU dot products and the prompt path's MMQ kernels, built from a pinned
   commit (`third_party/ggml/LICENSE`).
+- **EXL3 support** follows [exllamav3](https://github.com/turboderp-org/exllamav3)'s format, codebooks and CPU expert
+  kernel (MIT License, Copyright (c) 2025 Turboderp; `third_party/exllamav3/LICENSE`). **The DFlash2 drafter's
+  forward** follows [beellama.cpp](https://github.com/Anbeeld/beellama.cpp)'s (MIT License, Copyright (c) 2023-2026
+  The ggml authors, Anbeeld; `third_party/beellama.cpp/LICENSE`).
 - The model: [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) by zai-org (MIT); Maya's quants and the
-  image encoder file are made from zai-org's released weights and keep its license.
+  image encoder file are made from zai-org's released weights and keep its license. The optional DFlash2 drafter
+  ([GLM-5.3-Flash-DFlash2-GGUF](https://huggingface.co/Anbeeld/GLM-5.3-Flash-DFlash2-GGUF) by Anbeeld) is CC BY-NC-ND
+  4.0, non-commercial use only, and is downloaded only when you choose it.
 - The dashboard's font: Outfit (SIL Open Font License 1.1, `serve/web/fonts/OFL.txt`).
-- Maya is open source under the [MIT License](LICENSE); the notices of Strata and ggml stay with every copy.
+- Maya is open source under the [MIT License](LICENSE); the notices of Strata, ggml, exllamav3 and beellama.cpp stay
+  with every copy.

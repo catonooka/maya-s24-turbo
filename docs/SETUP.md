@@ -60,3 +60,16 @@ is not downloaded again, and your settings stay. By hand: `git pull`, then `./se
 | `--calibrate` | tune the engine's CPU lane for this PC (see [Tuning](SETTINGS.md)), then start; with `--no-start` only tune |
 | `--yes` | the recommended answers (the model download still needs `--download-model`) |
 | `--plain` | the setup in plain text with typed answers, and Maya in the terminal, not on their own screen (a pipe gets this too, and `--yes` a plain setup); the setup screen's whole output is in `maya-setup.log` |
+
+## Web pages on another address
+
+A browser stops a web page served from another address (a local chat client on `http://127.0.0.1:8090`, say) from
+calling Maya's API unless Maya allows that page. List the pages in the config, `maya-<model>.json`:
+
+```json
+"cors_origins": ["http://127.0.0.1:8090"]
+```
+
+Exact addresses (scheme, host and port, no path); `["*"]` lets every page in - set an `api_key` with it, or any page
+you open could use your model. It opens `/v1/*` and nothing else: the settings and the tools stay for Maya's own page.
+Without it nothing changes. A new `--setup` writes the config again: add the line back after it.
