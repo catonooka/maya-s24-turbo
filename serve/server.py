@@ -1205,8 +1205,8 @@ class Service:
         self.stopping = False            # the server is ending: a request still queued is refused, not started
         self.embeddings = threading.local()           # the current request's image embeddings file (GENI)
         self.api_key = ""                              # when set, /v1/* needs it (Bearer or x-api-key)
-        # pages on OTHER origins allowed to call /v1/* from a browser (CORS; the config's "cors_origins", as in Strata
-        # #321): exact origins like "http://127.0.0.1:8090", or "*" for every page.  Empty = no CORS headers at all.
+        # pages on OTHER origins allowed to call /v1/* from a browser (CORS; the config's "cors_origins"): exact origins
+        # like "http://127.0.0.1:8090", or "*" for every page.  Empty = no CORS headers at all.
         self.cors_origins: list[str] = []
         self.status = {"busy": False, "queued": 0}      # GET /status: what the model is doing right now
         self.active = 0                                 # requests with the engine now (several: READY multi=<n>)

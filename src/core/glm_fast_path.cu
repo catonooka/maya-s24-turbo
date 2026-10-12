@@ -355,7 +355,7 @@ static int win_arena_node(const void* p, size_t bytes) {
         if (n == 0 || !qwse(GetCurrentProcess(), buf, DWORD(n * 16))) break;
         for (DWORD i = 0; i < n; ++i) {
             if ((buf[i * 16 + 8] & 1) == 0) continue;   // invalid
-            const int node = (int) (buf[i * 16 + 10]);   // Node: bits 16..23 (19H1+ layout)
+            const int node = (int) (buf[i * 16 + 10] & 0x3f);   // Node: bits 16..21 (19H1+ layout; 22, 23: Locked, LargePage)
             if (node >= 0 && node < 64) { hits[node]++; total++; }
         }
     }
@@ -1475,15 +1475,24 @@ bool Glm5Model::fast_setup(std::string& err) {
 #ifdef _WIN32
         {   // #56: which node the tier drew this start - visibility only, the engine cannot place it
             int tier_node = -1, seen = 0;
+            bool agree = true;   // arenas on different nodes: no line
             for (const auto& R : F->rc)
                 if (R.base != nullptr && R.n > 0) {
                     const int node = win_arena_node(R.base, (size_t) R.n * R.stride);
-                    if (node >= 0) { tier_node = node; ++seen; }
+                    if (node < 0) continue;
+                    agree = agree && (tier_node < 0 || node == tier_node);
+                    tier_node = node;
+                    ++seen;
                 }
-            if (tier_node >= 0 && seen > 0) {
+            if (tier_node >= 0 && seen > 0 && agree) {
                 int host_node = -1;
-                if (cudaDeviceGetAttribute(&host_node, cudaDevAttrHostNumaId, dev_) != cudaSuccess || host_node < 0)
+#if !defined(STRATA_USE_HIP)
+                // cudaDevAttrHostNumaId (134) by its value: CUDA 12.0 and 12.1 do not name it
+                if (cudaDeviceGetAttribute(&host_node, (cudaDeviceAttr) 134, dev_) != cudaSuccess || host_node < 0) {
                     host_node = -1;   // not reported on Volta + 582.78
+                    (void) cudaGetLastError();   // the failed query's error must not reach a later launch check
+                }
+#endif
                 std::fprintf(stderr, "glm fast: CUDA%d the RAM tier sits on node %d of %d seen%s\n",
                              dev_, tier_node, seen,
                              host_node >= 0 && host_node != tier_node
