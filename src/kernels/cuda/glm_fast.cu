@@ -2910,6 +2910,10 @@ struct RouteArgs {
                                 // twice), so the batched experts read each token's own (null: entry i's slot)
     const int* skip;            // set_skip's flag: non-zero = a token past a wrong draft (see moe_route_kernel)
     int win_n;                  // a batched verify window's tokens (0: not one) - the host spreads their CPU lanes
+    int disk_skip_from;         // STRATA_GLM_DISK_SKIP_FROM: experts in neither VRAM nor the RAM tier at route rank
+                                // >= this are left out (no disk read); >= k: none
+    float disk_skip_w;          // STRATA_GLM_DISK_SKIP_W: ... and, at any rank, those whose share of the route's
+                                // weights is below this (0: none)
 };
 
 __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_constant__ RouteArgs a) {
@@ -3044,7 +3048,7 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
         }
         return;
     }
-    __shared__ unsigned int s_fetch, s_promo, s_cpu;
+    __shared__ unsigned int s_fetch, s_promo, s_cpu, s_skip;
     __shared__ unsigned long long s_pp[8], s_cs[8];
     __shared__ int s_npf, s_pfid[8];
     __shared__ unsigned long long s_pfptr[8];
@@ -3052,7 +3056,7 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
         double sum = 0.0;
         for (int i = 0; i < a.k; ++i) sum += (double) s_p[s_ids[i]];
         const float inv = (float) (a.norm_w ? 1.0 / fmax(sum, 6.103515625e-5) : 1.0);
-        unsigned int mask = 0, fetch = 0, promo = 0, cpu = 0;
+        unsigned int mask = 0, fetch = 0, promo = 0, cpu = 0, skip = 0;
         unsigned long long* rtab = a.d.tab + a.d.n_keys;
         unsigned long long* spares = a.d.tab + 2 * (size_t) a.d.n_keys + (size_t) a.layer * kSpares;
         int next_spare = 0;
@@ -3096,6 +3100,10 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
                     cpu |= 1u << i;
                     s_cs[i] = src;
                     src = 0ull;
+                } else if (src == 0ull && (i >= a.disk_skip_from || (float) ((double) s_p[s_ids[i]] * inv) < a.disk_skip_w)) {
+                    // on disk only and ranked low: left out like a draft's miss (the expert kernels skip a null
+                    // plan entry) - this token goes without it instead of waiting on a disk read
+                    skip |= 1u << i;
                 } else {
                     // not in VRAM: land it in a spare slot of this layer (it becomes resident: the table says so
                     // from here on) or, with none left, in this entry's scratch slot.  promote_min > 1: keep it
@@ -3149,6 +3157,7 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
         s_fetch = fetch;
         s_promo = promo;
         s_cpu = cpu;
+        s_skip = skip;
         // PREFETCH: the predicted experts of the next layer that are not in VRAM but are in the RAM tier claim
         // that layer's spares now (one spare stays for its real misses); the side stream copies them while this
         // layer and the next one's attention compute, and the next route sees them as resident.  Only the
@@ -3205,6 +3214,7 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
         rq->cpu_mask = s_cpu;
         rq->win = a.win;
         rq->win_n = a.win_n;
+        rq->skip_mask = s_skip;
         for (int i = 0; i < a.k; ++i) {
             rq->ids[i] = s_ids[i];
             rq->w[i] = s_w[i];
@@ -4514,12 +4524,12 @@ void moe_route(const float* logits, const float* bias, int n_expert, int k, floa
                int n_ff_sh, void* sh_hq, cudaStream_t s, const float* pred_logits, const float* pred_bias,
                int max_prefetch, const float* ahead_logits, const float* const* ahead_bias, int n_ahead,
                int skip_from, unsigned long long cpu_plan, int promote_min, int pf_rank, int near_n, int win,
-               unsigned int* scr_used, int win_n) {
+               unsigned int* scr_used, int win_n, int disk_skip_from, float disk_skip_w) {
     RouteArgs a{logits, bias, n_expert, k, w_scale, norm_w ? 1 : 0, layer, x, n_embd, d,
                 sh_gate, sh_up, sh_limit, n_ff_sh, (block_q8_1*) sh_hq, pred_logits, pred_bias, max_prefetch,
                 ahead_logits, {}, 0, skip_from, d.cpu_seq != nullptr ? cpu_plan : 0ull, promote_min,
                 pf_rank > 0 ? pf_rank : k, std::max(0, std::min(near_n, std::min(16, n_expert - k))), win, scr_used,
-                g_skip, win_n};
+                g_skip, win_n, disk_skip_from, disk_skip_w};
     if (ahead_logits != nullptr && ahead_bias != nullptr && n_expert <= 512) {
         a.n_ahead = std::min(n_ahead, kAhead);
         for (int i = 0; i < a.n_ahead; ++i) a.ahead_bias[i] = ahead_bias[i];

@@ -127,7 +127,7 @@ public:
     /// Live counters of the fast path (both halves summed), for the driver's STAT lines.
     struct FastStats {
         uint64_t tokens = 0, hits = 0, misses = 0, miss_layers = 0;
-        uint64_t ram_hits = 0, disk_reads = 0, promotions = 0, cpu_experts = 0;
+        uint64_t ram_hits = 0, disk_reads = 0, promotions = 0, cpu_experts = 0, disk_skips = 0;
         double ms = 0, miss_ms = 0, disk_ms = 0, cpu_ms = 0;
         int64_t pool_slots = 0, pool_used = 0, ram_slots = 0, ram_used = 0;
         double pool_gb = 0, ram_gb = 0;

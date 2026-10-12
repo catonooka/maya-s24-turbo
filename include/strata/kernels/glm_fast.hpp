@@ -239,6 +239,7 @@ struct MoeRequest {
     unsigned long long pf_ptr[8];
     short ahead[kAhead][8];      // layer + 1 + d's router on this layer's FFN input: its top-k (-1: none)
     unsigned int cpu_mask;       // the CPU LANE: RAM-tier experts the host computes (the device skips them) ...
+    unsigned int skip_mask;      // DISK SKIP: disk-only experts left out of this token (STRATA_GLM_DISK_SKIP_W / _FROM)
     unsigned long long cpu_src[8];   // ... their RAM-tier blobs
     short near_ids[16];          // STRATA_GLM_ROUTE_LOG only: the route's next ranks after the top k (-1: none)
     int win;                     // ... and the answer slot they go to: a verify window's token (0: the lone answer)
@@ -264,7 +265,7 @@ void moe_route(const float* logits, const float* bias, int n_expert, int k, floa
                const float* pred_bias = nullptr, int max_prefetch = 0, const float* ahead_logits = nullptr,
                const float* const* ahead_bias = nullptr, int n_ahead = 0, int skip_from = 8,
                unsigned long long cpu_plan = 0, int promote_min = 0, int pf_rank = 0, int near_n = 0, int win = 0,
-               unsigned int* scr_used = nullptr, int win_n = 0);
+               unsigned int* scr_used = nullptr, int win_n = 0, int disk_skip_from = 8, float disk_skip_w = 0.0f);
 /// A verify window's MoE layer with each distinct expert computed ONCE: the T tokens were routed one after another into
 /// their own plan arrays (moe_route with win = t and a scr_used word, so no two of them land in one scratch slot - the
 /// word's bit 31 says one did), then moe_win_experts groups the entries by expert slot, reads each expert's gate/up and

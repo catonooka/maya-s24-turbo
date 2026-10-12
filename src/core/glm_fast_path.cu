@@ -1456,6 +1456,14 @@ bool Glm5Model::fast_setup(std::string& err) {
         F->upd_gen.assign(F->upd_at.size(), 0u);
         // disk reads: three slices per expert in parallel, through the staging above when the RAM tier has no free slot
         F->workers.reset(new Workers(8));
+        // STRATA_GLM_DISK_SKIP_FROM=<n>: a trunk expert at route rank >= n that is in neither VRAM nor the RAM tier is
+        // left out of the token instead of read from the disk (an approximation: off by default).  Where the experts do
+        // not fit in VRAM + RAM the disk reads are most of a token (a 3090 + 60 GB RAM beside one SATA SSD: ~13 reads,
+        // 155 of 190 ms) and they fall on the low ranks (ranks 4-7 held 63% of them in a chat).
+        if (const char* v = getenv("STRATA_GLM_DISK_SKIP_FROM")) F->disk_skip_from = std::max(0, std::min(8, std::atoi(v)));
+        // STRATA_GLM_DISK_SKIP_W=<share>: also, at any rank, a disk-only expert whose share of the route's weights is
+        // below this (the route's rank follows score + bias, the weight the score alone)
+        if (const char* v = getenv("STRATA_GLM_DISK_SKIP_W")) F->disk_skip_w = (float) std::max(0.0, std::atof(v));
         // LOOKAHEAD: the predictions per layer, a load state per RAM slot, and the reader threads
         if (const char* ah = getenv("STRATA_GLM_AHEAD")) F->n_ahead = std::max(0, std::min(gf::kAhead, std::atoi(ah)));
         if (g.n_expert > 512) F->n_ahead = 0;
@@ -3065,6 +3073,7 @@ Glm5Model::FastStats Glm5Model::fast_stats() const {
         s.miss_layers += F->miss_layers.load();
         s.ram_hits += F->ram_hits.load();
         s.disk_reads += F->disk_reads.load();
+        s.disk_skips += F->disk_skips.load();
         s.promotions += F->promotions.load();
         s.cpu_experts += F->cpu_experts.load();
         s.cpu_ms += (double) F->cpu_us.load() / 1000.0;
@@ -3200,6 +3209,8 @@ void Glm5Model::fast_service() {
             const int il = rq->layer;
             const unsigned int miss = rq->miss_mask, fetch = rq->fetch_mask, promo = rq->promo_mask;
             const unsigned int cpu = rq->cpu_mask;   // the CPU lane's experts: not in VRAM, computed below
+            const unsigned int skip = rq->skip_mask;   // DISK SKIP: left out of this token (neither hit nor read)
+            if (skip != 0u) F->disk_skips.fetch_add((uint64_t) std::popcount(skip), std::memory_order_relaxed);
             auto& P = F->lp[(size_t) il];
             auto& R = F->rc[(size_t) F->layer_rc[(size_t) il]];
             ++F->clock;
@@ -3225,7 +3236,7 @@ void Glm5Model::fast_service() {
                 if (F->cnt[(size_t) key] < (1u << 24)) ++F->cnt[(size_t) key];
                 if (++F->usage[(size_t) key] >= (1u << 30))
                     for (auto& u : F->usage) u >>= 1;
-                const bool resident = (((miss | fetch | cpu) >> i) & 1u) == 0;
+                const bool resident = (((miss | fetch | cpu | skip) >> i) & 1u) == 0;
                 if (resident) {
                     const int s = F->slot_of[(size_t) key];
                     if (s >= 0) P.tick[(size_t) s] = F->clock;
@@ -3597,7 +3608,8 @@ void Glm5Model::fast_ahead_route(int il, const int* ids, unsigned int miss, cons
         if (ahead[d][0] < 0 || la >= (int) F->layer_rc.size() || F->layer_rc[(size_t) la] < 0) continue;
         const int cls = F->layer_rc[(size_t) la];
         auto& R = F->rc[(size_t) cls];
-        for (int i = 0; i < K; ++i) {
+        // (with DISK SKIP only the ranks a route would wait for: the lower ones are left out when not held)
+        for (int i = 0; i < std::min(K, F->disk_skip_from); ++i) {
             const int e = ahead[d][i];
             if (e < 0) continue;
             const int key = la * g.n_expert + e;
@@ -4323,7 +4335,8 @@ bool Glm5Model::fast_moe_experts(int il, const MoeIo& io, bool pred, int n_ah, c
                   pred ? F->plog : nullptr, pred ? F->L[(size_t) il + 1].router_bias : nullptr,
                   pred ? F->max_pf : 0, n_ah > 0 ? F->alog : nullptr, ah_bias, n_ah,
                   il == mtp_il_ ? mtp_skip_from() : trunk_skip_from(il), lane ? F->cpu_plan : 0ull, promote_min,
-                  pf_rank, near_n);
+                  pf_rank, near_n, 0, nullptr, 0, il == mtp_il_ ? 8 : F->disk_skip_from,
+                  il == mtp_il_ ? 0.0f : F->disk_skip_w);
     if (F->prof_on) F->mark("moe_route");
     ++F->expected;
     // the side stream copies the next layer's predicted experts while this layer computes.  STRATA_GLM_PREFETCH_AT:
