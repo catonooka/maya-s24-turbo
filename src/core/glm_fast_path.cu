@@ -5672,6 +5672,8 @@ bool Glm5Model::ckpt_restore(int slot, std::string& err) {
         }
         m->pos_ = pos;
     }
+    // the drafter's positions from here on belong to the previous continuation (as snapshot_restore)
+    if (cap_d_ != nullptr) cap_d_->reset(pos_);
     cudaSetDevice(dev_);
     return true;
 }
