@@ -134,7 +134,8 @@ the size. With N above 1 the engine decodes without a [DFlash2 drafter](#draftin
 [on Hugging Face](https://huggingface.co/Anbeeld/GLM-5.3-Flash-DFlash2-GGUF); its license is CC BY-NC-ND 4.0:
 non-commercial use only) and passes it as `--dflash GGUF` in the config's `"args"`; NVIDIA GPUs, one request at a time
 (`--parallel 1`). The setup offers it on RTX 30 / A100 and newer (sm_80): on Tesla V100s it decoded slower than the MTP
-block, on one GPU and on two.
+block, on one GPU and on two, and so it did where most experts come from RAM (an RTX 3090 + 3060 with Maya-M, #127):
+measure yours with `--bench`.
 
 A DFlash2 drafter made for GLM-5.3-Flash - a small block drafter that reads
 the model's hidden states at five of its layers and drafts up to 7 tokens in one pass, with the model's own embedding

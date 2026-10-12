@@ -112,7 +112,8 @@ builds everything once (20-40 minutes plus the download) and **starts the model*
 - **Faster answers with a DFlash2 drafter:** `./maya.sh --setup --draft dflash2` (NVIDIA RTX 30 / A100 and newer)
   downloads a small drafter that drafts up to 7 tokens a round and gives the same answers - Maya-L +44% on nine GPUs
   and +12% on two (against the MTP block), +19% on one RTX 3090 ([how](docs/SETTINGS.md#drafting-with-dflash2)). The
-  drafter's license is non-commercial (CC BY-NC-ND 4.0).
+  drafter's license is non-commercial (CC BY-NC-ND 4.0). Where most experts come from RAM the MTP block can stay
+  faster: measure yours with `--bench`.
 
 ## Something went wrong?
 

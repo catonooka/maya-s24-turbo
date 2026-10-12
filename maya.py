@@ -931,8 +931,9 @@ def choose_draft(a, pc: dict, inst: dict) -> str:
              "more; one GPU decodes without drafting."),
             (f"a DFlash2 drafter (download {DFLASH['bytes'] / 1e9:.1f} GB from Hugging Face)", None,
              "A small drafter made for GLM-5.3-Flash drafts up to 7 tokens a round, which the model then checks: the "
-             "same answers, faster. Maya-L: +44% on nine GPUs and +12% on two against the MTP block, +19% on one "
-             f"RTX 3090. The drafter's license is {DFLASH['license']}: non-commercial use only.")]
+             "same answers. Maya-L: +44% on nine GPUs and +12% on two against the MTP block, +19% on one RTX 3090; "
+             "where most experts come from RAM the MTP block can stay faster - measure yours with --bench. The "
+             f"drafter's license is {DFLASH['license']}: non-commercial use only.")]
     pick = choose("Drafting?", ["How the model drafts tokens ahead (the answers are the same either way):"], rows,
                   DRAFTS.index(default), a.yes)
     return DRAFTS[pick]
@@ -951,8 +952,13 @@ def choose_model(a, models: Path, inst: dict) -> tuple:
         if hip and is_exl3(a.model):
             fail(f"{a.model} runs on NVIDIA GPUs only (the HIP port has no EXL3 kernels)",
                  f"pick another model: {ME} --setup")
+        if WIN and is_exl3(a.model):
+            warn(f"{a.model} on Windows: experimental and tested on Linux only - an EXL3 model stopped at its first "
+                 "prompt there with an illegal memory access (issue #129)")
         return "download", a.model
-    opts = [q for q in MODELS if not (hip and is_exl3(q))]   # (EXL3: NVIDIA only)
+    # EXL3: NVIDIA only, and offered on Linux only for now - on Windows an EXL3 model stopped at its first prompt with
+    # an illegal memory access (#129); --model EXL3-3.05bpw still asks for it there
+    opts = [q for q in MODELS if not ((hip or WIN) and is_exl3(q))]
     # cards of 24 GB or less: Maya-S24 (its 4-bit attention leaves ~1.5 GB more of the card for experts - decode about
     # 14% faster there), else Maya-S
     try:
