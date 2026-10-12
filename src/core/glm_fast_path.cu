@@ -2957,6 +2957,8 @@ void Glm5Model::fast_destroy() {
     if (F->cpu_ans_h) cudaFreeHost(F->cpu_ans_h);
     if (F->cpu_seq_d) cudaFree(F->cpu_seq_d);
     if (F->dcnt_d) cudaFree(F->dcnt_d);
+    if (F->spec_live_h) cudaFreeHost(F->spec_live_h);   // (STRATA_GLM_SPEC_CANCEL)
+    if (F->spec_skip_d) cudaFree(F->spec_skip_d);
     if (F->timing && F->ah_routes > 0) {
         std::string ov;
         for (int d = 0; d < F->n_ahead; ++d)
@@ -4525,6 +4527,8 @@ bool Glm5Model::fast_layers(int64_t p, bool hop_in, std::string& err) {
         // a pipelined window's token: is it past a wrong draft by now (its heavy kernels then do nothing)
         if (F->win.pipe_t >= 0 && F->win.from != nullptr && F->win.skip_d != nullptr)
             gf::skip_gate(F->win.from, F->win.pipe_t, F->win.skip_d, s);
+        // the speculative pass of the two-half decode (STRATA_GLM_SPEC_CANCEL): was its draft found wrong meanwhile
+        if (F->spec_gate) gf::skip_gate(F->spec_live_h, 0, F->spec_skip_d, s);
         const auto body = [&]() -> bool {
         // ---- the attention-side read (fused with the previous FFN's write)
         gf::HcArgs h;
@@ -5001,6 +5005,15 @@ bool Glm5Model::spec_head(int64_t p, int32_t token, std::string& err) {
     }
     cudaSetDevice(dev_);
     if (!glmfast::cuda_ok(cudaStreamSynchronize(F->cs), "glm spec head sync", err) || !F->route_ok(err)) return false;
+    // STRATA_GLM_SPEC_CANCEL: a speculative pass (decode_spec says so) reads the live word before every layer; it is
+    // set now, with the stream idle, so no earlier pass reads it any more.  Other passes (a redo, the confirmed token's)
+    // have no gates and never skip.  A head group of one GPU only (decode_spec checks)
+    const bool cancellable = F->spec_cancellable && hl == this && F->spec_live_h != nullptr && F->spec_skip_d != nullptr;
+    F->spec_cancellable = false;
+    if (cancellable) {
+        *(volatile int*) F->spec_live_h = 1;
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+    }
     lap(0);
     if (sprof) {
         if (spec_ev_[0] == nullptr)
@@ -5030,7 +5043,16 @@ bool Glm5Model::spec_head(int64_t p, int32_t token, std::string& err) {
     cudaMemcpyAsync(F->emb, F->emb_h, (size_t) g.n_embd * sizeof(float), cudaMemcpyHostToDevice, F->cs);
     gf::embed_streams(F->emb, state_, g.n_embd, F->cs);
     lap(2);
-    if (!fast_layers(p, false, err)) return false;
+    if (cancellable) {
+        F->spec_gate = true;            // a skip_gate before each layer ...
+        gf::set_skip(F->spec_skip_d);   // ... and this pass's heavy kernels read its flag
+    }
+    const bool layers_ok = fast_layers(p, false, err);
+    if (cancellable) {
+        F->spec_gate = false;
+        gf::set_skip(nullptr);
+    }
+    if (!layers_ok) return false;
     for (Glm5Model* m = this; m != hl; m = m->split_next_.get())
         if (!m->hop_to_next(m->split_next_.get(), p, err)) return false;
     lap(3);
@@ -5155,6 +5177,45 @@ bool Glm5Model::decode_spec(strata::kernels::SamplerParams& sp, int64_t max_new,
             }
         cudaSetDevice(dev_);
     }
+    // STRATA_GLM_SPEC_CANCEL=1 (opt-in): a wrong draft stops the head's speculative pass at its next layer (spec_head
+    // arms a skip_gate before each of its layers) and the redo is enqueued at once, before the next draft - instead of
+    // after the rest of a pass already known to be thrown away.  Only a head group of one GPU (two-GPU splits).
+    static const bool cancel_env = [] {
+        const char* v = getenv("STRATA_GLM_SPEC_CANCEL");
+        return v != nullptr && std::atoi(v) != 0;
+    }();
+    bool cancel = cancel_env && hl == this;
+    if (cancel && (fast_->spec_live_h == nullptr || fast_->spec_skip_d == nullptr)) {
+        cudaSetDevice(dev_);
+        if (fast_->spec_live_h == nullptr) {
+            int* h = nullptr;
+            if (cudaHostAlloc((void**) &h, 64, cudaHostAllocMapped | cudaHostAllocPortable) == cudaSuccess) {
+                h[0] = 1;
+                fast_->spec_live_h = h;
+            } else {
+                cudaGetLastError();
+            }
+        }
+        if (fast_->spec_skip_d == nullptr) {
+            if (cudaMalloc((void**) &fast_->spec_skip_d, sizeof(int)) == cudaSuccess) {
+                cudaMemsetAsync(fast_->spec_skip_d, 0, sizeof(int), fast_->cs);
+            } else {
+                cudaGetLastError();
+                fast_->spec_skip_d = nullptr;
+            }
+        }
+        if (fast_->spec_live_h == nullptr || fast_->spec_skip_d == nullptr) {
+            std::fprintf(stderr, "glm spec: STRATA_GLM_SPEC_CANCEL - its buffers did not allocate; decoding without it\n");
+            cancel = false;
+        }
+    }
+    static bool cancel_said = false;
+    if (cancel_env && !cancel_said) {
+        cancel_said = true;
+        std::fprintf(stderr, "glm spec: %s\n", cancel ? "a wrong draft cancels the head's speculative pass at its next layer "
+                                                        "(STRATA_GLM_SPEC_CANCEL)"
+                                                      : "STRATA_GLM_SPEC_CANCEL needs a head group of one GPU - not used");
+    }
     // the head group's recurrent-state backups (each part on its own device and stream)
     const auto kda_all = [&](bool restore) -> bool {
         for (Glm5Model* m = this; m != hl->split_next_.get(); m = m->split_next_.get()) {
@@ -5247,6 +5308,7 @@ bool Glm5Model::decode_spec(strata::kernels::SamplerParams& sp, int64_t max_new,
         err = "glm spec: the recurrent-state backup did not allocate";
         return false;
     }
+    if (cancel) fast_->spec_cancellable = true;   // q+2 with the draft: speculative
     if (!spec_head(q + 2, d, err)) return false;
     bool ok = true;
     // STRATA_GLM_SPEC_PROF=1: host time per phase of a step (debug)
@@ -5282,15 +5344,25 @@ bool Glm5Model::decode_spec(strata::kernels::SamplerParams& sp, int64_t max_new,
         ++produced;
         const bool more = emit(y2) && produced < max_new && q + 3 < max_ctx_;
         if (!more) break;
+        const bool wrong = d != y2;
+        // (STRATA_GLM_SPEC_CANCEL) a wrong draft: the head's speculative pass for q+2 stops at its next layer, its
+        // states are restored behind it and the redo goes in now - the head redoes q+2 while the tail drafts
+        if (cancel && wrong) {
+            *(volatile int*) fast_->spec_live_h = 0;
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+            kda_all(true);
+            if (!spec_head(q + 2, y2, err)) { ok = false; break; }
+            lap(2);
+        }
         // (2) the draft for q+3 from (h_{q+1}, y2)
         int d2 = -1;
         if (!draft(q + 1, y2, d2)) { ok = false; break; }
         lap(1);
         // (3) the head's speculative position q+2 stands iff its draft was y2; else restore and redo it
         ++spec_steps_;
-        if (d == y2) {
+        if (!wrong) {
             ++spec_hits_;
-        } else {
+        } else if (!cancel) {
             kda_all(true);
             if (!spec_head(q + 2, y2, err)) { ok = false; break; }
         }
@@ -5300,6 +5372,7 @@ bool Glm5Model::decode_spec(strata::kernels::SamplerParams& sp, int64_t max_new,
         if (!B->spec_tail(hl, q + 2, err)) { ok = false; break; }
         lap(3);
         kda_all(false);
+        if (cancel) fast_->spec_cancellable = true;   // q+3 with the new draft: speculative
         if (!spec_head(q + 3, d2, err)) { ok = false; break; }
         lap(4);
         ++np;

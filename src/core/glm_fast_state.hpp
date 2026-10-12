@@ -544,6 +544,13 @@ struct Glm5Model::FastState {
     std::vector<float> cpu_x3;                               // EXL3: per expert gate / up inputs, h, down input, out
     float cpu_x3s[8][3] = {};                                // ... and the three prepared inputs' sums
     std::atomic<uint64_t> cpu_experts{0}, cpu_routes{0}, cpu_us{0};
+    // STRATA_GLM_SPEC_CANCEL=1 (the pipelined two-half decode, a head half of one GPU): the head's speculative pass reads
+    // the pinned, host-mapped word spec_live_h at every layer (skip_gate) into spec_skip_d - 1: its draft still stands,
+    // 0: the draft was wrong, its heavy kernels do nothing from that layer on and the redo can start at once
+    int* spec_live_h = nullptr;
+    int* spec_skip_d = nullptr;
+    bool spec_cancellable = false;   // spec_head: the pass it enqueues next is a speculative one (may be cancelled)
+    bool spec_gate = false;          // fast_layers: a skip_gate before every layer (set while that pass is enqueued)
     std::thread svc;
     std::atomic<bool> quit{false};
     uint64_t clock = 0;
