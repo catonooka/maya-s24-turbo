@@ -296,7 +296,8 @@ MODELS = {
 # made for GLM-5.3-Flash (any of the quants above), pinned to the revision it was measured with and verified.
 DFLASH = {"repo": "Anbeeld/GLM-5.3-Flash-DFlash2-GGUF", "revision": "f3569acb7f9cee95e66d24442d75536eb00ab842",
           "file": "GLM-5.3-Flash-DFlash2-Q4_K_M.gguf", "bytes": 697017248,
-          "sha256": "f4158ffb805b26c4fe439669c2009908a80ea89e1576ecea4d03eaded18f017c"}
+          "sha256": "f4158ffb805b26c4fe439669c2009908a80ea89e1576ecea4d03eaded18f017c",
+          "license": "CC BY-NC-ND 4.0"}   # (the repo's: non-commercial use only, shown wherever it is offered)
 DRAFTS = ("mtp", "dflash2")                        # the setup's drafting choices; MTP the default
 SHARD_RE = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
 GLM_ARCHS = ("glm5-next", "glm5next")             # llama.cpp's spelling and unsloth's
@@ -927,7 +928,7 @@ def choose_draft(a, pc: dict, inst: dict) -> str:
             (f"a DFlash2 drafter (download {DFLASH['bytes'] / 1e9:.1f} GB from Hugging Face)", None,
              "A small drafter made for GLM-5.3-Flash drafts up to 7 tokens a round, which the model then checks: the "
              "same answers, faster. Maya-L: +44% on nine GPUs and +12% on two against the MTP block, +19% on one "
-             "RTX 3090.")]
+             f"RTX 3090. The drafter's license is {DFLASH['license']}: non-commercial use only.")]
     pick = choose("Drafting?", ["How the model drafts tokens ahead (the answers are the same either way):"], rows,
                   DRAFTS.index(default), a.yes)
     return DRAFTS[pick]
@@ -1518,7 +1519,8 @@ def drafter_step(models: Path) -> Path:
         return dst
     if size >= DFLASH["bytes"]:                    # complete but not this file: a fresh download, not a resumed one
         dst.unlink()
-    say(f"  the DFlash2 drafter: {DFLASH['bytes'] / 1e9:.1f} GB from Hugging Face ({DFLASH['repo']})")
+    say(f"  the DFlash2 drafter: {DFLASH['bytes'] / 1e9:.1f} GB from Hugging Face ({DFLASH['repo']}; license "
+        f"{DFLASH['license']}: non-commercial use only)")
     fetch(hf_url(DFLASH["repo"], DFLASH["revision"], "", DFLASH["file"]), dst, DFLASH["sha256"])
     ok(f"the DFlash2 drafter: {dst}")
     return dst

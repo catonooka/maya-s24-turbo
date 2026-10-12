@@ -34,11 +34,6 @@ The setup asks which one to download and recommends one for your PC. How they're
 [MAYA-S24](bench/results/MAYA-S24.md), [MAYA-M](bench/results/MAYA-M.md), [MAYA-L](bench/results/MAYA-L.md). On
 [Hugging Face](https://huggingface.co/peasantsmith/GLM-5.3-Flash-Maya-GGUF).
 
-The setup can also download turboderp's [EXL3 quant](https://huggingface.co/turboderp/GLM-5.3-Flash-exl3/tree/3.05bpw)
-at 3.05 bits per weight (125.3 GB, exllamav3's format, with the MTP block), which the engine reads in place from
-its safetensors: experimental, NVIDIA only, tested on Linux, and not measured against the FP8 model -
-`./maya.sh --setup --model EXL3-3.05bpw`.
-
 ## How fast is it?
 
 Real machines, real numbers, most of them measured with `./maya.sh --bench`. A token is about ¾ of a word.
@@ -102,9 +97,13 @@ builds everything once (20-40 minutes plus the download) and **starts the model*
 - **From another device:** `./maya.sh --setup --host 0.0.0.0 --api-key <secret>`. Always set a key.
 - **Tuning:** `./maya.sh --calibrate` tunes the engine to your hardware in 10-15 minutes. Every setting:
   [docs/SETTINGS.md](docs/SETTINGS.md).
-- **Faster answers with a DFlash2 drafter:** `--dflash GGUF` in the config's `"args"` drafts up to 7 tokens a round
-  and gives the same answers - Maya-L +44% on nine GPUs and +12% on two (against the MTP block), +19% on one RTX 3090
-  ([how](docs/SETTINGS.md#drafting-with-dflash2)).
+- **Several requests at once:** `./maya.sh --parallel 4` (up to 8) answers them together - on one GPU the model's
+  dense weights are read once for all of them: x1.41 in all for two on a V100, x2.02 for four with every expert in
+  GPU memory ([how](docs/SETTINGS.md#several-requests-at-once)).
+- **Faster answers with a DFlash2 drafter:** `./maya.sh --setup --draft dflash2` (NVIDIA) downloads a small drafter
+  that drafts up to 7 tokens a round and gives the same answers - Maya-L +44% on nine GPUs and +12% on two (against
+  the MTP block), +19% on one RTX 3090 ([how](docs/SETTINGS.md#drafting-with-dflash2)). The drafter's license is
+  non-commercial (CC BY-NC-ND 4.0).
 
 ## Something went wrong?
 

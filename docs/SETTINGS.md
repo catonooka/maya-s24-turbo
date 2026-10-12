@@ -107,7 +107,9 @@ what you changed there):
 One card streams nearly every expert over PCIe for each chunk, so fewer, larger chunks pay off on long prompts. On a
 split, a prompt that fits one chunk runs the cards one after the other, while two or more keep both busy.
 
-**Several requests at once** (`--parallel N`, 1-8, default 1). `./maya.sh --parallel 4` (Windows:
+## Several requests at once
+
+`--parallel N` (1-8, default 1). `./maya.sh --parallel 4` (Windows:
 `START-MAYA.bat --parallel 4`) keeps it in the config's `"args"`. Maya then answers up to N requests at the same time,
 and the ones after them wait their turn. The dashboard shows how many answers are being written, and `/v1/status`
 reports N as its concurrency.
@@ -124,11 +126,13 @@ reports N as its concurrency.
 
 Each extra request keeps its own context state in VRAM (the attention caches, the recurrent states and a snapshot),
 taken from the expert pool at the start, so a larger N leaves fewer experts in VRAM; the log's `glm multi:` line gives
-the size.
+the size. With N above 1 the engine decodes without a [DFlash2 drafter](#drafting-with-dflash2) (the log says so).
 
 ## Drafting with DFlash2
 
-`--dflash GGUF` in the config's `"args"`. A DFlash2 drafter made for GLM-5.3-Flash - a small block drafter that reads
+`./maya.sh --setup --draft dflash2` downloads the drafter (0.7 GB, [on Hugging Face](https://huggingface.co/Anbeeld/GLM-5.3-Flash-DFlash2-GGUF);
+its license is CC BY-NC-ND 4.0: non-commercial use only) and passes it as `--dflash GGUF` in the config's `"args"`;
+NVIDIA GPUs, one request at a time (`--parallel 1`). A DFlash2 drafter made for GLM-5.3-Flash - a small block drafter that reads
 the model's hidden states at five of its layers and drafts up to 7 tokens in one pass, with the model's own embedding
 and head - takes the place of the MTP block: with it the engine does not load the MTP block. Each round it drafts a
 block, one verify window checks the drafts, and the longest right prefix is kept with the model's own next token - the
