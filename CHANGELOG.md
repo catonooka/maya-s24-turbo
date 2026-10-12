@@ -4,6 +4,22 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.2 - 2026-10-12
+
+Faster sampled answers, pictures in Claude Code's tool results, and a build fix for PCs with two CUDA toolkits.
+
+- **Sampled answers decode faster** (#92 by @0xPreDa). The sampler now picks the top_k tokens in one pass instead of
+  k scans of the vocabulary, and runs the draw chain on one thread: a sample takes about 0.07 ms instead of 1.5 ms at
+  top_k 20 on an RTX 4090 (11 ms at top_k 64, which `top_k` 0 also means). Sampled decode on 4x RTX 4090: +13%. The
+  picks are the same, token for token - checked on NVIDIA and AMD.
+- **Pictures in tool results reach the model** (#120 by @CoolJohn-lab, fixes #119). A picture inside an Anthropic
+  `tool_result` - how Claude Code's Read tool returns an image - was dropped before the image encoder; now the model
+  sees it.
+- **A second CUDA toolkit** (#124 by @fuad00): with `--nvcc` pointing at a toolkit other than the system's, the engine
+  and the image encoder now link that toolkit's runtime and cuBLAS; they took the system's before. A build that
+  already linked the wrong ones needs its `build/` folder removed once.
+- README: a 2x RTX 4090 row (#123 by @fuad00).
+
 ## v1.1.1 - 2026-10-12
 
 A guard for a crash reported on v1.1.0, and clearer advice on the DFlash2 drafter.
