@@ -56,6 +56,11 @@ class ChatTemplate:
             kwargs["reasoning_effort"] = "low" if off else level if level in ("low", "high") else "max"
         elif kwargs.get("reasoning_effort") in QWEN_EFFORT:
             kwargs["reasoning_effort"] = QWEN_EFFORT[kwargs["reasoning_effort"]]
+        if add_generation_prompt and not self.glm_effort:
+            # The parser treats a generated turn as reasoning unless explicitly disabled. Pass
+            # that same default to templates which use enable_thinking; templates which ignore it
+            # remain unchanged.
+            kwargs["enable_thinking"] = kwargs.get("enable_thinking") is not False
         out = self.template.render(messages=messages, tools=tools, add_generation_prompt=add_generation_prompt,
                                    **kwargs)
         if off and add_generation_prompt and out.endswith("<think>"):
