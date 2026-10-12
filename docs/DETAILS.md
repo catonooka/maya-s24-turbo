@@ -342,6 +342,11 @@ print(r.choices[0].message.content)
   `max_tokens` would run past the context is refused too (400); agents that always ask for their full output cap
   can instead get it shortened to the room left: add `"fit_max_tokens": true` to `strata-<model>.json` (or pass
   `--fit-max-tokens` to `serve/server.py`). A prompt that leaves no room at all is still refused.
+- **Web pages on another address.** A browser page served from somewhere else (a local chat client on
+  `http://127.0.0.1:8090`, say) is stopped by the browser from calling the API unless the server allows its origin. Add
+  `"cors_origins": ["http://127.0.0.1:8090"]` to `strata-<model>.json` (exact origins, no path; `["*"]` lets every page
+  in - only with an `api_key` set, or any page you open can use your model). It opens `/v1/*` and nothing else: the
+  settings and the dashboard stay for Maya's own page. Missing or empty: no CORS headers at all, as before.
 - **From other devices on your network.** The server listens on your PC only (`127.0.0.1`) unless you say otherwise:
   run setup with `START-HERE.bat --setup --host 0.0.0.0 --api-key some-long-secret` (or add `"host": "0.0.0.0"` and
   `"api_key": "..."` to `strata-<model>.json`). The server window then prints this PC's addresses
