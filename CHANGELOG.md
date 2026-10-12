@@ -4,6 +4,16 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.1 - 2026-10-12
+
+A guard for a crash reported on v1.1.0, and clearer advice on the DFlash2 drafter.
+
+- **The setup no longer offers the experimental EXL3 quant on Windows** (#129). There an EXL3 model stopped at its
+  first prompt with an illegal memory access, after a 125 GB download. `--model EXL3-3.05bpw` still asks for it, with a
+  warning, while we look into it. Linux: nothing changes. Maya's own models are not affected.
+- **DFlash2: measure yours.** Where most experts come from RAM, the MTP block can stay faster than the drafter: an
+  RTX 3090 + 3060 with Maya-M decoded faster without it (#127). The setup and the docs say so; `--bench` tells.
+
 ## v1.1.0 - 2026-10-12
 
 Three big additions at once: Maya answers several requests together, drafts with a DFlash2 drafter, and runs EXL3
