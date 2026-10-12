@@ -1588,6 +1588,9 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
         if (S->trace) cudaEventRecord(S->tr[(size_t) il].start, s);
         hc_read(il == l0_ ? nullptr : S->ffn, Ly.hc_attn_fn, Ly.hc_attn_scale, Ly.hc_attn_base, Ly.attn_norm);
         S->mark("hc", s);
+        // S->R: the layer's input rows - the DFlash drafter's features when it reads this layer (the stream means go
+        // out through S->mixer, which this layer's mixer writes only after)
+        dflash_capture(il, S->R, T, p0, S->mixer, T, s);
         dump_row("attn_norm-" + std::to_string(il), S->x, E);
 
         // ---- the mixer, in sub-batches of S->sub tokens (the recurrences carry their state across)
@@ -2645,9 +2648,15 @@ bool Glm5Model::prefill(const std::vector<int32_t>& tokens, std::string& err, in
         progress_at("the prompt: STRATA_GLM_STALL_TEST's pause");
         std::this_thread::sleep_for(std::chrono::seconds(stall_test));
     }
+    // a DFlash drafter reads only the prompt's last positions (its window): the captures start there
+    if (ok && dflash_ready()) {
+        const int64_t end = pos_ + (int64_t) tokens.size() + (next_token >= 0 ? 1 : 0);
+        for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) m->cap_floor_ = end - cap_d_->ctx();
+    }
     if (ok) ok = prefill_run(tokens, err);
     progress_at("the prompt: returning the expert pool's tail");
     for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) {
+        m->cap_floor_ = 0;
         std::string return_err;
         if (!m->prefill_return(return_err)) {
             if (ok) err = return_err;

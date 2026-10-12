@@ -237,6 +237,7 @@ struct Options {
     /// routes to is streamed once per chunk, so a bigger chunk streams fewer bytes per token (the "ubatch" effect).
     bool prefill_auto = false;
     std::string prefill_arg;           ///< `--prefill` as given (the GLM engine reads it as STRATA_GLM_PREFILL)
+    std::string dflash;                ///< `--dflash`: a DFlash2 draft GGUF for the GLM engine (STRATA_GLM_DFLASH)
     bool no_split_rows = false;        ///< plan v0.3 P4 A/B: one whole expert per pool thread
     /// Plan v0.3 P5: the prompt path borrows the top expert-cache slots for its buffers and refills them after
     /// the prompt (default); `--no-prefill-borrow` reserves the buffers' VRAM for the whole session instead.
@@ -267,6 +268,7 @@ struct Options {
     /// Plan v0.3 P6: a draft enters the verify window only while every draft before it (and itself) has at least
     /// this probability under the draft layer; 0 = always --spec-1 drafts.
     double spec_min_p = 0.0;
+    bool spec_min_p_set = false;   ///< --spec-min-p given (the DFlash decode's default cut is 0.9 otherwise)
     /// Stop when the model emits an end-of-turn token (<|endoftext|> 248044, <|im_end|> 248046, or --eos-ids).
     bool stop_eos = false;
     bool eos_given = false;    ///< --stop-eos or --eos-ids appeared: the glm path stops only when asked (defaults are qwen's)
@@ -322,6 +324,13 @@ void usage() {
                  "  --pack DIR           the pack directory (default pack/full)\n"
                  "  --glm-pack DIR       a GLM-5.3-Flash pack (M3.1): the verified Glm5Model runner behind the\n"
                  "                       same wire contract (T <id> / DONE; --serve reads GEN lines)\n"
+                 "  --dflash GGUF        (--glm-pack) draft with a DFlash2 block drafter made for the model: each\n"
+                 "                       round it drafts up to --spec T - 1 tokens (default its block size - 1), one\n"
+                 "                       verify window checks them; --spec-min-p P stops a draft at a selector\n"
+                 "                       confidence below P (default 0.5 on 3+ GPUs, 0.95 on one; two GPUs: at\n"
+                 "                       least one draft, up to 4 while the confidences' product stays at 0.9 -\n"
+                 "                       STRATA_GLM_DFLASH_MIN / _CUM).  The model's\n"
+                 "                       MTP block is not loaded with it.  Env: STRATA_GLM_DFLASH\n"
                  "  --glm-ram-resident   the pinned RAM tier holds every expert VRAM does not, and nothing is evicted\n"
                  "                       to disk. The start fails if the tier cannot hold them (raise STRATA_GLM_RAM_GB\n"
                  "                       or lower --max-context). Env: STRATA_GLM_RAM_RESIDENT=1\n"
@@ -969,6 +978,8 @@ static int glm_pack_generate(const Options& o) {
     // the prompt chunk, set in the config's args like Strata's: --prefill auto | N (a chunk of N tokens) | 0
     // (the engine reads it as STRATA_GLM_PREFILL; without either, auto)
     if (!o.prefill_arg.empty()) set_env("STRATA_GLM_PREFILL", o.prefill_arg.c_str());
+    // the DFlash2 drafter (--dflash, else STRATA_GLM_DFLASH): loaded with the model, on the device of its head
+    if (!o.dflash.empty()) set_env("STRATA_GLM_DFLASH", o.dflash.c_str());
     // the layer split across the visible GPUs: STRATA_GLM_SPLIT, else --layer-split (auto | K1,K2,..)
     if (!model.load_pack_env(o.glm_pack, o.max_context, err, o.layer_split)) {
         std::fprintf(stderr, "maya generate: %s\n", err.c_str());
@@ -982,12 +993,12 @@ static int glm_pack_generate(const Options& o) {
         const auto st = model.fast_stats();
         // (+ the CPU lane setup's calibration reads: its threads and its PCIe share, as the engine started)
         std::printf("INFO context=%lld kv=%s expert_slots=%lld expert_cache_mib=%lld engine_kind=glm-fast experts=%d "
-                    "vram_slots=%lld vram_gb=%.1f ram_slots=%lld ram_gb=%.1f mtp=%d vision_lend=%zu cpu_threads=%d "
+                    "vram_slots=%lld vram_gb=%.1f ram_slots=%lld ram_gb=%.1f mtp=%d dflash=%d vision_lend=%zu cpu_threads=%d "
                     "pcie_share=%.2f\n",
                     (long long) o.max_context, model.kv_int8() ? "int8" : "fp16", (long long) st.pool_slots,
                     (long long) (st.pool_gb * 1024.0), model.geometry().n_expert * (model.geometry().n_layers - model.geometry().dense_lead),
                     (long long) st.pool_slots, st.pool_gb, (long long) st.ram_slots, st.ram_gb, model.has_mtp() ? 1 : 0,
-                    model.vision_lend_bytes(), model.cpu_lane_threads(), model.pcie_share());
+                    model.dflash_ready() ? 1 : 0, model.vision_lend_bytes(), model.cpu_lane_threads(), model.pcie_share());
     }
 
     strata::kernels::SamplerParams sp;
@@ -1362,6 +1373,11 @@ static int glm_pack_generate(const Options& o) {
         note(m);
         return len;
     };
+    // a request's DFlash window and draft cut (its GEN line's spec= / spec_min_p=; 0 / -1: as the engine started)
+    int req_spec = 0;
+    double req_spec_min_p = -1.0;
+    int req_spec_n_min = -1;       // ... its drafts kept whatever their confidence (spec_n_min=; -1: the engine's)
+    double req_spec_cum = -1.0;    // ... and the cut on the product of the confidences (spec_cum=; -1: the engine's)
     // THE PROMPT of a request (run_request, and the several-conversation scheduler's admission): the conversation
     // reuse (the snapshot, else a slot), the prompt path for all but the last token, the token path for the rest - the
     // state saved before the last token and the first sample's logits on the tail.  0, or 1 after an ERR line.
@@ -1632,7 +1648,23 @@ static int glm_pack_generate(const Options& o) {
             return produced < max_new;
         };
         const uint64_t spec0 = model.spec_steps_, hits0 = model.spec_hits_;
-        if (std::strcmp(finish, "cancel") != 0 && model.fast() && model.spec_ready()) {
+        if (std::strcmp(finish, "cancel") != 0 && model.fast() && model.dflash_ready() && req_spec != 1) {
+            // the DFlash decode: a block of drafts a round, one verify window checks them (same tokens as the loop
+            // below for the same samples); --spec T caps a round's window at T tokens
+            int64_t n_spec = 0;
+            const int spec = req_spec >= 2 ? req_spec : o.spec;   // this request's window, else --spec
+            const int n_max = spec >= 2 ? spec - 1 : -1;            // -1: the engine's (decode_dflash)
+            // the drafts stop at a selector confidence below the cut: the request's, else --spec-min-p, else the
+            // engine's (-1: decode_dflash picks it for the window it verifies with)
+            const float p_min = req_spec_min_p >= 0.0 && req_spec_min_p <= 1.0 ? (float) req_spec_min_p
+                                : o.spec_min_p_set                         ? (float) o.spec_min_p
+                                                                           : -1.0f;
+            if (!model.decode_dflash(sp, max_new, n_max, p_min, on_token, n_spec, err, req_spec_n_min,
+                                     req_spec_cum >= 0.0 && req_spec_cum <= 1.0 ? (float) req_spec_cum : -1.0f)) {
+                std::printf("ERR %s\n", err.c_str());
+                return 1;
+            }
+        } else if (std::strcmp(finish, "cancel") != 0 && model.fast() && model.spec_ready()) {
             // the pipelined speculative decode: the two halves of the split work on consecutive tokens, the head
             // running the NextN block's draft (same tokens as the loop below)
             int64_t n_spec = 0;
@@ -1705,6 +1737,10 @@ static int glm_pack_generate(const Options& o) {
     // request alone decodes through the speculative path (the fastest for one); as soon as a second one comes, both go
     // through the pipelined decode (Glm5Model::multi_issue), each card of the split on a different conversation.
     const bool multi = o.serve && model.fast() && model.seq_count() > 1;
+    if (multi && model.dflash_ready())
+        std::fprintf(stderr, "glm dflash: not used with STRATA_GLM_SEQS=%d - the several-conversation scheduler decodes "
+                             "without it (and without the MTP block, which --dflash leaves unloaded)\n",
+                     model.seq_count());
     struct Ctx {   // a context's driver-side state while another one is bound (the bound one's is in the globals)
         std::vector<int32_t> snap_tokens;
         uint64_t snap_img_hash = kNoImages;
@@ -2632,6 +2668,10 @@ static int glm_pack_generate(const Options& o) {
             int req_threads = 0;
             int req_chunks = 0;   // ... and its disk reads' pieces (0: as the engine started)
             int req_rid = -1;
+            req_spec = 0;
+            req_spec_min_p = -1.0;
+            req_spec_n_min = -1;
+            req_spec_cum = -1.0;
             std::string tok2, ids, emb_path;
             while (ss >> tok2) {
                 const size_t eq = tok2.find('=');
@@ -2656,6 +2696,10 @@ static int glm_pack_generate(const Options& o) {
                 else if (k == "cpu_threads") { req_threads = std::atoi(v.c_str()); }
                 else if (k == "read_chunks") { req_chunks = std::atoi(v.c_str()); }
                 else if (k == "rid") { req_rid = std::atoi(v.c_str()); }
+                else if (k == "spec") { req_spec = std::atoi(v.c_str()); }
+                else if (k == "spec_min_p") { req_spec_min_p = std::atof(v.c_str()); }
+                else if (k == "spec_n_min") { req_spec_n_min = std::atoi(v.c_str()); }
+                else if (k == "spec_cum") { req_spec_cum = std::atof(v.c_str()); }
                 // penalty_* need machinery this mode does not have (history rows): ignored rather than approximated
             }
             if (any_key) rq.greedy = false;   // any sampler key switches the request to the sampled path
@@ -2896,10 +2940,14 @@ int main(int argc, char** argv) {
         else if (a == "--mtp-window") o.mtp_window = std::atoll(next("--mtp-window"));
         else if (a == "--pcie-frac") o.pcie_frac = std::atof(next("--pcie-frac"));
         else if (a == "--adapt-every") o.adapt_every = std::atoi(next("--adapt-every"));
-        else if (a == "--spec-min-p") o.spec_min_p = std::atof(next("--spec-min-p"));
+        else if (a == "--spec-min-p") {
+            o.spec_min_p = std::atof(next("--spec-min-p"));
+            o.spec_min_p_set = true;
+        }
         else if (a == "--stop-eos") { o.stop_eos = true; o.eos_given = true; }
         else if (a == "--spec-split") o.spec_split = true;
         else if (a == "--layer-split") o.layer_split = next("--layer-split");
+        else if (a == "--dflash") o.dflash = next("--dflash");
         else if (a == "--split-device") o.split_device = next("--split-device");
         else if (a == "--pcie-mode") o.pcie_mode = next("--pcie-mode");
         else if (a == "--serve") o.serve = true;

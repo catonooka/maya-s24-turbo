@@ -109,21 +109,36 @@ gf::MvJob mv_job(const Job& j, int t, float* y) {
     return m;
 }
 
-// one mv_nt launch of these jobs for nt activations against mv for each activation alone; false: a mismatch (printed)
+// these jobs for nt activations, both ways the engine batches them - one mv_nt launch (several conversations, nt <=
+// kMaxMvNt) and one mv() of nt-column jobs (a verify window's tokens) - against mv() for each activation alone;
+// false: a mismatch (printed)
 bool run_case(const char* name, const std::vector<Job>& jobs, int nt, cudaStream_t s) {
     const int n = (int) jobs.size();
-    std::vector<float*> y_nt((size_t) n), y_one((size_t) n);
-    std::vector<gf::MvJob> batch((size_t) n);
+    std::vector<float*> y_nt((size_t) n), y_col((size_t) n), y_one((size_t) n);
+    std::vector<gf::MvJob> batch((size_t) n), cols((size_t) n);
     for (int i = 0; i < n; ++i) {
-        const size_t bytes = (size_t) nt * jobs[(size_t) i].w.n_out * sizeof(float);
+        const Job& j = jobs[(size_t) i];
+        const size_t bytes = (size_t) nt * j.w.n_out * sizeof(float);
         check(cudaMalloc(&y_nt[(size_t) i], bytes), "outputs");
+        check(cudaMalloc(&y_col[(size_t) i], bytes), "outputs");
         check(cudaMalloc(&y_one[(size_t) i], bytes), "outputs");
         check(cudaMemset(y_nt[(size_t) i], 0xff, bytes), "outputs");
+        check(cudaMemset(y_col[(size_t) i], 0xff, bytes), "outputs");
         check(cudaMemset(y_one[(size_t) i], 0x7f, bytes), "outputs");
-        batch[(size_t) i] = mv_job(jobs[(size_t) i], 0, y_nt[(size_t) i]);
+        batch[(size_t) i] = mv_job(j, 0, y_nt[(size_t) i]);
+        cols[(size_t) i] = mv_job(j, 0, y_col[(size_t) i]);
+        cols[(size_t) i].ncol = nt;
+        cols[(size_t) i].xq_cstride = (int64_t) (j.w.n_in / 32) * kQ8;
+        cols[(size_t) i].xf_cstride = j.w.n_in;
+        cols[(size_t) i].y_cstride = j.w.n_out;
     }
-    if (!gf::mv_nt(batch.data(), n, nt, s)) {
+    const bool with_nt = nt <= gf::kMaxMvNt;
+    if (with_nt && !gf::mv_nt(batch.data(), n, nt, s)) {
         std::fprintf(stderr, "%s: mv_nt refused %d jobs x %d activations\n", name, n, nt);
+        return false;
+    }
+    if (!gf::mv(cols.data(), n, s)) {
+        std::fprintf(stderr, "%s: mv refused %d jobs of %d columns\n", name, n, nt);
         return false;
     }
     for (int t = 0; t < nt; ++t) {
@@ -140,21 +155,28 @@ bool run_case(const char* name, const std::vector<Job>& jobs, int nt, cudaStream
     bool ok = gf::launch_errors() == 0;
     for (int i = 0; i < n; ++i) {
         const Job& j = jobs[(size_t) i];
-        std::vector<float> a((size_t) nt * j.w.n_out), b(a.size());
-        check(cudaMemcpy(a.data(), y_nt[(size_t) i], a.size() * sizeof(float), cudaMemcpyDeviceToHost), "read back");
+        std::vector<float> b((size_t) nt * j.w.n_out);
         check(cudaMemcpy(b.data(), y_one[(size_t) i], b.size() * sizeof(float), cudaMemcpyDeviceToHost), "read back");
-        size_t bad = 0, first = 0;
-        for (size_t k = 0; k < a.size(); ++k)
-            if (std::memcmp(&a[k], &b[k], sizeof(float)) != 0 || !std::isfinite(b[k])) {
-                if (bad++ == 0) first = k;
+        for (const int form : {0, 1}) {
+            if (form == 0 && !with_nt) continue;
+            std::vector<float> a(b.size());
+            check(cudaMemcpy(a.data(), form == 0 ? y_nt[(size_t) i] : y_col[(size_t) i], a.size() * sizeof(float),
+                             cudaMemcpyDeviceToHost), "read back");
+            size_t bad = 0, first = 0;
+            for (size_t k = 0; k < a.size(); ++k)
+                if (std::memcmp(&a[k], &b[k], sizeof(float)) != 0 || !std::isfinite(b[k])) {
+                    if (bad++ == 0) first = k;
+                }
+            if (bad > 0) {
+                std::fprintf(stderr, "%s (%s): job %d (type %d, %d x %d), %d activations: %zu of %zu outputs differ - "
+                             "first: activation %zu row %zu, %.9g against %.9g\n", name, form == 0 ? "mv_nt" : "columns",
+                             i, j.w.type, j.w.n_in, j.w.n_out, nt, bad, a.size(), first / (size_t) j.w.n_out,
+                             first % (size_t) j.w.n_out, a[first], b[first]);
+                ok = false;
             }
-        if (bad > 0) {
-            std::fprintf(stderr, "%s: job %d (type %d, %d x %d), %d activations: %zu of %zu outputs differ - first: "
-                         "activation %zu row %zu, %.9g against %.9g\n", name, i, j.w.type, j.w.n_in, j.w.n_out, nt,
-                         bad, a.size(), first / (size_t) j.w.n_out, first % (size_t) j.w.n_out, a[first], b[first]);
-            ok = false;
         }
         cudaFree(y_nt[(size_t) i]);
+        cudaFree(y_col[(size_t) i]);
         cudaFree(y_one[(size_t) i]);
     }
     return ok;
@@ -172,7 +194,7 @@ int bench(cudaStream_t s) {
     check(cudaEventCreate(&b), "event");
     double one = 0;
     std::printf("Q6_K 4096 x 12288 (%.1f MB), one launch:\n", (double) gf::row_bytes(14, 4096) * 12288 / 1e6);
-    for (int nt = 1; nt <= gf::kMaxMvCols; ++nt) {
+    for (int nt = 1; nt <= gf::kMaxMvNt; ++nt) {
         const gf::MvJob m = mv_job(j, 0, y);
         for (int i = 0; i < 5; ++i) gf::mv_nt(&m, 1, nt, s);
         constexpr int kCalls = 50;

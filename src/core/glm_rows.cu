@@ -58,7 +58,7 @@ struct Glm5Model::RowsState {
     cudaEvent_t ev_done = nullptr;
 };
 
-int Glm5Model::rows_max() { return gf::kMaxMvCols; }
+int Glm5Model::rows_max() { return gf::kMaxMvNt; }
 
 bool Glm5Model::rows_alloc(std::string& err) {
     if (rows_ != nullptr) return true;
@@ -187,7 +187,7 @@ bool Glm5Model::multi_rows(const int* seqs, const int32_t* tokens, const strata:
                                    *dsa_ig = nullptr, *dsa_pool = nullptr;
         const float* img = nullptr;
     };
-    Row rw[gf::kMaxMvCols];
+    Row rw[gf::kMaxMvNt];
     for (int i = 0; i < n; ++i) {
         const int sq = seqs[i];
         if (sq < 0 || sq >= seq_count()) {

@@ -20,6 +20,7 @@
 #pragma once
 
 #include "strata/artifact/gguf_reader.hpp"
+#include "strata/core/glm_dflash.hpp"
 #include "strata/kernels/cpu/native_expert.hpp"
 #include "strata/kernels/sampler.hpp"
 
@@ -35,7 +36,16 @@
 #include <thread>
 #include <vector>
 
+namespace strata::kernels::glmf {
+struct MoeRequest;
+struct CpuAnswer;
+}  // namespace strata::kernels::glmf
+
 namespace strata::core {
+
+namespace glmfast {
+class Workers;
+}  // namespace glmfast
 
 /// One served weight: F32 (dequantized at load) or a ggml-quantized row tensor uploaded RAW to
 /// VRAM and dotted by the device MMVQ.  type 0 = F32.
@@ -102,6 +112,7 @@ public:
     /// hop of the residual at each boundary (no peer access needed).
     bool load_pack_env(const std::string& pack_dir, int64_t max_ctx, std::string& err,
                        const std::string& layer_split = "");
+    bool load_pack_place(const std::string& pack_dir, int64_t max_ctx, std::string& err, const std::string& layer_split);
     /// The explicit split form behind load_pack_env: devs[i] runs layers [bounds[i-1], bounds[i]) (bounds holds
     /// the first layer of each later part, devs.size() - 1 of them).
     bool load_pack_split(const std::string& pack_dir, int64_t max_ctx, const std::vector<int>& bounds,
@@ -425,6 +436,15 @@ public:
     bool fast_warm(std::string& err);                      // load-time: stream every expert into the tiers
     bool fast_cpu_lane_setup(std::string& err);            // STRATA_GLM_CPU_LANE: the pool, its calibration, the split
     void fast_cpu_experts(int il, int ne, const uint8_t* const* blob, const float* w, const float* x, float* out);
+    // the same on `pool` with the rows act / hq / ff / dn (a verify window's CPU lanes: FastState::win_lane)
+    void lane_experts(glmfast::Workers& pool, uint8_t* act, uint8_t* hq, float* ff, float* dn, int il, int ne,
+                      const uint8_t* const* blob, const float* w, const float* x, float* out);
+    void win_lanes_stop();
+    void win_lanes_make(std::shared_ptr<glmfast::Workers> p0, std::shared_ptr<glmfast::Workers> p1,
+                        const std::vector<int>& c0, const std::vector<int>& c1);
+    // a batched verify window's layer on both window lanes, each distinct expert read once (glm_fast_path.cu)
+    void win_cpu_merged(int il, int nb, const strata::kernels::glmf::MoeRequest* const* rq,
+                        strata::kernels::glmf::CpuAnswer* const* ans, const unsigned int* seq);
     // ---- the NextN (MTP) draft block (the last half carries it; layer index n_layers)
     int mtp_il_ = -1;                                      // its layer index here, -1: not on this half
     int mtp_src_ = -1;                                     // the shard of STRATA_GLM_MTP_GGUF's block, -1: the model's
@@ -540,6 +560,70 @@ public:
     bool rows_alloc(std::string& err);                     // load, several sequences on one GPU: before the pool
     void rows_destroy();
 
+    // ---- the verify window (src/core/glm_window.cu)
+    static constexpr int kWinMax = 16;                     // its tokens at most (gf::kMaxMvCols)
+    bool win_alloc(int tmax, std::string& err);            // this part's window buffers, for up to tmax tokens
+    void win_free();
+    bool fast_window_layers(int64_t p0, int T, std::string& err);   // T rows through this part's layers
+    bool fast_dsa_window(int il, int64_t p0, int t0, int T, std::string& err);
+    bool fast_moe_window(int il, int t0, int T, int part, int gid, std::string& err);
+    /// The verify WINDOW: `tokens[0..T)` at positions position()..+T-1 (the last accepted token and T-1 drafts) through
+    /// every part's layers in one pass; `out[t]` = the pick after token t - the greedy argmax, or with `sp` (not
+    /// greedy) row t's sample at counter sp->counter + t: what token-at-a-time decode would pick there.  Leaves the
+    /// position at +T; window_commit(n) keeps the first n tokens (1 <= T <= kWinMax).
+    bool window(const int32_t* tokens, int T, int32_t* out, std::string& err,
+                const strata::kernels::SamplerParams* sp = nullptr);
+    /// The same window PIPELINED over a split: the tokens go through the token path one after another, each part
+    /// starting token t + 1 as soon as it has handed token t on, so the parts work on different tokens at once (a
+    /// window costs about one token's pass plus (T - 1) of the slowest part's, where window() runs the parts one after
+    /// the other).  Same picks and the same window_commit.
+    bool window_pipe(const int32_t* tokens, int T, int32_t* out, std::string& err,
+                     const strata::kernels::SamplerParams* sp = nullptr);
+    /// window_pipe in steps: win_pipe_begin queues the first token's pass (`sp` not greedy: the picks are draws; not
+    /// `fresh`: it follows the previous window's late tokens without waiting for the devices), win_pipe_push each
+    /// further token's (kPipeMax in all), win_pipe_pick(t) waits for the pick after token t; then win_pipe_settle
+    /// (every part's share enqueued) before window_commit, or win_pipe_end (every pick, the devices drained)
+    static constexpr int kPipeMax = kWinMax / 2;
+    bool win_pipe_begin(int32_t first, std::string& err, const strata::kernels::SamplerParams* sp = nullptr,
+                        bool fresh = true);
+    bool win_pipe_push(int32_t token, std::string& err);
+    bool win_pipe_pick(int t, int32_t& pick, std::string& err);
+    bool win_pipe_settle(std::string& err);
+    void win_pipe_cancel_from(int t);   // tokens t.. of this window are past a wrong draft: their work is skipped
+    void win_pipe_drain();              // every part's queued work (a window's cancelled tokens, a commit) done
+    bool win_pipe_end(int32_t* out, std::string& err);
+    /// window_pipe's enqueue threads (the head part owns them): one a part, each issuing its part's share of every
+    /// token - a token's launches on nine parts took the one host thread ~3-5 ms, longer than any part's GPU time
+    struct PipeCrew;
+    PipeCrew* crew_ = nullptr;
+    bool win_pipe_part(int k, int t, std::string& err);   // part k's share of window token t (a crew thread's job)
+    void win_crew_stop();
+    /// window_pipe's token t: KDA layer il's projections go to its window input rows (window_commit replays from them)
+    void win_kda_rows(int il, int t, float** proj, float** fa, float** ga, float** beta);
+    bool window_commit(int n_keep, std::string& err);
+    bool win_reserve(std::string& err);                    // the window's buffers and state backup, before the pool
+    void win_prof_report();                                // STRATA_GLM_WIN_PROF: each part's window time, then reset
+    // ---- the DFlash drafter (src/core/glm_dflash.cu): the part with the head holds it, on its device
+    std::unique_ptr<GlmDflash> dflash_;
+    std::string dflash_path_;                              // STRATA_GLM_DFLASH: its GGUF (every part knows it)
+    bool dflash_on_ = false;                               // a drafter will be bound: the window's buffers at setup
+    GlmDflash* cap_d_ = nullptr;                           // every part: the drafter its captures go to ...
+    std::vector<int> cap_k_;                               // ... absolute layer -> its feature index (-1: not read)
+    int64_t cap_floor_ = 0;                                // ... positions below it are not captured (a long prompt)
+    bool dflash_load(const std::string& path, int dev, std::string& err);
+    bool dflash_bind(std::string& err);                    // after the parts loaded: the captures wired
+    void dflash_capture(int il, const float* R, int n, int64_t p0, float* scratch, int rows, cudaStream_t s);
+    bool dflash_ready() const;
+    void dflash_reset();
+    /// The DFlash decode (Strata's serial speculative loop with a block drafter): each round the drafter's block for
+    /// the last token (up to n_max drafts, fewer where the selector's confidence is below p_min; n_max < 0: the
+    /// drafter's block, p_min < 0: 0.5 on a split, 0.9 on one GPU) is checked by one verify window - pipelined on a split (window_pipe's steps, stopped at
+    /// the first wrong draft), batched on one GPU - the same tokens as token-at-a-time decode for the same samples.
+    /// After the prompt's last forward().
+    /// n_min / p_cum: GlmDflash::draft_finish's (< 0: STRATA_GLM_DFLASH_MIN / _CUM, else 0)
+    bool decode_dflash(strata::kernels::SamplerParams& sp, int64_t max_new, int n_max, float p_min,
+                       const std::function<bool(int)>& emit, int64_t& produced, std::string& err, int n_min = -1,
+                       float p_cum = -1.0f);
     // ---- the batched prompt path (src/core/glm_prefill.cu)
     struct PrefillState;
     PrefillState* pf_ = nullptr;

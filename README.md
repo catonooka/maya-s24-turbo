@@ -97,6 +97,9 @@ builds everything once (20-40 minutes plus the download) and **starts the model*
 - **From another device:** `./maya.sh --setup --host 0.0.0.0 --api-key <secret>`. Always set a key.
 - **Tuning:** `./maya.sh --calibrate` tunes the engine to your hardware in 10-15 minutes. Every setting:
   [docs/SETTINGS.md](docs/SETTINGS.md).
+- **Faster answers with a DFlash2 drafter:** `--dflash GGUF` in the config's `"args"` drafts up to 7 tokens a round
+  and gives the same answers - Maya-L +44% on nine GPUs and +12% on two (against the MTP block), +19% on one RTX 3090
+  ([how](docs/SETTINGS.md#drafting-with-dflash2)).
 
 ## Something went wrong?
 

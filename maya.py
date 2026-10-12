@@ -207,6 +207,12 @@ MODELS = {
                        "GLM-5.3-Flash-vocab.gguf":
                            "8f53cb1bd2e631c14ef413e3284735d9e53f3c508d07a6f609e705b487105912"}}},
 }
+# The DFlash2 drafter the setup offers instead of drafting with the model's MTP block (--dflash): a small block drafter
+# made for GLM-5.3-Flash (any of the quants above), pinned to the revision it was measured with and verified.
+DFLASH = {"repo": "Anbeeld/GLM-5.3-Flash-DFlash2-GGUF", "revision": "f3569acb7f9cee95e66d24442d75536eb00ab842",
+          "file": "GLM-5.3-Flash-DFlash2-Q4_K_M.gguf", "bytes": 697017248,
+          "sha256": "f4158ffb805b26c4fe439669c2009908a80ea89e1576ecea4d03eaded18f017c"}
+DRAFTS = ("mtp", "dflash2")                        # the setup's drafting choices; MTP the default
 SHARD_RE = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
 GLM_ARCHS = ("glm5-next", "glm5next")             # llama.cpp's spelling and unsloth's
 PACK_FILES = ("index.txt", "native_experts.txt", "dense.bin", "tokenizer/vocab.json", "tokenizer/merges.txt",
@@ -815,6 +821,26 @@ def download_dir(models: Path, quant: str) -> Path:
     return d
 
 
+def choose_draft(a, pc: dict, inst: dict) -> str:
+    """"mtp" (the model's own MTP block; the default) or "dflash2" (a DFlash2 drafter, downloaded in step 5): --draft,
+    else asked - the earlier setup's answer is the default.  AMD (HIP) setups keep MTP: DFlash2 is measured on NVIDIA."""
+    if getattr(a, "draft", None):
+        return a.draft
+    if pc.get("backend") == "hip":
+        return "mtp"
+    default = inst.get("draft") if inst.get("draft") in DRAFTS else "mtp"
+    rows = [("the model's MTP block", "default",
+             "The model's own draft block guesses the next token, which the model then checks. On two GPUs or "
+             "more; one GPU decodes without drafting."),
+            (f"a DFlash2 drafter (download {DFLASH['bytes'] / 1e9:.1f} GB from Hugging Face)", None,
+             "A small drafter made for GLM-5.3-Flash drafts up to 7 tokens a round, which the model then checks: the "
+             "same answers, faster. Maya-L: +44% on nine GPUs and +12% on two against the MTP block, +19% on one "
+             "RTX 3090.")]
+    pick = choose("Drafting?", ["How the model drafts tokens ahead (the answers are the same either way):"], rows,
+                  DRAFTS.index(default), a.yes)
+    return DRAFTS[pick]
+
+
 def choose_model(a, models: Path, inst: dict) -> tuple:
     """("download", one of MODELS) or ("local", the model's first .gguf file): --gguf-dir, --model, else asked among
     the downloads - the earlier download is the default."""
@@ -1362,6 +1388,22 @@ def model_step(a, models: Path, choice: tuple):
     return d, shards, quant
 
 
+def drafter_step(models: Path) -> Path:
+    """The DFlash2 drafter's file in the models folder (GLM-5.3-Flash-DFlash2/): downloaded and its sha256 checked
+    unless it is there already."""
+    dst = models / "GLM-5.3-Flash-DFlash2" / DFLASH["file"]
+    size = dst.stat().st_size if dst.exists() else 0
+    if size == DFLASH["bytes"] and sha256_ok(dst, DFLASH["sha256"]):
+        ok(f"the DFlash2 drafter: {dst}")
+        return dst
+    if size >= DFLASH["bytes"]:                    # complete but not this file: a fresh download, not a resumed one
+        dst.unlink()
+    say(f"  the DFlash2 drafter: {DFLASH['bytes'] / 1e9:.1f} GB from Hugging Face ({DFLASH['repo']})")
+    fetch(hf_url(DFLASH["repo"], DFLASH["revision"], "", DFLASH["file"]), dst, DFLASH["sha256"])
+    ok(f"the DFlash2 drafter: {dst}")
+    return dst
+
+
 # ------------------------------------------------------------------------------------------------ 6. the pack
 def pack_source(pack: Path):
     """The first .gguf file a pack indexes (native_experts.txt's header names it), or None (no pack there)."""
@@ -1524,7 +1566,7 @@ def write_run_script(cfg_path: Path, port: int) -> Path:
 
 
 def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vision: dict | None,
-                 choice: tuple | None = None) -> Path:
+                 choice: tuple | None = None, dflash: Path | None = None) -> Path:
     step(8, "the configuration and the start script")
     port = a.port or 8080
     # --prefill auto (as Strata's setup writes it): the engine picks its prompt chunk - the largest its expert pool
@@ -1534,6 +1576,8 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vi
            "tokenizer": str(pack / "tokenizer"), "model_name": MODEL_NAME, "gpu": [g["index"] for g in pc["gpus"]],
            "sampling": dict(SAMPLING), "reasoning_effort": EFFORT, "lib_dirs": meta.get("lib_dirs") or [],
            "port": port}
+    if dflash is not None:                         # DFlash2 drafts instead of the MTP block (the engine loads no MTP)
+        cfg["args"] += ["--dflash", str(dflash)]
     env = parse_env(a.env)
     if pc.get("backend") == "hip":
         cfg["backend"] = "hip"
@@ -1586,7 +1630,8 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vi
         ok(line)
     gguf_dir = local.parent if local else Path(a.gguf_dir).expanduser().resolve() if a.gguf_dir else None
     cfg["installer"] = {"models_dir": str(models), "quant": quant, "gguf": str(local) if local else None,
-                        "gguf_dir": str(gguf_dir) if gguf_dir else None, "written": time.strftime("%Y-%m-%d %H:%M")}
+                        "gguf_dir": str(gguf_dir) if gguf_dir else None, "draft": "dflash2" if dflash else "mtp",
+                        "written": time.strftime("%Y-%m-%d %H:%M")}
     cal = saved_calibration(cfg, any_context=True)     # tuned on this PC for this model (and context) before
     if cal is not None:
         tuned = CAL.apply(cfg.get("env") or {}, cal.get("settings") or {})
@@ -1663,7 +1708,7 @@ def hardware_key(cfg: dict) -> str:
     quant = (cfg.get("installer") or {}).get("quant") or cfg.get("model_name", "?")
     return "|".join([" + ".join(g.get("name", "?") for g in sel) or "?",
                      f"{sum(g.get('vram_gb', 0) for g in sel):.0f}GB", S.cpu_info()[0], f"{S.ram_gb():.0f}GB", quant,
-                     str(ctx), "images" if cfg.get("vision") else "text"])
+                     str(ctx), "images" if cfg.get("vision") else "text"] + (["dflash2"] if "--dflash" in a else []))
 
 
 def load_calibrations() -> dict:
@@ -2215,15 +2260,18 @@ def set_up(a, prev: dict) -> Path | None:
         ok(f"model: {choice[1]}, in {download_dir(models, choice[1])}")
     else:
         ok(f"model: {choice[1]} (yours)")
+    draft = choose_draft(a, pc, inst)
+    ok("drafting: " + ("a DFlash2 drafter (downloaded with the model)" if draft == "dflash2" else "the MTP block"))
     llama = tools_step(a)                              # 3
     meta = build_step(a, pc, llama)                    # 4
     got = model_step(a, models, choice)                # 5
     if got is None:
         return None
     d, shards, quant = got
+    dflash = drafter_step(models) if draft == "dflash2" else None
     pack = pack_step(a, d, shards, llama)              # 6
     vision = vision_step(a, pc, meta, llama, d, quant)  # 7
-    cfg_path = write_config(a, pc, meta, pack, quant, ctx, models, vision, choice)   # 8
+    cfg_path = write_config(a, pc, meta, pack, quant, ctx, models, vision, choice, dflash)   # 8
     # the tuning: asked for (--calibrate), or offered when nothing was tuned for this PC and model yet and someone
     # answers (--yes and --no-start setups are not held up by it)
     tuned = None
@@ -2271,6 +2319,9 @@ def main() -> int:
                     help="download the model without asking (the commands and the size are still printed)")
     ap.add_argument("--model", choices=list(MODELS), help=f"which download (default: asked, {next(iter(MODELS))} "
                                                           "recommended)")
+    ap.add_argument("--draft", choices=list(DRAFTS),
+                    help="how the model drafts: mtp = its MTP block (the default), dflash2 = a DFlash2 drafter "
+                         f"(downloads {DFLASH['bytes'] / 1e9:.1f} GB; NVIDIA)")
     ap.add_argument("--no-vision", action="store_true", help="text only: no image encoder (saves its build and "
                                                              "its 1.1 GB of files)")
     ap.add_argument("--gguf-dir", help="use GLM-5.3-Flash GGUF files you already have: the folder with all of them, "
