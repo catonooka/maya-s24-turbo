@@ -628,6 +628,13 @@ Glm5Model::~Glm5Model() {
     }
     for (void* ev : {tev_a_, tev_b_, tev_c_, tev_d_})
         if (ev) cudaEventDestroy((cudaEvent_t) ev);
+    if (!bias_tab_.empty()) {   // on the tail's device (freed above with its half; the device itself is still there)
+        cudaSetDevice(bias_dev_);
+        for (float* t : bias_tab_)
+            if (t) cudaFree(t);
+        bias_tab_.clear();
+        cudaSetDevice(dev_);
+    }
     if (d_tok_) cudaFree(d_tok_);
     if (w_arena_) cudaFree(w_arena_);
     if (mtp_arena_) cudaFree(mtp_arena_);
@@ -818,9 +825,48 @@ bool Glm5Model::forward(const std::vector<int32_t>& tokens, std::vector<float>& 
     return true;
 }
 
+const float* Glm5Model::logit_bias_table(int slot, const std::vector<std::pair<int32_t, float>>& bias,
+                                         std::string& err) {
+    if (bias.empty()) return nullptr;
+    if (slot < 0 || slot >= seq_count()) {
+        err = "logit_bias: no conversation slot " + std::to_string(slot);
+        return nullptr;
+    }
+    Glm5Model* tail = this;
+    while (tail->split_next_) tail = tail->split_next_.get();
+    const size_t n = (size_t) g_.n_vocab;
+    std::vector<float> host(n, 0.0f);
+    for (const auto& [id, b] : bias) {
+        if (id < 0 || (size_t) id >= n) {
+            err = "logit_bias: token " + std::to_string(id) + " is outside the vocabulary";
+            return nullptr;
+        }
+        host[(size_t) id] = b;
+    }
+    cudaSetDevice(tail->dev_);
+    if (bias_tab_.empty()) {
+        bias_tab_.assign((size_t) seq_count(), nullptr);
+        bias_dev_ = tail->dev_;
+    }
+    float*& tab = bias_tab_[(size_t) slot];
+    cudaError_t e = tab == nullptr ? cudaMalloc(&tab, n * sizeof(float)) : cudaSuccess;
+    // synchronous: the table is written before any of this request's samples read it, and no earlier request's
+    // sample still reads it (a slot runs one request at a time, and its last sample was synchronised)
+    if (e == cudaSuccess) e = cudaMemcpy(tab, host.data(), n * sizeof(float), cudaMemcpyHostToDevice);
+    // a copy from pageable memory can return before its DMA lands, and the sampler runs on non-blocking streams
+    // that do not wait for the default stream: wait for it here
+    if (e == cudaSuccess) e = cudaStreamSynchronize(nullptr);
+    cudaSetDevice(dev_);
+    if (e != cudaSuccess) {
+        err = std::string("logit_bias: the table did not upload: ") + cudaGetErrorString(e);
+        return nullptr;
+    }
+    return tab;
+}
+
 int Glm5Model::sample_token(strata::kernels::SamplerParams& sp, std::string& err) {
-    // the fast path already ran the greedy argmax on the device at the end of the forward
-    if (fast_ != nullptr && sp.greedy && last_tok_ >= 0) return last_tok_;
+    // the fast path already ran the greedy argmax on the device at the end of the forward (an unbiased one)
+    if (fast_ != nullptr && sp.greedy && sp.logit_bias == nullptr && last_tok_ >= 0) return last_tok_;
     Glm5Model* tail = this;
     while (tail->split_next_) tail = tail->split_next_.get();
     if (tail->d_tok_ == nullptr) {

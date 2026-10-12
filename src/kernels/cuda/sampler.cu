@@ -130,7 +130,7 @@ __global__ void sampler_greedy_kernel(const float* __restrict__ logits, int n_vo
     float bv = __int_as_float(0xff800000);   // -inf
     int best = n_vocab;
     for (int v = threadIdx.x; v < n_vocab; v += blockDim.x) {
-        const float s = apply_penalties(l[v], hit_count(v), p);
+        const float s = apply_penalties(p.logit_bias ? l[v] + p.logit_bias[v] : l[v], hit_count(v), p);
         if (s > bv) { bv = s; best = v; }
     }
     for (int off = 16; off > 0; off >>= 1) {
@@ -252,7 +252,9 @@ __global__ void sampler_kernel(const float* __restrict__ logits, int n_vocab, in
         if (b == 0x80000000u) b = 0u;   // -0 ties with +0, as the float comparison it replaces
         return (b & 0x80000000u) ? ~b : (b | 0x80000000u);
     };
-    auto score = [&](int v) -> float { return apply_penalties(l[v], hit_count(v), p); };
+    auto score = [&](int v) -> float {
+        return apply_penalties(p.logit_bias ? l[v] + p.logit_bias[v] : l[v], hit_count(v), p);
+    };
     for (int b = threadIdx.x; b < kBins; b += blockDim.x) coarse[b] = 0u;
     if (threadIdx.x == 0) sh_ncoarse = 0u;
     __syncthreads();

@@ -509,6 +509,8 @@ bool Glm5Model::fast_moe_window(int il, int t0, int T, int part, int gid, std::s
         return a;
     };
     const bool lane = F->cpu_plan != 0ull && F->cpu_fmt[(size_t) il].n_ff > 0;
+    // STRATA_GLM_TRUNK_KEEP / _MAP: a window token leaves out the same experts the token path would (8: none)
+    const int keep = il == mtp_il_ ? 8 : glmfast::trunk_skip_from(il);
     static const int promote_min = [] {
         const char* v = getenv("STRATA_GLM_PROMOTE_MIN");
         return v ? std::max(0, std::atoi(v)) : 0;
@@ -560,7 +562,7 @@ bool Glm5Model::fast_moe_window(int il, int t0, int T, int part, int gid, std::s
             gf::moe_route(W.rlog + (size_t) t * g.n_expert, Ly.router_bias, g.n_expert, g.n_exp_used, g.w_scale,
                           g.norm_w != 0, il, W.x + (size_t) t * E, E, mt, W.sh_g + (size_t) t * FFs,
                           W.sh_u + (size_t) t * FFs, g.swiglu_shexp, FFs, (uint8_t*) W.sh_hq + (size_t) t * W.sh_hq_s, s,
-                          nullptr, nullptr, 0, nullptr, ah_bias, 0, 8, lane ? win_plan : 0ull, promote_min, 0, 0, t,
+                          nullptr, nullptr, 0, nullptr, ah_bias, 0, keep, lane ? win_plan : 0ull, promote_min, 0, 0, t,
                           scr, t0 + T);
             ++F->expected;
             gf::moe_wait(mt, E, s);
@@ -635,7 +637,7 @@ bool Glm5Model::fast_moe_window(int il, int t0, int T, int part, int gid, std::s
         float* ffn = W.ffn + (size_t) t * E;
         gf::moe_route(W.rlog + (size_t) t * g.n_expert, Ly.router_bias, g.n_expert, g.n_exp_used, g.w_scale,
                       g.norm_w != 0, il, x, E, md, W.sh_g + (size_t) t * FFs, W.sh_u + (size_t) t * FFs,
-                      g.swiglu_shexp, FFs, F->sh_hq, s, nullptr, nullptr, 0, nullptr, ah_bias, 0, 8,
+                      g.swiglu_shexp, FFs, F->sh_hq, s, nullptr, nullptr, 0, nullptr, ah_bias, 0, keep,
                       lane ? F->cpu_plan : 0ull, promote_min);
         ++F->expected;
         gf::moe_wait(md, E, s);

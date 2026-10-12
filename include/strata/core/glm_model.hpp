@@ -143,6 +143,9 @@ public:
     double pcie_share() const;
     /// STRATA_GLM_CPU_CAL: once a request (2000+ lane experts a window), drop a calibration decode stays >15% from
     void lane_drift_check();
+    /// Between requests: over decode's first windows of lane work, a split the start-up timing chose is planned again
+    /// from the lane's own cost in decode when that is >15% off (at most three times; STRATA_GLM_CPU_RETIME=0: never)
+    void lane_retime();
     bool set_pcie_share(double share);
     int cpu_lane_threads() const;
     bool set_cpu_lane_threads(int n);
@@ -173,6 +176,14 @@ public:
     static bool set_routing_dump(const std::string& path, std::string& err);
     bool snapshot_restore();
     int64_t snapshot_pos() const { return snap_pos_; }
+    /// Conversation CHECKPOINTS (host RAM, `slot` 0, 1, ...): every half's KDA states + conv histories and its open
+    /// indexer pool rows at the current position, beside the snapshot - a prompt that leaves the conversation before
+    /// the snapshot's position (an edited last message, another chat with the same system prompt) restores the
+    /// nearest earlier one instead of reading from token 0.  The DSA rows before its position must still be the
+    /// conversation's: the driver drops a checkpoint once a prompt writes at or before it.  ckpt_restore sets the
+    /// position; false (+ err) when that slot holds none.  ~150 MB a checkpoint for GLM-5.3-Flash's 34 KDA layers.
+    bool ckpt_save(int slot, std::string& err);
+    bool ckpt_restore(int slot, std::string& err);
     /// Conversation slots: the snapshot (its KDA states) and every DSA cache's rows up to its position, every half,
     /// written to a file; slot_load puts them back as the live state and the snapshot, so a conversation set aside
     /// while others ran continues where it was.  The bytes written, or 0 + err.
@@ -182,6 +193,10 @@ public:
     /// (-1 + err on failure).  Handles the device bookkeeping: with a split the logits (and the
     /// sampler buffer) live on the tail half's device, where peer reads are not available.
     int sample_token(strata::kernels::SamplerParams& sp, std::string& err);
+    /// A request's logit_bias (token id, bias) as the dense n_vocab table SamplerParams::logit_bias takes, on the
+    /// sampler's device (the tail half's): one table per conversation slot (0 .. seq_count()-1), rewritten for each
+    /// request that names one.  nullptr for an empty list (and nullptr + err on failure).
+    const float* logit_bias_table(int slot, const std::vector<std::pair<int32_t, float>>& bias, std::string& err);
     /// Zeroes R, every KDA state and every DSA cache: the next `forward` starts a fresh sequence.
     void reset();
 
@@ -284,6 +299,8 @@ public:
     bool defer_lane_ = false;
     std::vector<float> hop_;                               // the boundary residual staging buffer
     int* d_tok_ = nullptr;                                 // the sampler's one-int output, on dev_
+    std::vector<float*> bias_tab_;                         // logit_bias_table's tables (on the tail's device)
+    int bias_dev_ = -1;                                    // ... that device
     bool step_layers(int64_t p, std::string& err);
     // ---- the cross-token pipeline: with a split and more than one token to feed (a teacher-forced
     // prompt), the next token's first half is queued on device 0 BEFORE the host waits for this
@@ -466,6 +483,9 @@ public:
     std::vector<int> dsa_layers() const;                   // this half's DSA layers (NextN block first), slot order
     void snap_pool_copy(bool restore);
     int64_t snap_pos_ = -1;
+    std::vector<std::vector<float>> ckpt_buf_;             // ckpt_save's checkpoints (this half): KDA runs, pool rows
+    std::vector<int64_t> ckpt_pos_;                        // ... their positions (-1: none)
+    void ckpt_pool_copy(int64_t pos, float* host, bool restore);   // the open pool's rows at pos <-> host
     std::string pack_dir_;
     std::string profile_path_;                             // --expert-profile (empty: the pack's own files)
     std::vector<std::pair<int32_t, int32_t>> profile_;     // its ranked (layer, expert) pairs, read by fast_setup
