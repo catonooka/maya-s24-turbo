@@ -421,6 +421,7 @@ public:
     bool fast_mode_ = false;                               // decided at load (STRATA_GLM_SLOW=1 turns it off)
     bool host_logits_ = true;
     int last_tok_ = -1;                                    // the greedy argmax of the last fast forward
+    const strata::kernels::SamplerParams* mtp_sample_ = nullptr;   // decode_spec, STRATA_GLM_SPEC_SAMPLE: fast_mtp DRAWS
     int32_t force_tok_ = -1;                               // force_next()
     std::map<std::string, const uint16_t*> w16_;           // the pack's big BF16 rows, kept BF16 (fast mode)
     bool fast_setup(std::string& err);
@@ -452,6 +453,7 @@ public:
     void fast_ahead_reader();
     bool fast_boundary(std::string& err);                  // between tokens: apply finished promotions
     int fast_sample(strata::kernels::SamplerParams& sp, std::string& err);   // this half's logits, sampled on its stream
+    int fast_sample_verify(strata::kernels::SamplerParams& sp, std::string& err);   // speculative sampling's verify
     int64_t ram_budget_ = -1;                              // bytes of pinned RAM tier for this half (-1: derive)
     float* snap_ = nullptr;                                // the saved KDA states + conv histories (this half)
     // the DSA indexer's key / gate caches (ik, ig) are read only to pool each kpool-position block, so the fast path

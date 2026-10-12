@@ -270,6 +270,7 @@ struct Glm5Model::FastState {
     float* mtp_logits = nullptr;
     int* mtp_tok = nullptr;
     int* mtp_tok_h = nullptr;    // pinned
+    void* spec_q = nullptr;      // speculative sampling (STRATA_GLM_SPEC_SAMPLE): the draft's kept list, a device SpecList
     cudaEvent_t ev_mtp = nullptr;
     // routing
     gf::MoeDev md;

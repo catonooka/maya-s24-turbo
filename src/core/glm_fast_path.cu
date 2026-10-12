@@ -3065,6 +3065,7 @@ void Glm5Model::fast_destroy() {
     if (F->mtp_logits) cudaFree(F->mtp_logits);
     if (F->mtp_tok) cudaFree(F->mtp_tok);
     if (F->mtp_tok_h) cudaFreeHost(F->mtp_tok_h);
+    if (F->spec_q) cudaFree(F->spec_q);
     if (F->ev_mtp) cudaEventDestroy(F->ev_mtp);
     if (F->pool) cudaFree(F->pool);
     for (uint8_t* p : F->pool_more) cudaFree(p);
@@ -4814,7 +4815,11 @@ bool Glm5Model::fast_mtp(int64_t p, int32_t next_tok, std::string& err) {
         err = "glm mtp: the head";
         return false;
     }
-    gf::argmax(F->mtp_logits, g.n_vocab, F->mtp_tok, s);
+    if (mtp_sample_ != nullptr && F->spec_q != nullptr)   // speculative sampling (decode_spec): the draft is DRAWN
+        strata::kernels::sample_draft(F->mtp_logits, 1, (int) g.n_vocab, *mtp_sample_,
+                                      (strata::kernels::SpecList*) F->spec_q, F->mtp_tok, s);
+    else
+        gf::argmax(F->mtp_logits, g.n_vocab, F->mtp_tok, s);
     cudaMemcpyAsync(F->mtp_tok_h, F->mtp_tok, sizeof(int), cudaMemcpyDeviceToHost, s);
     cudaEventRecord(F->ev_mtp, s);
     return true;
@@ -4831,6 +4836,23 @@ int Glm5Model::fast_sample(strata::kernels::SamplerParams& sp, std::string& err)
     strata::kernels::sample_tokens(sc_ + sc_logits, 1, (int) g_.n_vocab, nullptr, 0, sp, d_tok_, F->cs);
     cudaMemcpyAsync(F->tok_h, d_tok_, sizeof(int), cudaMemcpyDeviceToHost, F->cs);
     if (!glmfast::cuda_ok(cudaStreamSynchronize(F->cs), "glm sampler", err) || !F->route_ok(err)) return -1;
+    return F->tok_h[0];
+}
+
+// Speculative sampling's verify (decode_spec, STRATA_GLM_SPEC_SAMPLE=1): this half's logits and the draft its NextN
+// block drew (mtp_tok, the list it was drawn from in spec_q) -> the draft with probability min(1, p/q), else a draw from
+// max(0, p - q); distributed as fast_sample's draw.  Same stream, same read-back as fast_sample.
+int Glm5Model::fast_sample_verify(strata::kernels::SamplerParams& sp, std::string& err) {
+    FastState* F = fast_;
+    cudaSetDevice(dev_);
+    if (F->spec_q == nullptr) {
+        err = "glm sampler (verify): no draft list";
+        return -1;
+    }
+    strata::kernels::sample_verify(sc_ + sc_logits, 1, (int) g_.n_vocab, sp, (const strata::kernels::SpecList*) F->spec_q,
+                                   F->mtp_tok, d_tok_, F->cs);
+    cudaMemcpyAsync(F->tok_h, d_tok_, sizeof(int), cudaMemcpyDeviceToHost, F->cs);
+    if (!glmfast::cuda_ok(cudaStreamSynchronize(F->cs), "glm sampler (verify)", err) || !F->route_ok(err)) return -1;
     return F->tok_h[0];
 }
 
@@ -5142,6 +5164,33 @@ bool Glm5Model::decode_spec(strata::kernels::SamplerParams& sp, int64_t max_new,
         cudaSetDevice(dev_);
         return true;
     };
+    // STRATA_GLM_SPEC_SAMPLE=1 (opt-in): SPECULATIVE SAMPLING for sampled requests - the NextN block's draft is
+    // DRAWN from its own distribution q and the model's token is the draft with probability min(1, p/q), else a draw
+    // from max(0, p - q): the tokens keep the plain draw's distribution exactly, and a draft stands sum(min(p, q)) of
+    // the time instead of p(argmax q).  A fixed seed still gives the same answer - but not the plain draw's answer.
+    // Greedy requests (and penalties, which this path does not take) keep the argmax draft and the exact match.
+    static const bool spec_sample_env =
+        getenv("STRATA_GLM_SPEC_SAMPLE") != nullptr && std::atoi(getenv("STRATA_GLM_SPEC_SAMPLE")) != 0;
+    const bool spec_sample = spec_sample_env && !sp.greedy && sp.temperature > 0.0f && sp.penalty_last_n <= 0;
+    if (spec_sample && TL->fast_->spec_q == nullptr) {
+        cudaSetDevice(TL->dev_);
+        if (cudaMalloc(&TL->fast_->spec_q, sizeof(strata::kernels::SpecList)) != cudaSuccess) {
+            cudaGetLastError();
+            TL->fast_->spec_q = nullptr;
+            cudaSetDevice(dev_);
+            err = "glm spec: the speculative-sampling list did not allocate";
+            return false;
+        }
+        cudaSetDevice(dev_);
+        std::fprintf(stderr, "glm spec: speculative sampling ON (STRATA_GLM_SPEC_SAMPLE) - sampled requests draw the draft "
+                             "from the draft block and keep it with min(1, p/q)\n");
+    }
+    struct MtpSampleOff {   // fast_mtp draws only inside this request's decode
+        Glm5Model* m;
+        ~MtpSampleOff() { if (m != nullptr) m->mtp_sample_ = nullptr; }
+    } mtp_sample_off{spec_sample ? TL : nullptr};
+    if (spec_sample) TL->mtp_sample_ = &sp;
+    bool have_draft = false;   // the verify needs a draft drawn for its position: none before the first one
     // the tail's token for its last position: the argmax it left, or a sample from its logits
     const auto take = [&](int& y) -> bool {
         if (sp.greedy) {
@@ -5149,7 +5198,8 @@ bool Glm5Model::decode_spec(strata::kernels::SamplerParams& sp, int64_t max_new,
             if (!glmfast::wait_event(TL->fast_->ev_done, "glm spec token", err)) return false;
             y = TL->fast_->tok_h[0];
         } else {
-            y = TL->fast_sample(sp, err);   // the tail group's last part holds the logits
+            // the tail group's last part holds the logits (and, with speculative sampling, the draft's list)
+            y = (spec_sample && have_draft) ? TL->fast_sample_verify(sp, err) : TL->fast_sample(sp, err);
             if (y < 0) return false;
         }
         for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get())
@@ -5164,6 +5214,7 @@ bool Glm5Model::decode_spec(strata::kernels::SamplerParams& sp, int64_t max_new,
         if (!TL->fast_mtp(p, next, err)) return false;
         if (!glmfast::wait_event(TL->fast_->ev_mtp, "glm spec draft", err) || !TL->fast_->route_ok(err)) return false;
         d = TL->fast_->mtp_tok_h[0];
+        have_draft = true;
         return true;
     };
     const auto check = [&]() -> bool {
