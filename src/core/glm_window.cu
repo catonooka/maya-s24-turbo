@@ -835,8 +835,9 @@ bool Glm5Model::window(const int32_t* tokens, int T, int32_t* out, std::string& 
             // and group B slots 4-7 (a staggered window's layer halves: fast_moe_window)
             cudaMemsetAsync(Wm.scr, 0, 4 * sizeof(unsigned int), m->fast_->cs);
             if (Wm.scr_h != nullptr) {
-                Wm.scr_h[8] = 0xF0u;
-                Wm.scr_h[9] = 0x0Fu;
+                // (bits 8-15: the group's own slots, where a clash's fallback stays - moe_route)
+                Wm.scr_h[8] = 0xF0u | (0x0Fu << 8);
+                Wm.scr_h[9] = 0x0Fu | (0xF0u << 8);
                 cudaMemcpyAsync(Wm.scr + 8, Wm.scr_h + 8, 2 * sizeof(unsigned int), cudaMemcpyHostToDevice,
                                 m->fast_->cs);
             }

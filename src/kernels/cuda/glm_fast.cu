@@ -1715,7 +1715,7 @@ __global__ void __launch_bounds__(256) mvc_kernel_bf16(const __grid_constant__ M
     for (int c = 0; c < kMaxMvCols; ++c)
         if (c < ncol) {
             const float v = warp_sum(s[c]);
-            if (lane == 0) J.y[c * J.y_cstride + row] = J.alpha * v + (J.bias ? J.bias[row] : 0.0f);
+            if (lane == 0) J.y[c * J.y_cstride + row] = mv_out(J.alpha, v, J.bias ? J.bias[row] : 0.0f);
         }
 }
 
@@ -1880,7 +1880,7 @@ __global__ void __launch_bounds__(WPB * 32) mv_rdna_kernel(const __grid_constant
                 if (row + r >= J.n_out) break;
                 const float bias = J.bias ? J.bias[row + r] : 0.0f;
 #pragma unroll
-                for (int t = 0; t < NT; ++t) J.y[(size_t) t * J.n_out + row + r] = J.alpha * s[r][t] + bias;
+                for (int t = 0; t < NT; ++t) J.y[(size_t) t * J.n_out + row + r] = mv_out(J.alpha, s[r][t], bias);
             }
         }
     } else {   // kTypeBF16
@@ -1891,7 +1891,7 @@ __global__ void __launch_bounds__(WPB * 32) mv_rdna_kernel(const __grid_constant
         if (lane == 0) {
             const float bias = J.bias ? J.bias[row] : 0.0f;
 #pragma unroll
-            for (int t = 0; t < NT; ++t) J.y[(size_t) t * J.n_out + row] = J.alpha * s[t] + bias;
+            for (int t = 0; t < NT; ++t) J.y[(size_t) t * J.n_out + row] = mv_out(J.alpha, s[t], bias);
         }
     }
 }
@@ -3118,7 +3118,19 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
                             ptr = a.d.scratch[j];
                         } else {
                             a.scr_used[1] |= 0x80000000u;   // sticky for the window (word 0 resets each layer)
-                            ptr = a.d.scratch[i];
+                            // a staggered group (bits 8-15 of the word: its own slots) reuses one of ITS slots: the
+                            // other group's still hold the experts of a layer it has yet to compute - maybe of another
+                            // type, whose garbage can be non-finite, and after a non-finite route every later one is
+                            // refused (the redo too)
+                            const unsigned int own = (u >> 8) & 0xFFu;
+                            int f = i;
+                            if (own != 0u) {
+                                const int n = i % __popc(own);
+                                f = 0;
+                                for (int c = 0; f < 8; ++f)
+                                    if (((own >> f) & 1u) && c++ == n) break;
+                            }
+                            ptr = a.d.scratch[f];
                         }
                     } else {
                         ptr = a.d.scratch[i];
