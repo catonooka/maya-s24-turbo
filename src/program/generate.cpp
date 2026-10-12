@@ -1445,9 +1445,9 @@ static int glm_pack_generate(const Options& o) {
         // the periodic ones, but none within 512 tokens of a turn boundary (that one holds the same state, more useful)
         if (ckpt_every > 0)
             for (size_t p = from + (size_t) ckpt_every; p < end; p += (size_t) ckpt_every) {
-                bool near = false;
-                for (const size_t t : turns) near = near || (p + 512 > t && t + 512 > p);
-                if (!near) at.push_back(p);
+                bool by_turn = false;   // (not `near`: Windows' headers define it away)
+                for (const size_t t : turns) by_turn = by_turn || (p + 512 > t && t + 512 > p);
+                if (!by_turn) at.push_back(p);
             }
         std::sort(at.begin(), at.end());
         at.erase(std::unique(at.begin(), at.end()), at.end());
