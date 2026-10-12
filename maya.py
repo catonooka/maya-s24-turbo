@@ -916,10 +916,14 @@ def download_dir(models: Path, quant: str) -> Path:
 
 def choose_draft(a, pc: dict, inst: dict) -> str:
     """"mtp" (the model's own MTP block; the default) or "dflash2" (a DFlash2 drafter, downloaded in step 5): --draft,
-    else asked - the earlier setup's answer is the default.  AMD (HIP) setups keep MTP: DFlash2 is measured on NVIDIA."""
+    else asked - the earlier setup's answer is the default.  AMD (HIP) setups keep MTP: DFlash2 is measured on NVIDIA.
+    So do NVIDIA GPUs before sm_80 (RTX 30 / A100): on Tesla V100s DFlash2 decoded slower than the MTP block (one GPU
+    and two)."""
     if getattr(a, "draft", None):
         return a.draft
     if pc.get("backend") == "hip":
+        return "mtp"
+    if pc.get("archs") and min(int(x) for x in pc["archs"]) < 80:
         return "mtp"
     default = inst.get("draft") if inst.get("draft") in DRAFTS else "mtp"
     rows = [("the model's MTP block", "default",

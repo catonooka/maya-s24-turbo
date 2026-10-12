@@ -278,6 +278,14 @@ class DraftChoice(unittest.TestCase):
         with patch.object(maya, "choose", side_effect=AssertionError("asked")):
             self.assertEqual(self.choose({"draft": "dflash2"}, pc={"backend": "hip"}, yes=False), "mtp")
 
+    def test_gpus_before_sm80_keep_mtp_without_asking(self):
+        with patch.object(maya, "choose", side_effect=AssertionError("asked")):
+            self.assertEqual(self.choose({"draft": "dflash2"}, pc={"backend": "cuda", "archs": [70, 70]}, yes=False),
+                             "mtp")
+            self.assertEqual(self.choose({}, pc={"backend": "cuda", "archs": [86, 75]}, yes=False), "mtp")
+        self.assertEqual(self.choose({}, pc={"backend": "cuda", "archs": [70]}, draft="dflash2"), "dflash2")
+        self.assertEqual(self.choose({"draft": "dflash2"}, pc={"backend": "cuda", "archs": [86, 120]}), "dflash2")
+
     def test_the_answer_typed(self):
         with patch.object(maya, "ask", return_value="2"):
             self.assertEqual(self.choose({}, yes=False), "dflash2")

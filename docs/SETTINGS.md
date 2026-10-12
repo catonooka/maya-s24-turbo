@@ -130,9 +130,13 @@ the size. With N above 1 the engine decodes without a [DFlash2 drafter](#draftin
 
 ## Drafting with DFlash2
 
-`./maya.sh --setup --draft dflash2` downloads the drafter (0.7 GB, [on Hugging Face](https://huggingface.co/Anbeeld/GLM-5.3-Flash-DFlash2-GGUF);
-its license is CC BY-NC-ND 4.0: non-commercial use only) and passes it as `--dflash GGUF` in the config's `"args"`;
-NVIDIA GPUs, one request at a time (`--parallel 1`). A DFlash2 drafter made for GLM-5.3-Flash - a small block drafter that reads
+`./maya.sh --setup --draft dflash2` downloads the drafter (0.7 GB,
+[on Hugging Face](https://huggingface.co/Anbeeld/GLM-5.3-Flash-DFlash2-GGUF); its license is CC BY-NC-ND 4.0:
+non-commercial use only) and passes it as `--dflash GGUF` in the config's `"args"`; NVIDIA GPUs, one request at a time
+(`--parallel 1`). The setup offers it on RTX 30 / A100 and newer (sm_80): on Tesla V100s it decoded slower than the MTP
+block, on one GPU and on two.
+
+A DFlash2 drafter made for GLM-5.3-Flash - a small block drafter that reads
 the model's hidden states at five of its layers and drafts up to 7 tokens in one pass, with the model's own embedding
 and head - takes the place of the MTP block: with it the engine does not load the MTP block. Each round it drafts a
 block, one verify window checks the drafts, and the longest right prefix is kept with the model's own next token - the

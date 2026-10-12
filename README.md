@@ -100,10 +100,10 @@ builds everything once (20-40 minutes plus the download) and **starts the model*
 - **Several requests at once:** `./maya.sh --parallel 4` (up to 8) answers them together - on one GPU the model's
   dense weights are read once for all of them: x1.41 in all for two on a V100, x2.02 for four with every expert in
   GPU memory ([how](docs/SETTINGS.md#several-requests-at-once)).
-- **Faster answers with a DFlash2 drafter:** `./maya.sh --setup --draft dflash2` (NVIDIA) downloads a small drafter
-  that drafts up to 7 tokens a round and gives the same answers - Maya-L +44% on nine GPUs and +12% on two (against
-  the MTP block), +19% on one RTX 3090 ([how](docs/SETTINGS.md#drafting-with-dflash2)). The drafter's license is
-  non-commercial (CC BY-NC-ND 4.0).
+- **Faster answers with a DFlash2 drafter:** `./maya.sh --setup --draft dflash2` (NVIDIA RTX 30 / A100 and newer)
+  downloads a small drafter that drafts up to 7 tokens a round and gives the same answers - Maya-L +44% on nine GPUs
+  and +12% on two (against the MTP block), +19% on one RTX 3090 ([how](docs/SETTINGS.md#drafting-with-dflash2)). The
+  drafter's license is non-commercial (CC BY-NC-ND 4.0).
 
 ## Something went wrong?
 
