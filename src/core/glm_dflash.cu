@@ -1029,19 +1029,25 @@ void GlmDflash::staged(int64_t p, int k) {
     m.st_mask[s] |= 1u << k;
 }
 
-void GlmDflash::reset() {
+void GlmDflash::reset(int64_t from) {
     Impl& m = *d_;
     {
         std::lock_guard<std::mutex> lk(m.mu);
-        std::fill(m.st_pos.begin(), m.st_pos.end(), -1);
-        std::fill(m.st_mask.begin(), m.st_mask.end(), 0u);
+        for (size_t s = 0; s < m.st_pos.size(); ++s)
+            if (m.st_pos[s] >= from) {
+                m.st_pos[s] = -1;
+                m.st_mask[s] = 0u;
+            }
     }
-    std::fill(m.kv_pos_h.begin(), m.kv_pos_h.end(), -1);
+    // (inject() skips a position whose slot already holds it: a stale one would stay for good)
+    for (int64_t& p : m.kv_pos_h)
+        if (p >= from) p = -1;
+    static_assert(sizeof(int64_t) == sizeof(long long), "kv_pos_h mirrors kv_pos");
     int cur = 0;
     cudaGetDevice(&cur);
     cudaSetDevice(m.dev);
-    cudaMemset(m.kv_pos, 0xff, (size_t) m.ring * sizeof(long long));
     cudaDeviceSynchronize();
+    cudaMemcpy(m.kv_pos, m.kv_pos_h.data(), (size_t) m.ring * sizeof(long long), cudaMemcpyHostToDevice);
     cudaSetDevice(cur);
 }
 

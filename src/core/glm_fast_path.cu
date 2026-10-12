@@ -3284,9 +3284,10 @@ void Glm5Model::fast_service() {
             last_route = std::chrono::steady_clock::now();
         }
         std::atomic_thread_fence(std::memory_order_acquire);
-        // (the lanes are made at the CPU lane's setup, after this thread started)
-        const bool held = win_merge && rq->win_n > 0 && F->cpu_ans_h != nullptr && F->win_lane[0] != nullptr &&
-                          F->win_lane[1] != nullptr;
+        // (the lanes are made at the CPU lane's setup, after this thread started; an EXL3 pack's routes go to the lanes
+        // a token each - win_cpu_merged runs the native kernels only)
+        const bool held = win_merge && !exl3_ && rq->win_n > 0 && F->cpu_ans_h != nullptr &&
+                          F->win_lane[0] != nullptr && F->win_lane[1] != nullptr;
         if (rq->error != 0) {
             if (held) {   // a window token's invalid route: nothing to compute, but it may be the layer's last
                 ++w_held;
@@ -5374,6 +5375,8 @@ bool Glm5Model::snapshot_restore() {
         cudaStreamSynchronize(m->fast_->cs);
         m->pos_ = m->snap_pos_;
     }
+    // the drafter's positions from here on belong to the previous continuation
+    if (cap_d_ != nullptr) cap_d_->reset(pos_);
     cudaSetDevice(dev_);
     return true;
 }
