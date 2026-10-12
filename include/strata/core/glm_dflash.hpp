@@ -77,8 +77,9 @@ public:
     //  confidences up to it is at least p_cum)
     bool draft_finish(std::vector<int32_t>& out, std::string& err, std::vector<float>* conf = nullptr, int n_min = 0,
                       float p_cum = 0.0f);
-    /// Forget every cached position (a new sequence, or a state loaded from elsewhere).
-    void reset();
+    /// Forget every cached position at or past `from` (0: a new sequence, or a state loaded from elsewhere; else the
+    /// sequence went back to `from` and the positions after it will hold other tokens).
+    void reset(int64_t from = 0);
     /// The last draft's mask rows (tests): their final normed hidden states (n x hidden), their candidates and logits
     /// (n x top_k), the walk's picks and confidences (n).
     bool last_rows(int n, std::vector<float>& hidden, std::vector<int>& cand, std::vector<float>& logit,

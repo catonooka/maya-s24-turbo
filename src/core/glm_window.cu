@@ -14,8 +14,8 @@
 // cached keys when its pool's last position is processed, and queries read only completed pools).
 #include "glm_fast_state.hpp"
 #include "strata/core/glm_model.hpp"
+#include "strata/kernels/exl3.hpp"
 #include "strata/kernels/glm_fast.hpp"
-#include "strata/kernels/iq_kernels.hpp"
 
 #include "ggml.h"
 
@@ -398,12 +398,16 @@ bool Glm5Model::fast_dsa_window(int il, int64_t p0, int t0, int T, std::string& 
     }
     mark("dsa_prep");
     gf::MvJob j2[2];
-    j2[0] = cols({Ly.q_b.q, (const uint8_t*) W.qr_q + (size_t) t0 * W.qrq_s, nullptr,
-                  W.q + (size_t) t0 * g.n_head * g.qk_nope, nullptr, 1.0f, Ly.q_b.type, g.q_lora, g.n_head * g.qk_nope},
-                 W.qrq_s, 0, (int64_t) g.n_head * g.qk_nope);
-    j2[1] = cols({Ly.idx_q_b, nullptr, W.qr + (size_t) t0 * g.q_lora, W.iq + (size_t) t0 * g.idx_heads * g.idx_key, nullptr,
-                  1.0f, gf::kTypeBF16, g.q_lora, g.idx_heads * g.idx_key}, 0, g.q_lora,
-                 (int64_t) g.idx_heads * g.idx_key);
+    const void* qrq0 = (const uint8_t*) W.qr_q + (size_t) t0 * W.qrq_s;
+    const float* qr0 = W.qr + (size_t) t0 * g.q_lora;
+    float* iq0 = W.iq + (size_t) t0 * g.idx_heads * g.idx_key;
+    j2[0] = cols({Ly.q_b.q, qrq0, qr0, W.q + (size_t) t0 * g.n_head * g.qk_nope, nullptr, 1.0f, Ly.q_b.type, g.q_lora,
+                  g.n_head * g.qk_nope}, W.qrq_s, g.q_lora, (int64_t) g.n_head * g.qk_nope);
+    j2[1] = Ly.idx_q_b_x.q != nullptr
+                ? cols({Ly.idx_q_b_x.q, qrq0, qr0, iq0, nullptr, 1.0f, Ly.idx_q_b_x.type, g.q_lora,
+                        g.idx_heads * g.idx_key}, W.qrq_s, g.q_lora, (int64_t) g.idx_heads * g.idx_key)
+                : cols({Ly.idx_q_b, nullptr, qr0, iq0, nullptr, 1.0f, gf::kTypeBF16, g.q_lora, g.idx_heads * g.idx_key},
+                       0, g.q_lora, (int64_t) g.idx_heads * g.idx_key);
     if (!gf::mv(j2, 2, s)) { err = "glm window: dsa q"; return false; }
     mark("dsa_q_mv");
     // the absorbed MLA: wk_b . q of every token at once, each token's attention over its own selected cells, then
@@ -473,8 +477,9 @@ bool Glm5Model::fast_moe_window(int il, int t0, int T, int part, int gid, std::s
         const void* xq0 = (const uint8_t*) W.xq + (size_t) t0 * W.xq_s;
         j[0] = {Ly.router, nullptr, W.x + (size_t) t0 * E, W.rlog + (size_t) t0 * g.n_expert, nullptr, 1.0f, gf::kTypeBF16, E,
                 g.n_expert};
-        j[1] = {Ly.sh_gate.q, xq0, nullptr, W.sh_g + (size_t) t0 * FFs, nullptr, 1.0f, Ly.sh_gate.type, E, FFs};
-        j[2] = {Ly.sh_up.q, xq0, nullptr, W.sh_u + (size_t) t0 * FFs, nullptr, 1.0f, Ly.sh_up.type, E, FFs};
+        const float* x0 = W.x + (size_t) t0 * E;
+        j[1] = {Ly.sh_gate.q, xq0, x0, W.sh_g + (size_t) t0 * FFs, nullptr, 1.0f, Ly.sh_gate.type, E, FFs};
+        j[2] = {Ly.sh_up.q, xq0, x0, W.sh_u + (size_t) t0 * FFs, nullptr, 1.0f, Ly.sh_up.type, E, FFs};
         const int64_t ys[3] = {g.n_expert, FFs, FFs};
         for (int i = 0; i < 3; ++i) {
             j[i].ncol = T;
@@ -489,6 +494,20 @@ bool Glm5Model::fast_moe_window(int il, int t0, int T, int part, int gid, std::s
     md.pf_src = F->pf_buf[il & 1];
     md.pf_dst = F->pf_buf[il & 1] + 8;
     md.pf_n = F->pf_n_buf[il & 1];
+    namespace x3 = strata::kernels::exl3;
+    const auto x3_args = [&](const gf::MoeDev& m) {
+        x3::MoeArgs a;
+        a.plan_ptr = m.plan_ptr;
+        a.plan_w = m.plan_w;
+        a.cpu_part = m.cpu_part;
+        a.cpu_flag = m.cpu_flag;
+        a.lay = Ly.xl;
+        a.k = g.n_exp_used;
+        a.n_embd = E;
+        a.n_ff = g.n_ff_exp;
+        a.limit = g.swiglu_exp;
+        return a;
+    };
     const bool lane = F->cpu_plan != 0ull && F->cpu_fmt[(size_t) il].n_ff > 0;
     static const int promote_min = [] {
         const char* v = getenv("STRATA_GLM_PROMOTE_MIN");
@@ -563,32 +582,42 @@ bool Glm5Model::fast_moe_window(int il, int t0, int T, int part, int gid, std::s
             if (!gf::mv(&jd, 1, s)) { err = "glm window: shared expert down"; return false; }
             sh_out = W.sh_out + (size_t) t0 * E;
         }
-        gf::MoeWin mw;
-        mw.plan_ptr = W.mplan_ptr + 8 * t0;
-        mw.plan_w = W.mplan_w + 8 * t0;
-        mw.cpu_part = W.mcpu_part + (size_t) E * t0;
-        mw.cpu_flag = W.mcpu_flag + t0;
-        mw.xq = (const uint8_t*) W.xq + (size_t) t0 * W.xq_s;
-        mw.xq_stride = W.xq_s;
-        mw.hq = W.whq;
-        mw.part = W.wpart;
-        mw.sh_out = sh_out;
-        mw.out = W.ffn + (size_t) t0 * E;
-        mw.out_stride = (size_t) E;
-        mw.grp_ptr = W.grp_ptr;
-        mw.grp_start = W.grp_start;
-        mw.grp_ent = W.grp_ent;
-        mw.n_groups = W.n_groups;
-        mw.T = T;
-        mw.k = g.n_exp_used;
-        mw.n_embd = E;
-        mw.n_ff = g.n_ff_exp;
-        mw.limit = g.swiglu_exp;
-        mw.down_off = Ly.down_off;
-        if (!gf::moe_win_experts(Ly.gu_type, Ly.d_type, mw, s)) {
-            err = "glm window: the batched experts (types " + std::to_string(Ly.gu_type) + " / " +
-                  std::to_string(Ly.d_type) + ")";
-            return false;
+        if (Ly.exl3) {
+            // EXL3: each token's routed experts on the token path's kernels (its own plan, F32 input and host part)
+            for (int t = t0; t < t0 + T; ++t) {
+                const x3::MoeArgs xa = x3_args(tok_dev(t));
+                x3::moe_gate_up(xa, W.x + (size_t) t * E, nullptr, s);
+                x3::moe_down(xa, nullptr, sh_out != nullptr ? sh_out + (size_t) (t - t0) * E : nullptr,
+                             W.ffn + (size_t) t * E, s);
+            }
+        } else {
+            gf::MoeWin mw;
+            mw.plan_ptr = W.mplan_ptr + 8 * t0;
+            mw.plan_w = W.mplan_w + 8 * t0;
+            mw.cpu_part = W.mcpu_part + (size_t) E * t0;
+            mw.cpu_flag = W.mcpu_flag + t0;
+            mw.xq = (const uint8_t*) W.xq + (size_t) t0 * W.xq_s;
+            mw.xq_stride = W.xq_s;
+            mw.hq = W.whq;
+            mw.part = W.wpart;
+            mw.sh_out = sh_out;
+            mw.out = W.ffn + (size_t) t0 * E;
+            mw.out_stride = (size_t) E;
+            mw.grp_ptr = W.grp_ptr;
+            mw.grp_start = W.grp_start;
+            mw.grp_ent = W.grp_ent;
+            mw.n_groups = W.n_groups;
+            mw.T = T;
+            mw.k = g.n_exp_used;
+            mw.n_embd = E;
+            mw.n_ff = g.n_ff_exp;
+            mw.limit = g.swiglu_exp;
+            mw.down_off = Ly.down_off;
+            if (!gf::moe_win_experts(Ly.gu_type, Ly.d_type, mw, s)) {
+                err = "glm window: the batched experts (types " + std::to_string(Ly.gu_type) + " / " +
+                      std::to_string(Ly.d_type) + ")";
+                return false;
+            }
         }
         if (prof_b) W.mark("moe_experts", s);
         if (lane)
@@ -611,10 +640,21 @@ bool Glm5Model::fast_moe_window(int il, int t0, int T, int part, int gid, std::s
         ++F->expected;
         gf::moe_wait(md, E, s);
         gf::moe_fetch(md, g.n_exp_used, Ly.blob, s);
-        gf::moe_gate_up(Ly.gu_type, md, g.n_exp_used, E, g.n_ff_exp, g.swiglu_exp, xq, F->hq, Ly.sh_down.q,
-                        Ly.sh_down.type, F->sh_hq, FFs, F->sh_out, s);
-        gf::moe_down(Ly.d_type, md, g.n_exp_used, E, g.n_ff_exp, Ly.down_off, F->hq,
-                     Ly.sh_down.q != nullptr ? F->sh_out : nullptr, ffn, s);
+        if (Ly.exl3) {
+            // (fast_moe_experts' EXL3 order: the shared expert's down first, then the routed experts over the F32 input)
+            if (Ly.sh_down.q != nullptr) {
+                const gf::MvJob sd = {Ly.sh_down.q, F->sh_hq, nullptr, F->sh_out, nullptr, 1.0f, Ly.sh_down.type, FFs, E};
+                if (!gf::mv(&sd, 1, s)) { err = "glm window: shared expert down"; return false; }
+            }
+            const x3::MoeArgs xa = x3_args(md);
+            x3::moe_gate_up(xa, x, nullptr, s);
+            x3::moe_down(xa, nullptr, Ly.sh_down.q != nullptr ? F->sh_out : nullptr, ffn, s);
+        } else {
+            gf::moe_gate_up(Ly.gu_type, md, g.n_exp_used, E, g.n_ff_exp, g.swiglu_exp, xq, F->hq, Ly.sh_down.q,
+                            Ly.sh_down.type, F->sh_hq, FFs, F->sh_out, s);
+            gf::moe_down(Ly.d_type, md, g.n_exp_used, E, g.n_ff_exp, Ly.down_off, F->hq,
+                         Ly.sh_down.q != nullptr ? F->sh_out : nullptr, ffn, s);
+        }
         if (lane) gf::moe_cpu_wait(md, E, ffn, s);
         if (W.uid != nullptr)
             cudaMemcpyAsync(W.uid + ((size_t) (il - l0_) * kWinMax + t) * 8, md.plan_id, 8 * sizeof(int),
@@ -698,9 +738,9 @@ bool Glm5Model::fast_window_layers(int64_t p0, int T, std::string& err) {
             const void* xq0 = (const uint8_t*) W.xq + (size_t) t0 * W.xq_s;
             const float* x0 = W.x + (size_t) t0 * E;
             gf::MvJob j[6];
-            j[0] = {Ly.q.q, xq0, nullptr, k0.proj[0], nullptr, 1.0f, Ly.q.type, E, DI};
-            j[1] = {Ly.k.q, xq0, nullptr, k0.proj[1], nullptr, 1.0f, Ly.k.type, E, DI};
-            j[2] = {Ly.v.q, xq0, nullptr, k0.proj[2], nullptr, 1.0f, Ly.v.type, E, DI};
+            j[0] = {Ly.q.q, xq0, x0, k0.proj[0], nullptr, 1.0f, Ly.q.type, E, DI};
+            j[1] = {Ly.k.q, xq0, x0, k0.proj[1], nullptr, 1.0f, Ly.k.type, E, DI};
+            j[2] = {Ly.v.q, xq0, x0, k0.proj[2], nullptr, 1.0f, Ly.v.type, E, DI};
             j[3] = {Ly.f_a, nullptr, x0, k0.fa, nullptr, 1.0f, gf::kTypeBF16, E, g.kda_head_dim};
             j[4] = {Ly.g_a, nullptr, x0, k0.ga, nullptr, 1.0f, gf::kTypeBF16, E, g.kda_head_dim};
             j[5] = {Ly.beta, nullptr, x0, k0.beta, nullptr, 1.0f, gf::kTypeBF16, E, g.n_head};
@@ -725,12 +765,13 @@ bool Glm5Model::fast_window_layers(int64_t p0, int T, std::string& err) {
         mark("hc");
         if (!Ly.moe) {
             const void* xq0 = (const uint8_t*) W.xq + (size_t) t0 * W.xq_s;
+            const float* x0 = W.x + (size_t) t0 * E;
             gf::MvJob j[2];
-            j[0] = {Ly.ffn_gate.q, xq0, nullptr, W.dg + (size_t) t0 * g.n_ff_dense, nullptr, 1.0f, Ly.ffn_gate.type, E,
+            j[0] = {Ly.ffn_gate.q, xq0, x0, W.dg + (size_t) t0 * g.n_ff_dense, nullptr, 1.0f, Ly.ffn_gate.type, E,
                     g.n_ff_dense};
-            j[1] = {Ly.ffn_up.q, xq0, nullptr, W.du + (size_t) t0 * g.n_ff_dense, nullptr, 1.0f, Ly.ffn_up.type, E,
+            j[1] = {Ly.ffn_up.q, xq0, x0, W.du + (size_t) t0 * g.n_ff_dense, nullptr, 1.0f, Ly.ffn_up.type, E,
                     g.n_ff_dense};
-            for (auto& jj : j) cols(jj, n, (int64_t) W.xq_s, 0, g.n_ff_dense);
+            for (auto& jj : j) cols(jj, n, (int64_t) W.xq_s, E, g.n_ff_dense);
             if (!gf::mv(j, 2, s)) { err = "glm window: dense ffn"; return false; }
             for (int t = t0; t < t0 + n; ++t)
                 gf::swiglu_q8(W.dg + (size_t) t * g.n_ff_dense, W.du + (size_t) t * g.n_ff_dense, g.swiglu_shexp,
@@ -859,7 +900,7 @@ bool Glm5Model::window(const int32_t* tokens, int T, int32_t* out, std::string& 
         }
         for (int t = 0; t < T; ++t) {
             float* row = W.emb_h + (size_t) t * E;
-            tt->to_float(pack_emb_src_ + (size_t) tokens[t] * strata::kernels::iq_row_bytes(pack_emb_type_, E), row, E);
+            tt->to_float(pack_emb_src_ + (size_t) tokens[t] * ggml_row_size((ggml_type) pack_emb_type_, E), row, E);
             if (const float* img = image_row(p0 + t)) std::memcpy(row, img, (size_t) E * sizeof(float));
         }
         cudaMemcpyAsync(W.emb, W.emb_h, (size_t) T * E * sizeof(float), cudaMemcpyHostToDevice, F->cs);
@@ -1225,7 +1266,7 @@ bool Glm5Model::win_pipe_push(int32_t token, std::string& err) {
         return false;
     }
     float* row = W0.emb_h + (size_t) (W0.bank * kPipeMax + t) * E;
-    tt->to_float(pack_emb_src_ + (size_t) token * strata::kernels::iq_row_bytes(pack_emb_type_, E), row, E);
+    tt->to_float(pack_emb_src_ + (size_t) token * ggml_row_size((ggml_type) pack_emb_type_, E), row, E);
     if (const float* img = image_row(p)) std::memcpy(row, img, (size_t) E * sizeof(float));
     for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) m->fast_->win.T = t + 1;
     if (crew_ != nullptr && win_threads_on() && split_next_ != nullptr) {
