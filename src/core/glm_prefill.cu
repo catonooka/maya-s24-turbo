@@ -345,6 +345,15 @@ struct Glm5Model::PrefillState {
     uint8_t* gpin = nullptr;
     int nland = NG * GE;
     cudaEvent_t ev_ready[NG] = {}, ev_free[NG] = {};
+    // DUAL-LINK PROMPT (STRATA_GLM_DUAL_PREFILL=1, a two-GPU split whose halves run one after the other): the idle
+    // other GPU stages every second expert of a group - host -> its own (idle) gbuf over ITS PCIe link, then peer to
+    // peer into this gbuf over NVLink - so a group arrives through both links.  help: that GPU while this half runs
+    // (prefill_run sets it), ev_hready: its copies of group b landed (events on its device)
+    Glm5Model* help = nullptr;
+    int help_dev = -1;
+    cudaEvent_t ev_hready[NG] = {};
+    uint64_t staged_help = 0;
+    cudaEvent_t ev_hidle = nullptr;   // (on this GPU) its compute stream's queued work, before it helps the other
     std::vector<cudaEvent_t> ev_land;    // a landing slot's copy to the device ran: the reader may refill it
     // pinned host staging
     float* emb_h = nullptr;          // T x n_embd
@@ -1252,7 +1261,9 @@ void Glm5Model::prefill_destroy() {
     for (int b = 0; b < PrefillState::NG; ++b) {
         if (S->ev_ready[b]) cudaEventDestroy(S->ev_ready[b]);
         if (S->ev_free[b]) cudaEventDestroy(S->ev_free[b]);
+        if (S->ev_hready[b]) cudaEventDestroy(S->ev_hready[b]);
     }
+    if (S->ev_hidle) cudaEventDestroy(S->ev_hidle);
     for (auto e : S->ev_land)
         if (e) cudaEventDestroy(e);
     if (S->ev_hop) cudaEventDestroy(S->ev_hop);
@@ -2465,9 +2476,25 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
             const int b = (int) (gi % PrefillState::NG);
             uint8_t* gdst = S->gbuf + (size_t) b * PrefillState::GE * P.stride;
             cudaStreamWaitEvent(F->copy, S->ev_free[b], 0);
+            Glm5Model* const H = S->help;
+            bool h_used = false;
+            const size_t h_stride = H != nullptr ? H->pf_->gbuf_bytes / ((size_t) PrefillState::NG * PrefillState::GE) : 0;
             const int dk0 = dk;
             for (int j = 0; j < gr.n; ++j) {
                 const Staged& st = staged[(size_t) gr.first + j];
+                if (H != nullptr && (j & 1) && st.ram != nullptr && !st.dev && h_stride >= Ly.blob) {
+                    // through the other GPU's link: its gbuf slot (b, j), then peer to peer into ours
+                    uint8_t* hst = H->pf_->gbuf + ((size_t) b * PrefillState::GE + (size_t) j) * h_stride;
+                    cudaSetDevice(H->dev_);
+                    if (!h_used) cudaStreamWaitEvent(H->fast_->copy, S->ev_free[b], 0);
+                    cudaMemcpyAsync(hst, st.ram, Ly.blob, cudaMemcpyHostToDevice, H->fast_->copy);
+                    cudaMemcpyPeerAsync(gdst + (size_t) j * P.stride, dev_, hst, H->dev_, Ly.blob, H->fast_->copy);
+                    cudaSetDevice(dev_);
+                    h_used = true;
+                    ++S->staged_help;
+                    S->staged_ram += 1;
+                    continue;
+                }
                 const uint8_t* src = st.ram;
                 if (src == nullptr) {
                     const int gi2 = gidx[(size_t) dk];
@@ -2494,6 +2521,12 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
             (void) dk0;
             cudaEventRecord(S->ev_ready[b], F->copy);
             cudaStreamWaitEvent(s, S->ev_ready[b], 0);
+            if (h_used) {
+                cudaSetDevice(H->dev_);
+                cudaEventRecord(S->ev_hready[b], H->fast_->copy);
+                cudaSetDevice(dev_);
+                cudaStreamWaitEvent(s, S->ev_hready[b], 0);
+            }
             run_any(gdst, gr.n, P.stride, M.bounds + gr.b_off, S->h_bounds + gr.b_off, gr.r0);
             cudaEventRecord(S->ev_free[b], s);
             S->rows_staged += (uint64_t) gr.nrows;
@@ -2906,6 +2939,52 @@ bool Glm5Model::prefill(const std::vector<int32_t>& tokens, std::string& err, in
     return ok;
 }
 
+// DUAL-LINK PROMPT setup, once: STRATA_GLM_DUAL_PREFILL=1, two parts that reach each other's memory - peer access
+// both ways and the events each part's helper records on its own device.  false: the prompt stages as before.
+bool Glm5Model::dual_prefill_ready() {
+    static const bool want = getenv("STRATA_GLM_DUAL_PREFILL") != nullptr && std::atoi(getenv("STRATA_GLM_DUAL_PREFILL")) != 0;
+    Glm5Model* B = split_next_.get();
+    if (!want || B == nullptr || B->split_next_ != nullptr || pf_ == nullptr || B->pf_ == nullptr ||
+        pf_->gbuf == nullptr || B->pf_->gbuf == nullptr)
+        return false;
+    if (dual_pf_state_ != 0) return dual_pf_state_ > 0;
+    dual_pf_state_ = -1;
+    int ab = 0, ba = 0;
+    cudaDeviceCanAccessPeer(&ab, dev_, B->dev_);
+    cudaDeviceCanAccessPeer(&ba, B->dev_, dev_);
+    if (!ab || !ba) return false;
+    for (Glm5Model* m : {this, B}) {
+        Glm5Model* o = m == this ? B : this;
+        cudaSetDevice(m->dev_);
+        const cudaError_t pe = cudaDeviceEnablePeerAccess(o->dev_, 0);
+        cudaGetLastError();
+        if (pe != cudaSuccess && pe != cudaErrorPeerAccessAlreadyEnabled) {
+            cudaSetDevice(dev_);
+            return false;
+        }
+        // m's events: its own idle mark, and the ready marks of the copies the OTHER part makes for it (other's device)
+        if (cudaEventCreateWithFlags(&m->pf_->ev_hidle, cudaEventDisableTiming) != cudaSuccess) {
+            cudaSetDevice(dev_);
+            return false;
+        }
+    }
+    for (Glm5Model* m : {this, B}) {
+        Glm5Model* o = m == this ? B : this;
+        cudaSetDevice(o->dev_);
+        for (int b = 0; b < PrefillState::NG; ++b)
+            if (cudaEventCreateWithFlags(&m->pf_->ev_hready[b], cudaEventDisableTiming) != cudaSuccess) {
+                cudaSetDevice(dev_);
+                return false;
+            }
+        m->pf_->help_dev = o->dev_;
+    }
+    cudaSetDevice(dev_);
+    dual_pf_state_ = 1;
+    std::fprintf(stderr, "glm prefill: dual-link prompt on - a half's staged experts come through both GPUs' PCIe links "
+                         "(every second one via the waiting GPU and NVLink)\n");
+    return true;
+}
+
 bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err) {
     const Glm5Geometry& g = g_;
     const int64_t n = (int64_t) tokens.size();
@@ -2962,6 +3041,26 @@ bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err
     const int np = (int) parts.size();
     const bool pipelined = np > 1 && nc > 1 && getenv("STRATA_GLM_PREFILL_SERIAL") == nullptr;
     bool cancelled = false;
+    // DUAL-LINK PROMPT (STRATA_GLM_DUAL_PREFILL=1; see PrefillState::help): only here, where one half runs while the
+    // other waits - in the pipeline both GPUs' links are busy with their own chunks
+    Glm5Model* const other = split_next_.get();
+    const bool dual = !pipelined && np == 2 && dual_prefill_ready();
+    const std::shared_ptr<void> help_reset(nullptr, [&](void*) {   // every way out of here: no helper set
+        for (Glm5Model* m : parts) m->pf_->help = nullptr;
+    });
+    if (dual) {
+        pf_->help = other;
+        other->pf_->help = this;
+    }
+    // the helper's gbuf is free once its own half (all its queued work) has run: its copy stream waits for that
+    const auto help_idle = [&](Glm5Model* owner) {
+        if (!dual) return;
+        Glm5Model* H = owner->pf_->help;
+        cudaSetDevice(H->dev_);
+        cudaEventRecord(H->pf_->ev_hidle, H->fast_->cs);
+        cudaStreamWaitEvent(H->fast_->copy, H->pf_->ev_hidle, 0);
+        cudaSetDevice(owner->dev_);
+    };
     if (!pipelined) {
         // one half after the other, chunk by chunk
         for (int c = 0; c < nc; ++c) {
@@ -2972,6 +3071,7 @@ bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err
             std::vector<int32_t> nx0;
             std::vector<const float*> im0;
             if (mtp_il_ >= 0) next_of(c, nx0, im0);   // a single device carries the draft block itself
+            help_idle(this);
             if (!prefill_half(p0, T, err, nx0.empty() ? nullptr : nx0.data(), im0.empty() ? nullptr : im0.data()))
                 return false;
             Glm5Model* prev = this;
@@ -2988,6 +3088,7 @@ bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err
                 std::vector<int32_t> nx;
                 std::vector<const float*> im;
                 if (m->mtp_il_ >= 0) next_of(c, nx, im);
+                help_idle(m);
                 if (!m->prefill_half(p0, T, err, nx.empty() ? nullptr : nx.data(), im.empty() ? nullptr : im.data()))
                     return false;
                 prev = m;
