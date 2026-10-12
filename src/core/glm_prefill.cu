@@ -887,7 +887,7 @@ Glm5Model::PinnedPrompt Glm5Model::prefill_pinned() const {
 
 std::pair<size_t, size_t> Glm5Model::prefill_bytes_for(size_t T) const {
     const PrefillState* S = pf_;
-    const size_t kv_stage = kv_ != nullptr ? (size_t) kv_->n_blocks * kv_->page * kv_->row_bytes : 0;
+    const size_t kv_stage = (size_t) kv_stage_bytes_;   // (the first sequence's, the longest context: fixed at load)
     return chunk_bytes(g_, T, S->has_kda, S->has_dsa, S->has_dense, S->has_moe, S->max_pools, S->sub_env, mtp_il_ >= 0,
                        kv_stage);
 }
@@ -938,7 +938,7 @@ size_t Glm5Model::prefill_carve(int Tn) {
     S->ss = a.take<float>(T);
     S->mix = a.take<float>(T * 24);
     S->iota = a.take<int>(T * (size_t) g.n_exp_used);
-    S->kv_stage = kv_ != nullptr ? a.take<uint8_t>((size_t) kv_->n_blocks * kv_->page * kv_->row_bytes) : nullptr;
+    S->kv_stage = kv_stage_bytes_ > 0 ? a.take<uint8_t>((size_t) kv_stage_bytes_) : nullptr;
     S->uni = S->arena + a.off;
     cublasSetWorkspace(S->blas, S->ws, S->ws_bytes);
     S->T_bound = Tn;

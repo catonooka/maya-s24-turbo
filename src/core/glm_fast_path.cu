@@ -4279,7 +4279,6 @@ bool Glm5Model::fast_dsa(int il, int64_t p, std::string& err) {
     if (F->prof_on) F->mark("dsa_proj_mv");
     // the latent cache - with KV streaming the layer's VRAM slots, the whole cache being the host copy
     uint16_t* lat = (uint16_t*) (state_ + dsa_lat_[(size_t) il]);
-    const bool streamed = kv_ != nullptr && kv_->host[(size_t) il] != nullptr;
     gf::DsaPrepArgs d;
     d.qr_raw = F->qr_raw;
     d.q_a_norm = Ly.q_a_norm;
@@ -4288,13 +4287,7 @@ bool Glm5Model::fast_dsa(int il, int64_t p, std::string& err) {
     d.q_lora = g.q_lora;
     d.kv_raw = F->kv_raw;
     d.kv_norm = Ly.kv_a_norm;
-    d.lat = streamed ? nullptr : lat;
-    if (streamed) {
-        d.lat_host = (uint16_t*) kv_->host[(size_t) il];
-        d.lat_slots = lat;
-        d.lat_table = kv_->map[(size_t) il].page_table;
-        d.lat_page = kv_->page;
-    }
+    kv_prep_targets(kv_, il, lat, d);
     d.kv_lora = g.kv_lora;
     d.lat_q8 = lat_q8_;
     d.ik_raw = F->ik_raw;
@@ -4335,13 +4328,8 @@ bool Glm5Model::fast_dsa(int il, int64_t p, std::string& err) {
     gf::dsa_select(F->score, pool_done, g.idx_kpool, top_pools, n_sel, (int) p, F->cells, s);
     if (F->prof_on) F->mark("dsa_score_select");
     // KV streaming: the selected blocks into VRAM slots, the attention reading the selection in slot rows
-    const int* cells = F->cells;
-    if (streamed) {
-        gf::glm_kv_resolve(kv_->map[(size_t) il], kv_->host[(size_t) il], (uint8_t*) lat, kv_->row_bytes, kv_->page,
-                           F->cells, n_sel, F->slot_cells, s);
-        cells = F->slot_cells;
-        if (F->prof_on) F->mark("kv_resolve");
-    }
+    const int* cells = kv_attend_cells(kv_, il, lat, F->cells, n_sel, F->slot_cells, s);
+    if (F->prof_on && cells != F->cells) F->mark("kv_resolve");
     gf::mla(F->q, Ly.k_b, Ly.v_b, lat, cells, n_sel, g.n_head, g.qk_nope, g.kv_lora, g.v_head, F->attn_q, s, lat_q8_);
     if (F->prof_on) F->mark("mla");
     gf::MvJob o = {Ly.out.q, F->attn_q, nullptr, F->mixer, nullptr, 1.0f, Ly.out.type,

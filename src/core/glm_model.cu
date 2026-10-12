@@ -588,6 +588,7 @@ Glm5Model::~Glm5Model() {
             if (s > 0) {
                 for (float* d : {c.state, c.snap, c.snap_pool, c.kda_bak})
                     if (d) cudaFree(d);
+                kv_stream_free(c.kv);   // (sequence 0's is kv_, freed below)
             }
             if (c.hop_h) cudaFreeHost(c.hop_h);
             if (c.emb_h) cudaFreeHost(c.emb_h);
@@ -631,11 +632,7 @@ Glm5Model::~Glm5Model() {
     if (d_tok_) cudaFree(d_tok_);
     if (w_arena_) cudaFree(w_arena_);
     if (mtp_arena_) cudaFree(mtp_arena_);
-    if (kv_ != nullptr) {
-        if (kv_->host_arena) cudaFreeHost(kv_->host_arena);
-        if (kv_->map_arena) cudaFree(kv_->map_arena);
-        delete kv_;
-    }
+    kv_stream_free(kv_);
     if (state_) cudaFree(state_);
     if (sc_) cudaFree(sc_);
     if (d_pos_) cudaFree(d_pos_);
@@ -810,48 +807,47 @@ int64_t Glm5Model::kv_resident() const {
     return 0;
 }
 
-// This part's DSA layers (the NextN block's too) keep their latent cache in one pinned, device-mapped host allocation
-// - the authoritative copy, written by both dsa_preps - and `cells` positions of it in VRAM: the state arena's latent
-// runs are the VRAM slots, and every layer gets a residency map (one device allocation for all of them), nothing
-// resident.  Under WSL the driver pins only about 1 GB in all, which the start reports as an error.
-bool Glm5Model::kv_stream_setup(int64_t cells, std::string& err) {
+// This part's DSA layers (the NextN block's too) keep a sequence's latent cache in one pinned, device-mapped host
+// allocation - the authoritative copy, written by both dsa_preps - and `cells` positions of it in VRAM: the state arena's
+// latent runs are the VRAM slots, and every layer gets a residency map (one device allocation for all of them), nothing
+// resident.  ctx: that sequence's context.  Under WSL the driver pins only about 1 GB in all, which the start reports as
+// an error.  Null with err empty: no DSA layer on this part.
+Glm5Model::KvStream* Glm5Model::kv_stream_make(int64_t cells, int64_t ctx, std::string& err) {
     namespace k = strata::kernels;
     const std::vector<int> ls = dsa_layers();
-    if (ls.empty()) return true;
+    if (ls.empty()) return nullptr;
     auto* K = new KvStream();
-    kv_ = K;
     K->page = g_.idx_kpool;
     K->row_bytes = lat_q8_ ? k::glmf::lat8_rec_bytes(g_.kv_lora) : g_.kv_lora * 2;
     K->slots = cells / K->page;
-    K->n_blocks = (max_ctx_ + K->page - 1) / K->page;
-    if (K->slots < k::glmf::kKvResolveBlock || (int64_t) K->page * K->row_bytes % 16 != 0) {
-        err = "KV streaming: " + std::to_string(K->slots) + " pages of " + std::to_string(K->page * K->row_bytes) +
-              " bytes a layer - the resolve needs at least " + std::to_string(k::glmf::kKvResolveBlock) +
-              " pages of whole 16-byte runs";
-        return false;
-    }
+    K->n_blocks = (ctx + K->page - 1) / K->page;
+    const auto fail = [&](const std::string& e) {
+        err = e;
+        kv_stream_free(K);
+        return nullptr;
+    };
+    if (K->slots < k::glmf::kKvResolveBlock || (int64_t) K->page * K->row_bytes % 16 != 0)
+        return fail("KV streaming: " + std::to_string(K->slots) + " pages of " + std::to_string(K->page * K->row_bytes) +
+                    " bytes a layer - the resolve needs at least " + std::to_string(k::glmf::kKvResolveBlock) +
+                    " pages of whole 16-byte runs");
     const uint64_t layer_bytes = (uint64_t) K->n_blocks * K->page * K->row_bytes;
     K->host_bytes = layer_bytes * ls.size();
     uint8_t* d = nullptr;
     if (cudaHostAlloc((void**) &K->host_arena, K->host_bytes, cudaHostAllocMapped | cudaHostAllocPortable) != cudaSuccess ||
         cudaHostGetDevicePointer((void**) &d, K->host_arena, 0) != cudaSuccess) {
         cudaGetLastError();
-        K->host_arena = nullptr;
         char b[320];
         std::snprintf(b, sizeof b, "KV streaming: cannot pin %.2f GB of RAM for the latent cache - lower the context, or "
                       "turn it off (--kv-streaming off in the config's args; under WSL the driver pins only about 1 GB in "
-                      "all)",
-                      (double) K->host_bytes / 1e9);
-        err = b;
-        return false;
+                      "all)", (double) K->host_bytes / 1e9);
+        return fail(b);
     }
     const auto a16 = [](uint64_t n) { return (n + 15) & ~(uint64_t) 15; };
     const uint64_t per = a16((uint64_t) K->n_blocks * 4) + 5 * a16((uint64_t) K->slots * 4) + a16(k::kKvCtlInts * 4);
     if (cudaMalloc(&K->map_arena, per * ls.size()) != cudaSuccess) {
         cudaGetLastError();
         K->map_arena = nullptr;
-        err = "KV streaming: the residency maps did not allocate";
-        return false;
+        return fail("KV streaming: the residency maps did not allocate");
     }
     K->host.assign((size_t) g_.n_layers + 1, nullptr);
     K->map.assign((size_t) g_.n_layers + 1, k::KvStreamMap{});
@@ -876,15 +872,26 @@ bool Glm5Model::kv_stream_setup(int64_t cells, std::string& err) {
         m.n_slots = K->slots;
         k::kv_stream_reset(m, nullptr);
     }
-    if (cudaDeviceSynchronize() != cudaSuccess) {
-        err = "KV streaming: the residency maps did not reset";
-        return false;
-    }
+    if (cudaDeviceSynchronize() != cudaSuccess) return fail("KV streaming: the residency maps did not reset");
     std::fprintf(stderr, "glm pack: CUDA%d KV streaming: %lld of %lld positions of each of %zu DSA layers in VRAM (%.2f "
-                         "GB), the latent cache in %.2f GB of pinned RAM\n", dev_, (long long) cells,
-                 (long long) max_ctx_, ls.size(), (double) cells * K->row_bytes * ls.size() / 1e9,
-                 (double) K->host_bytes / 1e9);
-    return true;
+                         "GB), the latent cache in %.2f GB of pinned RAM\n", dev_, (long long) cells, (long long) ctx,
+                 ls.size(), (double) cells * K->row_bytes * ls.size() / 1e9, (double) K->host_bytes / 1e9);
+    return K;
+}
+
+void Glm5Model::kv_stream_free(KvStream* K) {
+    if (K == nullptr) return;
+    if (K->host_arena) cudaFreeHost(K->host_arena);
+    if (K->map_arena) cudaFree(K->map_arena);
+    delete K;
+}
+
+// the first sequence's stream (the only one without STRATA_GLM_SEQS); the prompt path's staging copy is sized for it,
+// the longest context of them all
+bool Glm5Model::kv_stream_setup(int64_t cells, std::string& err) {
+    kv_ = kv_stream_make(cells, max_ctx_, err);
+    if (kv_ != nullptr) kv_stage_bytes_ = (uint64_t) kv_->n_blocks * kv_->page * kv_->row_bytes;
+    return kv_ != nullptr || err.empty();
 }
 
 // Every block evicted (the slots' contents are stale or zeroed); the host copies are not cleared - no reader names a
@@ -901,18 +908,22 @@ Glm5Model::KvStreamStats Glm5Model::kv_stream_stats() const {
     int cur = 0;
     cudaGetDevice(&cur);
     for (const Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) {
-        if (m->kv_ == nullptr) continue;
+        std::vector<const KvStream*> ks = {m->kv_};   // the bound sequence's, and every other's (STRATA_GLM_SEQS)
+        for (const SeqCtx& c : m->seq_) ks.push_back(c.kv);
         cudaSetDevice(m->dev_);
         if (m->fast_ != nullptr) cudaStreamSynchronize(m->fast_->cs);
-        for (const auto& mp : m->kv_->map) {
-            if (mp.page_table == nullptr) continue;
-            const strata::kernels::KvStreamCounters c = strata::kernels::kv_stream_counters(mp);
-            r.lookups += c.lookups;
-            r.misses += c.misses;
-            r.overflow = r.overflow || c.overflow;
+        for (const KvStream* K : ks) {
+            if (K == nullptr) continue;
+            for (const auto& mp : K->map) {
+                if (mp.page_table == nullptr) continue;
+                const strata::kernels::KvStreamCounters c = strata::kernels::kv_stream_counters(mp);
+                r.lookups += c.lookups;
+                r.misses += c.misses;
+                r.overflow = r.overflow || c.overflow;
+            }
+            r.host_gb += (double) K->host_bytes / 1e9;
+            r.block_bytes = K->page * K->row_bytes;
         }
-        r.host_gb += (double) m->kv_->host_bytes / 1e9;
-        r.block_bytes = m->kv_->page * m->kv_->row_bytes;
     }
     cudaSetDevice(cur);
     return r;

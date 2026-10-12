@@ -642,5 +642,29 @@ struct Glm5Model::KvStream {
     uint64_t host_bytes = 0;
 };
 
+// KV streaming's two hooks for a DSA attention at decode (the token path, the verify window, the rows of several
+// sequences), for layer il of a sequence whose stream is K (null: not streamed) and whose latent run is `lat` (a
+// streamed layer's VRAM slots): where dsa_prep writes a position's latent row - the identity cache, or the host copy and
+// its block's VRAM slot - and which cells the attention reads - the selection resolved into slot rows, or itself
+inline bool kv_streamed(const Glm5Model::KvStream* K, int il) { return K != nullptr && K->host[(size_t) il] != nullptr; }
+inline void kv_prep_targets(const Glm5Model::KvStream* K, int il, uint16_t* lat, gf::DsaPrepArgs& d) {
+    if (!kv_streamed(K, il)) {
+        d.lat = lat;
+        return;
+    }
+    d.lat = nullptr;
+    d.lat_host = (uint16_t*) K->host[(size_t) il];
+    d.lat_slots = lat;
+    d.lat_table = K->map[(size_t) il].page_table;
+    d.lat_page = K->page;
+}
+inline const int* kv_attend_cells(const Glm5Model::KvStream* K, int il, uint16_t* lat, const int* cells, int n_sel,
+                                  int* slot_cells, cudaStream_t s) {
+    if (!kv_streamed(K, il)) return cells;
+    gf::glm_kv_resolve(K->map[(size_t) il], K->host[(size_t) il], (uint8_t*) lat, K->row_bytes, K->page, cells, n_sel,
+                       slot_cells, s);
+    return slot_cells;
+}
+
 
 }  // namespace strata::core
