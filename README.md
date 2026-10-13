@@ -127,6 +127,19 @@ your setup and the engine's speed lines; nothing is sent anywhere by itself. The
 
 - **"nvcc ... cannot build for these GPUs":** Volta needs CUDA 12.x, Blackwell 12.8 or newer. The setup takes the
   newest installed toolkit that fits.
+- **`cuda_profiler_api.h` or `nvtx3/nvToolsExt.h` is missing:** Maya's CUDA build needs the profiler API
+  and NVTX headers as well as `nvcc` and the runtime. Install those development components for your toolkit.
+  With a split CUDA 13 toolkit, NVIDIA's official header wheels can also stay in a project-local folder:
+
+  ```sh
+  python3 -m pip install --target .cuda-headers \
+    nvidia-cuda-profiler-api==13.3.27 nvidia-nvtx==13.3.29
+  CPATH="$PWD/.cuda-headers/nvidia/cu13/include${CPATH:+:$CPATH}" ./maya.sh --setup
+  ```
+
+  Select wheel versions that match your toolkit. This include layout was checked with CUDA 13.3,
+  `nvidia-cuda-profiler-api==13.3.27` and `nvidia-nvtx==13.3.29`; other CUDA major versions can use a
+  different layout. Use the same `CPATH` when rebuilding after an update. No shared toolkit files need changing.
 - **"unsupported GNU version":** `./maya.sh --setup --host-compiler g++-12` (install `g++-12` first).
 - **Slow, with the SSD busy all the time:** not enough free RAM for the experts. Close programs or add RAM.
 - **The download stopped:** run `./maya.sh` again; it continues where it stopped.
