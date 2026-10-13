@@ -31,12 +31,13 @@ void init_once() {
 using RowsFn = void (*)(int, const uint8_t*, size_t, int, const void* const*, int, float* const*, int, int);
 
 // fn's rows against ggml-cpu's own dot, bit for bit: synthetic rows of `type` (random codes, every block's f16 scale
-// - and a K-quant's min scale - a small normal value) and Q8_K activations from ggml's quantizer, 2 and 11 tokens
-// (11: the kernels' groups of 8 / 4 and their remainders)
+// - and a K-quant's min scale - a small normal value) and Q8_K activations from ggml's quantizer, 2, 5 and 11 tokens
+// (11: the kernels' groups of 8 / 4 and their remainders).  306 results: a form off in a few % of them (Q5_K's fused
+// min term under MSVC: ~7%) cannot pass by chance - 39 did in ~6% of starts
 bool rows_match_ggml(RowsFn fn, int type) {
     const ggml_type t = (ggml_type) type;
     const ggml_type at = traits(type)->vec_dot_type;
-    const int n = 1024, rows = 3;   // four 256-value blocks
+    const int n = 2048, rows = 17;   // eight 256-value blocks
     const size_t rb = ggml_row_size(t, n), bb = ggml_type_size(t), ab = ggml_row_size(at, n);
     uint64_t st = 0x9E3779B97F4A7C15ull;
     const auto next = [&st] {
@@ -55,7 +56,7 @@ bool rows_match_ggml(RowsFn fn, int type) {
             std::memcpy(&w[o + sizeof d], &m, sizeof m);
         }
     }
-    for (int nt : {2, 11}) {
+    for (int nt : {2, 5, 11}) {
         std::vector<uint8_t> a(ab * (size_t) nt);
         std::vector<float> x((size_t) n), got((size_t) nt * rows), ref((size_t) nt * rows);
         std::vector<const void*> ap((size_t) nt);

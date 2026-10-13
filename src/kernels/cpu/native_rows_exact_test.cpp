@@ -86,9 +86,11 @@ int compare(RowsFn fn, int type, int n, int rows, int nt, std::mt19937& rng) {
 
 void check_kernel(const char* name, RowsFn fn, void (*set_q5k)(bool) noexcept, int type, std::mt19937& rng) {
     // Q5_K: the min term's form that matches this build's ggml-cpu (as native_expert.cpp picks it)
-    if (type == GGML_TYPE_Q5_K) {
+    if (type == GGML_TYPE_Q5_K) {   // (306 results, as the engine's probe: a form off in ~7% of them shows)
         set_q5k(true);
-        if (compare(fn, type, 1024, 3, 2, rng) != 0) {
+        int off = 0;
+        for (int nt : {2, 5, 11}) off += compare(fn, type, 2048, 17, nt, rng);
+        if (off != 0) {
             set_q5k(false);
             std::printf("  %s q5_K: ggml-cpu's min term is unfused in this build\n", name);
         }
