@@ -873,7 +873,15 @@ if(STRATA_NATIVE_EXPERTS)
     endif()
     set(_strata_mmq_glu ON)
     if(NOT _strata_mmq_done STREQUAL _strata_mmq_stamp)
-      find_package(Git REQUIRED)
+      find_package(Git)
+    endif()
+    if(NOT _strata_mmq_done STREQUAL _strata_mmq_stamp AND NOT GIT_FOUND)
+      # (a source zip without git - docs/WINDOWS.md offers one: the checkout's own MMQ sources, as for a patch that
+      # does not apply)
+      message(WARNING "git was not found to apply third_party/ggml/mmq-fused-swiglu.patch: the pinned MMQ sources are "
+                      "built as they are, and the prompt path keeps the separate SwiGLU kernel")
+      set(_strata_mmq_glu OFF)
+    elseif(NOT _strata_mmq_done STREQUAL _strata_mmq_stamp)
       file(REMOVE_RECURSE ${_strata_mmq_copy})
       file(COPY ${_strata_gg}/src/ggml-cuda/ DESTINATION ${_strata_mmq_copy})
       # (GIT_CEILING_DIRECTORIES: git applies the patch as a plain patch tool, not inside the repository holding the
