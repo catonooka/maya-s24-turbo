@@ -4,6 +4,34 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.5 - 2026-10-13
+
+Conversations that share their start read only what is new, safer serving for agents, faster CPU experts, and opt-in
+faster sampled answers on two GPUs.
+
+- **Conversation checkpoints** (#146 by @needmorevram). A prompt that shares its start with an earlier one - the same
+  system prompt and tools in another chat, or a chat whose last message was edited - now reads only what is new. The
+  conversation's state is kept in RAM (about 150 MB each, four by default) at the end of the system prompt, at the
+  start of the last turn and every 16K fresh tokens (`STRATA_GLM_CKPTS`, `STRATA_GLM_CKPT_EVERY`).
+- **Special tags in messages stay text** (#146). A user quoting `</think>`, a file an agent reads that holds
+  `<|user|>`, or a tool result printing `</tool_response>` no longer hands the model a real end of thinking, a new turn
+  or the end of the result. A tool set sent in another order keeps the order it was first seen in, so the conversation
+  is not read again from the system prompt.
+- **Request API** (#146): OpenAI's `logit_bias` (-100 bans a token); sampling fields sent as numeric strings are read,
+  and one that can't be read is a 400 naming the field; llama.cpp's `repeat_penalty` / `repeat_last_n`;
+  `GET /metrics/prometheus` with llama-server's metric names and Maya's own.
+- **Recovery and tuning** (#146): a conversation whose state turns non-finite is dropped and the request read again
+  from the start; the CPU lane's split is timed again during decode (`STRATA_GLM_CPU_RETIME`), so a start that timed
+  the CPU at a busy moment no longer keeps a skewed split; `STRATA_GLM_TRUNK_KEEP` applies in the DFlash2 windows too.
+- **CPU experts shared by several tokens are decoded once** (#154 by @needmorevram). A prompt's CPU experts and a
+  DFlash2 window's CPU pass read each weight row once for all the tokens that share it instead of once per token, with
+  results bit-identical to before (checked against ggml's own dot at first use; `STRATA_GLM_CPU_MT=0` turns it off).
+  Where the CPU computes a large share of the experts: decode +3.5-4.5% and prompts up to +15% on an RTX 3090 + RTX
+  5060 Ti with 2x Xeon. For prompts with images, the MTP block's cache now reads the image's rows, as the model does.
+- **Speculative sampling and cancelled wrong drafts for the two-GPU MTP decode** (#145 by @sociolog; opt-in:
+  `STRATA_GLM_SPEC_SAMPLE=1`, `STRATA_GLM_SPEC_CANCEL=1`). Sampled answers keep exactly the same distribution of
+  tokens and decode faster: +5% on an RTX 3090 + 3060.
+
 ## v1.1.4 - 2026-10-12
 
 The EXL3 quant works with the DFlash2 drafter, and on Windows + AMD a conversation taken back from a slot answers its
