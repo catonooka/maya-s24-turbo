@@ -518,7 +518,7 @@ public:
     bool kv_int8() const { return lat_q8_; }   // the latent cache in INT8 (STRATA_GLM_KV_INT8=1)
     /// Images (the vision path): rows of n_embd floats that stand in for the token embeddings at these absolute
     /// positions - the prompt's <|image|> tokens, in order; an empty call clears them.  Read wherever a token is
-    /// embedded (the prompt path and the token path); the draft block keeps the token embedding (drafts only).
+    /// embedded (the prompt path - the NextN block's cache fill included - and the token path).
     void set_image_rows(std::vector<int64_t> positions, std::vector<float> rows) {
         img_pos_ = std::move(positions);
         img_rows_ = std::move(rows);
@@ -706,8 +706,10 @@ public:
     bool lend_tail(size_t limit, uint64_t& moved, uint64_t& dropped, std::string& err);
     bool vis_lend_ok_ = false;                             // this half's tail can go to the vision encoder
     bool vis_lent_ = false;                                // ... and is with it now (freed)
-    bool prefill_half(int64_t p0, int T, std::string& err,
-                      const int32_t* next_ids = nullptr);   // this half's layers over a chunk (rows in pf_->R)
+    // this half's layers over a chunk (rows in pf_->R); next_ids / next_img: the NextN block's next tokens and, where
+    // one is an <|image|>, the image row standing for it (null: its token embedding)
+    bool prefill_half(int64_t p0, int T, std::string& err, const int32_t* next_ids = nullptr,
+                      const float* const* next_img = nullptr);
     int32_t prefill_next_ = -1;                            // the token after the prompt's last prefilled position
     /// The prompt path: `tokens` at positions [position(), position() + n) through every layer in chunks, layer by
     /// layer (GEMMs for the projections, MMQ for the routed experts), leaving the state the token path would have

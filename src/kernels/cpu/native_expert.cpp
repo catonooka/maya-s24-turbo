@@ -11,8 +11,11 @@
 #include "ggml-cpu.h"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
+#include <vector>
 
 namespace strata::kernels::cpu {
 namespace {
@@ -24,9 +27,100 @@ void init_once() {
     std::call_once(once, [] { ggml_cpu_init(); });
 }
 
+// iq512_rows / iq256_rows
+using RowsFn = void (*)(int, const uint8_t*, size_t, int, const void* const*, int, float* const*, int, int);
+
+// fn's rows against ggml-cpu's own dot, bit for bit: synthetic rows of `type` (random codes, every block's f16 scale
+// - and a K-quant's min scale - a small normal value) and Q8_K activations from ggml's quantizer, 2 and 11 tokens
+// (11: the kernels' groups of 8 / 4 and their remainders)
+bool rows_match_ggml(RowsFn fn, int type) {
+    const ggml_type t = (ggml_type) type;
+    const ggml_type at = traits(type)->vec_dot_type;
+    const int n = 1024, rows = 3;   // four 256-value blocks
+    const size_t rb = ggml_row_size(t, n), bb = ggml_type_size(t), ab = ggml_row_size(at, n);
+    uint64_t st = 0x9E3779B97F4A7C15ull;
+    const auto next = [&st] {
+        st ^= st << 13;
+        st ^= st >> 7;
+        st ^= st << 17;
+        return st;
+    };
+    std::vector<uint8_t> w(rb * rows);
+    for (auto& b : w) b = (uint8_t) next();
+    for (size_t o = 0; o < w.size(); o += bb) {
+        const ggml_fp16_t d = ggml_fp32_to_fp16(0.002f + 0.001f * (float) (next() % 16));
+        std::memcpy(&w[o], &d, sizeof d);
+        if (t == GGML_TYPE_Q4_K || t == GGML_TYPE_Q5_K) {
+            const ggml_fp16_t m = ggml_fp32_to_fp16(0.001f + 0.0005f * (float) (next() % 16));
+            std::memcpy(&w[o + sizeof d], &m, sizeof m);
+        }
+    }
+    for (int nt : {2, 11}) {
+        std::vector<uint8_t> a(ab * (size_t) nt);
+        std::vector<float> x((size_t) n), got((size_t) nt * rows), ref((size_t) nt * rows);
+        std::vector<const void*> ap((size_t) nt);
+        std::vector<float*> op((size_t) nt);
+        for (int k = 0; k < nt; ++k) {
+            for (auto& v : x) v = ((float) (next() % 2001) - 1000.0f) * 1e-3f;
+            traits(at)->from_float(x.data(), a.data() + ab * (size_t) k, n);
+            ap[(size_t) k] = a.data() + ab * (size_t) k;
+            op[(size_t) k] = got.data() + (size_t) k * rows;
+        }
+        fn(type, w.data(), rb, n, ap.data(), nt, op.data(), 0, rows);
+        for (int k = 0; k < nt; ++k)
+            for (int r = 0; r < rows; ++r)
+                traits(type)->vec_dot(n, &ref[(size_t) k * rows + r], 0, w.data() + (size_t) r * rb, 0, ap[(size_t) k], 0, 1);
+        if (std::memcmp(got.data(), ref.data(), got.size() * sizeof(float)) != 0) return false;
+    }
+    return true;
+}
+
+RowsFn pick_rows(int type) {
+    static const bool on = [] {
+        const char* v = std::getenv("STRATA_GLM_CPU_MT");
+        return v == nullptr || std::atoi(v) != 0;
+    }();
+    if (!on) return nullptr;
+    init_once();
+    // AVX-512 where cpu_avx512_ok() (VNNI and VBMI: Ice Lake / Zen 4 and later, which run 512-bit integer code at
+    // full clock); on a Skylake-SP Xeon 6152 the AVX-2 rows were 7-13% faster (glm_cpu_bench, Maya-L, 2-16 tokens)
+    const bool avx512 = cpu_avx512_ok() && std::getenv("STRATA_NO_IQ512") == nullptr;
+    const bool avx2 = cpu_avx2_ok() && std::getenv("STRATA_NO_IQ256") == nullptr;
+    RowsFn fn = nullptr;
+    void (*set_q5k)(bool) noexcept = nullptr;
+    if (avx512 && iq512_supported(type)) {
+        fn = iq512_rows;
+        set_q5k = iq512_set_q5k_fused;
+    } else if (avx2 && iq256_supported(type)) {
+        fn = iq256_rows;
+        set_q5k = iq256_set_q5k_fused;
+    }
+    if (fn == nullptr) return nullptr;
+    if (rows_match_ggml(fn, type)) return fn;
+    if (type == GGML_TYPE_Q5_K) {   // a ggml-cpu built without contraction (MSVC): its min term unfused
+        set_q5k(false);
+        if (rows_match_ggml(fn, type)) return fn;
+        set_q5k(true);
+    }
+    std::fprintf(stderr, "native experts: the multi-token %s rows differ from ggml-cpu's dot in this build - "
+                         "ggml's dots for them\n", ggml_type_name((ggml_type) type));
+    return nullptr;
+}
+
+// the multi-token rows for a weight type when they are exact here, nullptr otherwise (picked and checked once)
+RowsFn exact_rows(int type) {
+    if (type < 0 || type >= GGML_TYPE_COUNT) return nullptr;
+    static std::once_flag once[GGML_TYPE_COUNT];
+    static RowsFn fn[GGML_TYPE_COUNT];
+    std::call_once(once[type], [type] { fn[type] = pick_rows(type); });
+    return fn[type];
+}
+
 }  // namespace
 
 bool native_experts_available() noexcept { return true; }
+
+bool native_multi_rows_exact(int type) { return exact_rows(type) != nullptr; }
 
 bool native_fmt(int gu_type, int d_type, int64_t n_embd, int64_t n_ff, NativeFmt& f, std::string& err) {
     if (gu_type < 0 || gu_type >= GGML_TYPE_COUNT || d_type < 0 || d_type >= GGML_TYPE_COUNT) {
@@ -115,9 +209,38 @@ void native_gu_rows(const NativeFmt& f, const uint8_t* blob, const void* const* 
 void native_gu_rows_split(const NativeFmt& f, const uint8_t* gate_base, const uint8_t* up_base,
                           const void* const* act, int nt, float* const* ff, int r0, int r1,
                           float swiglu_limit) {
-    const ggml_vec_dot_t dot = traits(f.gu_type)->vec_dot;
     const int n = (int) f.n_embd;
     const bool clamp = swiglu_limit != std::numeric_limits<float>::infinity();
+    if (nt >= 2 && r1 > r0) {
+        if (const RowsFn fn = exact_rows(f.gu_type)) {
+            // every gate row of the range for all tokens (each row decoded once per group of tokens), then every up
+            // row, then the same epilogue as below on the same values
+            const int nr = r1 - r0;
+            thread_local std::vector<float> buf;
+            thread_local std::vector<float*> go, uo;
+            buf.resize((size_t) 2 * nt * nr);
+            go.resize((size_t) nt);
+            uo.resize((size_t) nt);
+            for (int t = 0; t < nt; ++t) {
+                go[(size_t) t] = buf.data() + (size_t) t * nr;
+                uo[(size_t) t] = buf.data() + (size_t) (nt + t) * nr;
+            }
+            fn(f.gu_type, gate_base + (size_t) r0 * f.gu_row, f.gu_row, n, act, nt, go.data(), 0, nr);
+            fn(f.gu_type, up_base + (size_t) r0 * f.gu_row, f.gu_row, n, act, nt, uo.data(), 0, nr);
+            for (int t = 0; t < nt; ++t) {
+                for (int r = 0; r < nr; ++r) {
+                    float g = go[(size_t) t][r], u = uo[(size_t) t][r];
+                    if (clamp) {
+                        g = std::fmin(g, swiglu_limit);
+                        u = std::fmin(std::fmax(u, -swiglu_limit), swiglu_limit);
+                    }
+                    ff[t][r0 + r] = (g / (1.f + std::exp(-g))) * u;
+                }
+            }
+            return;
+        }
+    }
+    const ggml_vec_dot_t dot = traits(f.gu_type)->vec_dot;
     for (int r = r0; r < r1; ++r) {
         const uint8_t* gr = gate_base + (size_t) r * f.gu_row;
         const uint8_t* ur = up_base + (size_t) r * f.gu_row;
@@ -136,6 +259,15 @@ void native_gu_rows_split(const NativeFmt& f, const uint8_t* gate_base, const ui
 
 void native_down_rows_split(const NativeFmt& f, const uint8_t* down_base, const void* const* hq,
                             int nt, float* const* out, int r0, int r1) {
+    if (nt >= 2 && r1 > r0) {
+        if (const RowsFn fn = exact_rows(f.d_type)) {
+            thread_local std::vector<float*> o;
+            o.resize((size_t) nt);
+            for (int t = 0; t < nt; ++t) o[(size_t) t] = out[t] + r0;
+            fn(f.d_type, down_base + (size_t) r0 * f.d_row, f.d_row, (int) f.n_ff, hq, nt, o.data(), 0, r1 - r0);
+            return;
+        }
+    }
     const ggml_vec_dot_t dot = traits(f.d_type)->vec_dot;
     const int n = (int) f.n_ff;
     for (int r = r0; r < r1; ++r) {

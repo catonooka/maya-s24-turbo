@@ -46,15 +46,21 @@ void native_quant_h(const NativeFmt& f, const float* h, void* dst);
 void native_gu_rows(const NativeFmt& f, const uint8_t* blob, const void* const* act, int nt, float* const* ff,
                     int r0, int r1);
 /// Split-base variants for files whose gate/up/down tensors are NOT adjacent (the unsloth
-/// GLM-5.3-FF shards interleave other tensors between them).  Single-token ggml-cpu dots only -
-/// the multi-token i-quant kernels require the [gate|up|down] blob layout.  swiglu_limit is
-/// GLM's swiglu clamp (gate clamped above, up both sides; +infinity = qwen4exp's plain path) -
-/// the same semantics as the device grouped path, so the two agree.
+/// GLM-5.3-FF shards interleave other tensors between them).  One token: ggml-cpu's dot per row.
+/// Several tokens (a verify window's tokens sharing an expert, a prompt's CPU rows): the
+/// multi-token kernels (iq_avx512 / iq_avx2: IQ2_*, IQ3_*, IQ4_XS, Q4_K, Q5_K) when they give
+/// ggml's results bit for bit - checked once per type (native_multi_rows_exact) - so a window
+/// computes exactly what its tokens one at a time would; STRATA_GLM_CPU_MT=0 keeps ggml's
+/// dots.  swiglu_limit is GLM's swiglu clamp (gate clamped above, up both sides; +infinity =
+/// qwen4exp's plain path) - the same semantics as the device grouped path, so the two agree.
 void native_gu_rows_split(const NativeFmt& f, const uint8_t* gate_base, const uint8_t* up_base,
                           const void* const* act, int nt, float* const* ff, int r0, int r1,
                           float swiglu_limit = std::numeric_limits<float>::infinity());
 void native_down_rows_split(const NativeFmt& f, const uint8_t* down_base, const void* const* hq,
                             int nt, float* const* out, int r0, int r1);
+/// Whether the split variants take the multi-token kernels for this weight type here (the CPU has
+/// them, they are not switched off, and they matched ggml-cpu's dot bit for bit on synthetic rows).
+bool native_multi_rows_exact(int ggml_type);
 /// out[t][r] = down_r . hq[t] for rows r in [r0, r1).
 void native_down_rows(const NativeFmt& f, const uint8_t* blob, const void* const* hq, int nt, float* const* out,
                       int r0, int r1);

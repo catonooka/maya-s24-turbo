@@ -43,6 +43,10 @@ struct ExpertLayout {
 bool cpu_avx512_ok();
 /// AVX2 + FMA, with the OS saving the YMM state (the AVX2 kernels' gate).
 bool cpu_avx2_ok();
+/// AVX-512 F, BW, VL and DQ with the OS saving the state: what iq_avx512.cpp's kernels need to run (no VNNI or
+/// VBMI).  The engine still picks them only where cpu_avx512_ok() (faster than AVX-2 there); tests run them on any
+/// such CPU.  STRATA_FORCE_AVX2=1 answers no.
+bool cpu_avx512bw_ok();
 /// Q2_0 GGUF rows / activation quantizer on the kernels this CPU has.
 void q2_rows_any(const uint8_t* w, size_t row_bytes, int nblocks, const ActQ* const* a, int nt, float* const* out,
                  int r0, int r1);

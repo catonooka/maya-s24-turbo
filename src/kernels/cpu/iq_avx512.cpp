@@ -3,11 +3,14 @@
 // ggml-cpu's x86 dot products for these formats are AVX2 and single-token: every token re-decodes the weights
 // and a sign is applied with five instructions per 32 values.  Here 64 values are decoded once (8 or 16 grid
 // lookups, one 64-bit sign mask, one vector of scales) and every token applies them with a masked subtract, a
-// `maddubs` and a `madd`.  The arithmetic is ggml's (ggml-cpu/quants.c, the `_generic` references): integer sums
-// per block, times d_x * d_y * the format's constant - only the order of the float additions differs.
+// `maddubs` and a `madd`.  The result is BIT-IDENTICAL to ggml's AVX2 dot (ggml-cpu/arch/x86/quants.c): the integer
+// sums per block are exact, the 16 int32 lanes fold to ggml's 8 (values 4k..4k+3 of every 32-value chunk), and the
+// floats take ggml's steps in ggml's order - one fmadd per block with d_x * d_y, its hsum_float_8, then the format's
+// constant (native_expert.cpp checks this against ggml on every start; the verify windows rely on it).
 //
-// Formats: IQ2_XXS (16), IQ2_XS (17), IQ3_XXS (18), IQ3_S (21), IQ2_S (22).  IQ1_M stays on ggml-cpu (no shipped
-// model has IQ1_M expert rows: the 'Coder IQ1_M' pack's gate/up are IQ2_S / IQ3_XXS / IQ3_S).
+// Formats: IQ2_XXS (16), IQ2_XS (17), IQ3_XXS (18), IQ3_S (21), IQ2_S (22), IQ4_XS (23), and the K-quants Q4_K (12)
+// and Q5_K (13) (with ggml's min terms from the activations' block sums).  IQ1_M stays on ggml-cpu (no shipped model
+// has IQ1_M expert rows: the 'Coder IQ1_M' pack's gate/up are IQ2_S / IQ3_XXS / IQ3_S).
 #include "strata/kernels/cpu/iq_avx512.hpp"
 
 #define GGML_COMMON_DECL_CPP
@@ -16,6 +19,7 @@
 
 #include <immintrin.h>
 
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -37,6 +41,24 @@ const int prefetch_ahead = [] {
     const char* v = std::getenv("STRATA_IQ_PREFETCH");
     return v ? std::atoi(v) : 2048;
 }();
+
+// Q5_K's min term: ggml's `summs += dmin * sum` is one scalar line that GCC and Clang contract into an fmadd and MSVC
+// does not; native_expert.cpp's check picks the form this build's ggml-cpu took (this file is built without
+// contraction, so each form is exactly what it says)
+std::atomic<bool> q5k_fused{true};
+
+// ggml's hsum_float_8: the same additions in the same order
+inline float hsum_ggml(__m256 x) {
+    __m128 r = _mm256_extractf128_ps(x, 1);
+    r = _mm_add_ps(r, _mm256_castps256_ps128(x));
+    r = _mm_add_ps(r, _mm_movehl_ps(r, r));
+    r = _mm_add_ss(r, _mm_movehdup_ps(r));
+    return _mm_cvtss_f32(r);
+}
+
+// a block's 16 int32 lanes (values 4m..4m+3 of every 64-value chunk) -> ggml's 8 (values 4k..4k+3 of every 32-value
+// chunk): lane k + lane k + 8, exact
+inline __m256i fold(__m512i a) { return _mm256_add_epi32(_mm512_castsi512_si256(a), _mm512_extracti64x4_epi64(a, 1)); }
 
 // lanes 0-7 -> s0, 8-15 -> s1, 16-23 -> s2, 24-31 -> s3 (int16 lanes of a maddubs result: two values each)
 inline __m512i scales4(int s0, int s1, int s2, int s3) {
@@ -152,10 +174,31 @@ template <> struct Fmt<21> {   // IQ3_S: d, qs[64], qh[8], signs[32], scales[4]
     }
 };
 
+template <> struct Fmt<23> {   // IQ4_XS: d, scales_h u16, scales_l[4], qs[128] (kvalues_iq4nl nibbles)
+    static constexpr int bytes = 136;
+    static constexpr float K = 1.0f;
+    static inline void decode(const uint8_t* b, int j, __m512i& g, __mmask64& m, __m512i& sc) {
+        // the 32 bytes of 32-value chunks 2j and 2j + 1: low nibbles values 0-15, high nibbles 16-31 of each
+        const __m256i q = _mm256_loadu_si256((const __m256i*) (b + 8 + 32 * j));
+        const __m256i m4 = _mm256_set1_epi8(0x0f);
+        const __m256i lo = _mm256_and_si256(q, m4), hi = _mm256_and_si256(_mm256_srli_epi16(q, 4), m4);
+        const __m512i idx = _mm512_inserti64x4(_mm512_castsi256_si512(_mm256_permute2x128_si256(lo, hi, 0x20)),
+                                               _mm256_permute2x128_si256(lo, hi, 0x31), 1);
+        const __m512i v = _mm512_shuffle_epi8(_mm512_broadcast_i32x4(_mm_loadu_si128((const __m128i*) kvalues_iq4nl)), idx);
+        g = _mm512_abs_epi8(v);       // |w| x (sign-applied y): ggml's mul_add_epi8 products
+        m = _mm512_movepi8_mask(v);
+        const uint32_t sh = u16(b + 2);
+        const uint8_t sl = b[4 + j];
+        const int sa = (int) ((sl & 15) | (((sh >> (4 * j)) & 3) << 4)) - 32;
+        const int sb = (int) ((sl >> 4) | (((sh >> (4 * j + 2)) & 3) << 4)) - 32;
+        sc = scales4(sa, sa, sb, sb);
+    }
+};
+
 template <int TY, int NT>
 inline void row_dot(const uint8_t* row, int nblocks, const block_q8_K* const* y, float* res) {
-    __m512 accf[NT];
-    for (int t = 0; t < NT; ++t) accf[t] = _mm512_setzero_ps();
+    __m256 accf[NT];
+    for (int t = 0; t < NT; ++t) accf[t] = _mm256_setzero_ps();
     const __m512i zero = _mm512_setzero_si512();
     for (int i = 0; i < nblocks; ++i) {
         const uint8_t* blk = row + (size_t) i * Fmt<TY>::bytes;
@@ -178,11 +221,100 @@ inline void row_dot(const uint8_t* row, int nblocks, const block_q8_K* const* y,
                 acci[t] = _mm512_add_epi32(acci[t], _mm512_madd_epi16(_mm512_maddubs_epi16(g, ys), sc));
             }
         }
-        const float dx = h2f(u16(blk)) * Fmt<TY>::K;
+        const float dx = h2f(u16(blk));
         for (int t = 0; t < NT; ++t)
-            accf[t] = _mm512_fmadd_ps(_mm512_set1_ps(dx * y[t][i].d), _mm512_cvtepi32_ps(acci[t]), accf[t]);
+            accf[t] = _mm256_fmadd_ps(_mm256_set1_ps(dx * y[t][i].d), _mm256_cvtepi32_ps(fold(acci[t])), accf[t]);
     }
-    for (int t = 0; t < NT; ++t) res[t] = _mm512_reduce_add_ps(accf[t]);
+    for (int t = 0; t < NT; ++t) res[t] = Fmt<TY>::K * hsum_ggml(accf[t]);
+}
+
+// ggml's unpack of a K-quant block's 12 scale bytes: utmp[0..1] = the 8 6-bit scales, utmp[2..3] = the 8 mins
+inline void k_scales(const uint8_t* s12, uint32_t utmp[4]) {
+    constexpr uint32_t kmask1 = 0x3f3f3f3f, kmask2 = 0x0f0f0f0f, kmask3 = 0x03030303;
+    std::memcpy(utmp, s12, 12);
+    utmp[3] = ((utmp[2] >> 4) & kmask2) | (((utmp[1] >> 6) & kmask3) << 4);
+    const uint32_t uaux = utmp[1] & kmask1;
+    utmp[1] = (utmp[2] & kmask2) | (((utmp[0] >> 6) & kmask3) << 4);
+    utmp[2] = uaux;
+    utmp[0] &= kmask1;
+}
+
+// Q4_K (12): d, dmin, scales[12], qs[128]; Q5_K (13): d, dmin, scales[12], qh[32], qs[128].  Chunk j's 32 qs bytes
+// hold values 64j..64j+31 in the low nibbles and 64j+32.. in the high ones (Q5_K: + 16 x bit 2j / 2j+1 of qh); the
+// unsigned values need no sign.  The min term is ggml's: the activation's 16-value sums paired to 32-value sums,
+// madd with the mins, then Q4_K a 4-lane fmadd and its two adds, Q5_K a scalar per block (see q5k_fused).
+template <int TY, int NT>
+inline void row_dot_k(const uint8_t* row, int nblocks, const block_q8_K* const* y, float* res) {
+    constexpr int bytes = TY == 12 ? 144 : 176, qs_off = TY == 12 ? 16 : 48;
+    __m256 accf[NT];
+    __m128 accm[NT];
+    float summs[NT];
+    for (int t = 0; t < NT; ++t) {
+        accf[t] = _mm256_setzero_ps();
+        accm[t] = _mm_setzero_ps();
+        summs[t] = 0.0f;
+    }
+    const __m256i m4 = _mm256_set1_epi8(0x0f), one = _mm256_set1_epi8(1);
+    for (int i = 0; i < nblocks; ++i) {
+        const uint8_t* blk = row + (size_t) i * bytes;
+        if (prefetch_ahead > 0) {
+            const uint8_t* ahead = blk + (size_t) prefetch_ahead;
+            _mm_prefetch((const char*) ahead, _MM_HINT_T0);
+            _mm_prefetch((const char*) ahead + 64, _MM_HINT_T0);
+        }
+        uint32_t utmp[4];
+        k_scales(blk + 4, utmp);
+        uint8_t s8[8];
+        std::memcpy(s8, utmp, 8);
+        const __m128i mins = _mm_cvtepu8_epi16(_mm_set_epi32(0, 0, (int) utmp[3], (int) utmp[2]));
+        __m256i qh = _mm256_setzero_si256();
+        if constexpr (TY == 13) qh = _mm256_loadu_si256((const __m256i*) (blk + 16));
+        __m512i acci[NT];
+        for (int t = 0; t < NT; ++t) acci[t] = _mm512_setzero_si512();
+        for (int j = 0; j < 4; ++j) {
+            const __m256i q = _mm256_loadu_si256((const __m256i*) (blk + qs_off + 32 * j));
+            __m256i lo = _mm256_and_si256(q, m4), hi = _mm256_and_si256(_mm256_srli_epi16(q, 4), m4);
+            if constexpr (TY == 13) {
+                lo = _mm256_add_epi8(lo, _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(qh, 2 * j), one), 4));
+                hi = _mm256_add_epi8(hi, _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(qh, 2 * j + 1), one), 4));
+            }
+            const __m512i g = _mm512_inserti64x4(_mm512_castsi256_si512(lo), hi, 1);
+            const __m512i sc = scales4(s8[2 * j], s8[2 * j], s8[2 * j + 1], s8[2 * j + 1]);
+            for (int t = 0; t < NT; ++t) {
+                const __m512i yv = _mm512_loadu_si512((const void*) (y[t][i].qs + 64 * j));
+                acci[t] = _mm512_add_epi32(acci[t], _mm512_madd_epi16(_mm512_maddubs_epi16(g, yv), sc));
+            }
+        }
+        const float dx = h2f(u16(blk)), mx = h2f(u16(blk + 2));
+        for (int t = 0; t < NT; ++t) {
+            const float d = y[t][i].d * dx, dmin = -y[t][i].d * mx;
+            accf[t] = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(fold(acci[t])), accf[t]);
+            const __m256i bs = _mm256_loadu_si256((const __m256i*) y[t][i].bsums);
+            const __m128i prod = _mm_madd_epi16(mins, _mm_hadd_epi16(_mm256_castsi256_si128(bs), _mm256_extracti128_si256(bs, 1)));
+            if constexpr (TY == 12) {
+                accm[t] = _mm_fmadd_ps(_mm_set1_ps(dmin), _mm_cvtepi32_ps(prod), accm[t]);
+            } else {
+                const __m128i z = _mm_setzero_si128();
+                const float sm = (float) _mm_cvtsi128_si32(_mm_hadd_epi32(_mm_hadd_epi32(prod, z), z));
+                summs[t] = q5k_fused.load(std::memory_order_relaxed) ? std::fma(dmin, sm, summs[t]) : summs[t] + dmin * sm;
+            }
+        }
+    }
+    for (int t = 0; t < NT; ++t) {
+        if constexpr (TY == 12) {
+            __m128 am = _mm_add_ps(accm[t], _mm_movehl_ps(accm[t], accm[t]));
+            am = _mm_add_ss(am, _mm_movehdup_ps(am));
+            res[t] = hsum_ggml(accf[t]) + _mm_cvtss_f32(am);
+        } else {
+            res[t] = hsum_ggml(accf[t]) + summs[t];
+        }
+    }
+}
+
+template <int TY, int NT>
+inline void row_dot_any(const uint8_t* row, int nblocks, const block_q8_K* const* y, float* res) {
+    if constexpr (TY == 12 || TY == 13) row_dot_k<TY, NT>(row, nblocks, y, res);
+    else                                row_dot<TY, NT>(row, nblocks, y, res);
 }
 
 template <int TY, int NT>
@@ -193,8 +325,8 @@ void gu_rows(const uint8_t* blob, size_t gu_row, size_t up_off, int n, const voi
     const int nb = n / QK_K;
     float g[NT], u[NT];
     for (int r = r0; r < r1; ++r) {
-        row_dot<TY, NT>(blob + (size_t) r * gu_row, nb, y, g);
-        row_dot<TY, NT>(blob + up_off + (size_t) r * gu_row, nb, y, u);
+        row_dot_any<TY, NT>(blob + (size_t) r * gu_row, nb, y, g);
+        row_dot_any<TY, NT>(blob + up_off + (size_t) r * gu_row, nb, y, u);
         for (int t = 0; t < NT; ++t) ff[t][r] = (g[t] / (1.f + std::exp(-g[t]))) * u[t];
     }
 }
@@ -205,7 +337,7 @@ void dot_rows(const uint8_t* w, size_t row_bytes, int n, const void* const* act,
     for (int t = 0; t < NT; ++t) y[t] = (const block_q8_K*) act[t];
     float res[NT];
     for (int r = r0; r < r1; ++r) {
-        row_dot<TY, NT>(w + (size_t) r * row_bytes, n / QK_K, y, res);
+        row_dot_any<TY, NT>(w + (size_t) r * row_bytes, n / QK_K, y, res);
         for (int t = 0; t < NT; ++t) out[t][r] = res[t];
     }
 }
@@ -221,7 +353,11 @@ void gu_rows_nt(int nt, const uint8_t* blob, size_t gu_row, size_t up_off, int n
         case 5: gu_rows<TY, 5>(blob, gu_row, up_off, n, act, ff, r0, r1); break;
         case 6: gu_rows<TY, 6>(blob, gu_row, up_off, n, act, ff, r0, r1); break;
         case 7: gu_rows<TY, 7>(blob, gu_row, up_off, n, act, ff, r0, r1); break;
-        default: gu_rows<TY, 8>(blob, gu_row, up_off, n, act, ff, r0, r1); break;
+        case 8: gu_rows<TY, 8>(blob, gu_row, up_off, n, act, ff, r0, r1); break;
+        default: for (int t0 = 0; t0 < nt; t0 += 8) {   // (more than 8: groups of 8, the rows read again per group)
+            const int k = nt - t0 < 8 ? nt - t0 : 8;
+            gu_rows_nt<TY>(k, blob, gu_row, up_off, n, act + t0, ff + t0, r0, r1);
+        }
     }
 }
 
@@ -243,17 +379,19 @@ void dot_rows_nt(int nt, const uint8_t* w, size_t row_bytes, int n, const void* 
 }  // namespace
 
 bool iq512_supported(int type) noexcept {
-    return type == 16 || type == 17 || type == 18 || type == 21 || type == 22;
+    return type == 16 || type == 17 || type == 18 || type == 21 || type == 22 || type == 23 || type == 12 || type == 13;
 }
+
+void iq512_set_q5k_fused(bool fused) noexcept { q5k_fused.store(fused); }
+
+#define IQ512_TYPES(F) F(12) F(13) F(16) F(17) F(18) F(21) F(22) F(23)
 
 void iq512_gu_rows(int type, const uint8_t* blob, size_t gu_row, size_t up_off, int n, const void* const* act, int nt,
                    float* const* ff, int r0, int r1) {
     switch (type) {
-        case 16: gu_rows_nt<16>(nt, blob, gu_row, up_off, n, act, ff, r0, r1); break;
-        case 17: gu_rows_nt<17>(nt, blob, gu_row, up_off, n, act, ff, r0, r1); break;
-        case 18: gu_rows_nt<18>(nt, blob, gu_row, up_off, n, act, ff, r0, r1); break;
-        case 21: gu_rows_nt<21>(nt, blob, gu_row, up_off, n, act, ff, r0, r1); break;
-        case 22: gu_rows_nt<22>(nt, blob, gu_row, up_off, n, act, ff, r0, r1); break;
+#define CASE(T) case T: gu_rows_nt<T>(nt, blob, gu_row, up_off, n, act, ff, r0, r1); break;
+        IQ512_TYPES(CASE)
+#undef CASE
         default: break;
     }
 }
@@ -261,11 +399,9 @@ void iq512_gu_rows(int type, const uint8_t* blob, size_t gu_row, size_t up_off, 
 void iq512_rows(int type, const uint8_t* w, size_t row_bytes, int n, const void* const* act, int nt, float* const* out,
                 int r0, int r1) {
     switch (type) {
-        case 16: dot_rows_nt<16>(nt, w, row_bytes, n, act, out, r0, r1); break;
-        case 17: dot_rows_nt<17>(nt, w, row_bytes, n, act, out, r0, r1); break;
-        case 18: dot_rows_nt<18>(nt, w, row_bytes, n, act, out, r0, r1); break;
-        case 21: dot_rows_nt<21>(nt, w, row_bytes, n, act, out, r0, r1); break;
-        case 22: dot_rows_nt<22>(nt, w, row_bytes, n, act, out, r0, r1); break;
+#define CASE(T) case T: dot_rows_nt<T>(nt, w, row_bytes, n, act, out, r0, r1); break;
+        IQ512_TYPES(CASE)
+#undef CASE
         default: break;
     }
 }
