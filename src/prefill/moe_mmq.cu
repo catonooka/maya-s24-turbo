@@ -126,18 +126,10 @@ Context::Context() {
 }
 Context::~Context() { delete (ggml_backend_cuda_context*) ctx_; }
 
-void Context::run(const Product& p, void* stream) {
-    if (p.n <= 0 || p.max_rows <= 0) return;
-    const ggml_type t = (ggml_type) p.type;
-    const int64_t qk = ggml_blck_size(t), bpr = p.w_cols / qk;
-    const mmq_args a = {(const char*) p.w, t, (const int*) p.xq, p.ids, p.bounds, p.dst, nullptr,
-                        p.w_cols, p.w_rows, p.total_rows, bpr, p.total_rows, p.ld_dst,
-                        p.n, p.n, (int64_t) (p.expert_bytes / ggml_type_size(t)), 0, 0,
-                        1, 1, 0, 0, 0,
-                        p.max_rows, p.max_rows};
-    auto& ctx = *(ggml_backend_cuda_context*) ctx_;
-    const cudaStream_t s = (cudaStream_t) stream;
-    switch (t) {
+namespace {
+
+void dispatch(ggml_backend_cuda_context& ctx, const mmq_args& a, cudaStream_t s) {
+    switch (a.type_x) {
         case GGML_TYPE_Q2_0: mul_mat_q_case<GGML_TYPE_Q2_0>(ctx, a, s); break;
         case GGML_TYPE_IQ2_XXS: mul_mat_q_case<GGML_TYPE_IQ2_XXS>(ctx, a, s); break;
         case GGML_TYPE_IQ2_XS: mul_mat_q_case<GGML_TYPE_IQ2_XS>(ctx, a, s); break;
@@ -154,10 +146,62 @@ void Context::run(const Product& p, void* stream) {
         case GGML_TYPE_Q5_K: mul_mat_q_case<GGML_TYPE_Q5_K>(ctx, a, s); break;
         case GGML_TYPE_Q6_K: mul_mat_q_case<GGML_TYPE_Q6_K>(ctx, a, s); break;
         default:
-            std::fprintf(stderr, "prefill mmq: type %d is not covered\n", (int) t);
+            std::fprintf(stderr, "prefill mmq: type %d is not covered\n", (int) a.type_x);
             std::exit(1);
     }
     ck(cudaGetLastError(), "mul_mat_q");
+}
+
+}  // namespace
+
+void Context::run(const Product& p, void* stream) {
+    if (p.n <= 0 || p.max_rows <= 0) return;
+    const ggml_type t = (ggml_type) p.type;
+    const int64_t qk = ggml_blck_size(t), bpr = p.w_cols / qk;
+    const mmq_args a = {(const char*) p.w, t, (const int*) p.xq, p.ids, p.bounds, p.dst, nullptr,
+                        p.w_cols, p.w_rows, p.total_rows, bpr, p.total_rows, p.ld_dst,
+                        p.n, p.n, (int64_t) (p.expert_bytes / ggml_type_size(t)), 0, 0,
+                        1, 1, 0, 0, 0,
+                        p.max_rows, p.max_rows};
+    dispatch(*(ggml_backend_cuda_context*) ctx_, a, (cudaStream_t) stream);
+}
+
+// STRATA_MMQ_GLU: the build compiles MMQ from a copy of ggml-cuda with third_party/ggml/mmq-fused-swiglu.patch
+bool glu_supported(int t, int64_t n_ff) {
+#if defined(STRATA_MMQ_GLU)
+    if (!ggml_cuda_mmq_fusion_supported((ggml_type) t) || n_ff <= 0 || n_ff % 128 != 0) return false;
+    int dev = 0;
+    if (cudaGetDevice(&dev) != cudaSuccess) return false;
+    return turing_mma_available(ggml_cuda_info().devices[dev].cc);
+#else
+    (void) t;
+    (void) n_ff;
+    return false;
+#endif
+}
+
+void Context::run_glu(const Product& p, float limit, void* stream) {
+#if defined(STRATA_MMQ_GLU)
+    if (p.n <= 0 || p.max_rows <= 0) return;
+    const ggml_type t = (ggml_type) p.type;
+    const int64_t qk = ggml_blck_size(t), bpr = p.w_cols / qk, n_ff = p.w_rows / 2;
+    // x the up rows, x_gate the gate rows of each expert's matrix; the output has n_ff rows
+    mmq_args a = {(const char*) p.w + (size_t) n_ff * (size_t) bpr * ggml_type_size(t), t, (const int*) p.xq, p.ids,
+                  p.bounds, p.dst, nullptr,
+                  p.w_cols, n_ff, p.total_rows, bpr, p.total_rows, p.ld_dst,
+                  p.n, p.n, (int64_t) (p.expert_bytes / ggml_type_size(t)), 0, 0,
+                  1, 1, 0, 0, 0,
+                  p.max_rows, p.max_rows};
+    a.x_gate = (const char*) p.w;
+    a.glu_limit = limit;
+    dispatch(*(ggml_backend_cuda_context*) ctx_, a, (cudaStream_t) stream);
+#else
+    (void) p;
+    (void) limit;
+    (void) stream;
+    std::fprintf(stderr, "prefill mmq: this build has no fused gate/up product\n");
+    std::exit(1);
+#endif
 }
 
 void gather_native(const void* gate, const void* up, size_t gu_half_bytes, const void* down, size_t d_bytes,

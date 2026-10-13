@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <mutex>
 #include <vector>
 
@@ -31,13 +32,14 @@ void init_once() {
 using RowsFn = void (*)(int, const uint8_t*, size_t, int, const void* const*, int, float* const*, int, int);
 
 // fn's rows against ggml-cpu's own dot, bit for bit: synthetic rows of `type` (random codes, every block's f16 scale
-// - and a K-quant's min scale - a small normal value) and Q8_K activations from ggml's quantizer, 2, 5 and 11 tokens
-// (11: the kernels' groups of 8 / 4 and their remainders).  306 results: a form off in a few % of them (Q5_K's fused
-// min term under MSVC: ~7%) cannot pass by chance - 39 did in ~6% of starts
-bool rows_match_ggml(RowsFn fn, int type) {
+// - and a K-quant's min scale - a small normal value) and Q8_K activations from ggml's quantizer, `rows` rows for each
+// token count of `nts` (the multi-token default 2, 5 and 11 - 11: the kernels' groups of 8 / 4 and their remainders).
+// 306 results: a form off in a few % of them (Q5_K's fused min term under MSVC: ~7%) cannot pass by chance - 39 did
+// in ~6% of starts
+bool rows_match_ggml(RowsFn fn, int type, std::initializer_list<int> nts = {2, 5, 11}, int rows = 17) {
     const ggml_type t = (ggml_type) type;
     const ggml_type at = traits(type)->vec_dot_type;
-    const int n = 2048, rows = 17;   // eight 256-value blocks
+    const int n = 2048;   // eight 256-value blocks
     const size_t rb = ggml_row_size(t, n), bb = ggml_type_size(t), ab = ggml_row_size(at, n);
     uint64_t st = 0x9E3779B97F4A7C15ull;
     const auto next = [&st] {
@@ -56,7 +58,7 @@ bool rows_match_ggml(RowsFn fn, int type) {
             std::memcpy(&w[o + sizeof d], &m, sizeof m);
         }
     }
-    for (int nt : {2, 5, 11}) {
+    for (int nt : nts) {
         std::vector<uint8_t> a(ab * (size_t) nt);
         std::vector<float> x((size_t) n), got((size_t) nt * rows), ref((size_t) nt * rows);
         std::vector<const void*> ap((size_t) nt);
@@ -116,6 +118,37 @@ RowsFn exact_rows(int type) {
     std::call_once(once[type], [type] { fn[type] = pick_rows(type); });
     return fn[type];
 }
+
+// The one-token rows (a decode step's CPU experts) for the formats whose ggml-cpu AVX2 dot rebuilds every value from
+// lookups: IQ3_XXS's four keven_signs loads per 32 values, IQ3_S's 9-bit indices built in vectors and read back from
+// memory.  iq256_rows1 is ggml's dot with two changes - IQ3_XXS's signs built in registers, IQ3_S's
+// indices in scalar registers - so it is bit-identical to ggml's dot (checked here once, 306 results).  On every AVX-2
+// CPU, like ggml-cpu's own dot (it has no AVX-512 form for these).  STRATA_GLM_CPU_1T=0 keeps ggml's dot.
+RowsFn pick_rows1(int type) {
+    static const bool on = [] {
+        const char* mt = std::getenv("STRATA_GLM_CPU_MT");
+        const char* v = std::getenv("STRATA_GLM_CPU_1T");
+        return (mt == nullptr || std::atoi(mt) != 0) && (v == nullptr || std::atoi(v) != 0);
+    }();
+    if (!on || !iq256_rows1_supported(type)) return nullptr;
+    init_once();
+    if (!cpu_avx2_ok() || std::getenv("STRATA_NO_IQ256") != nullptr) return nullptr;
+    if (rows_match_ggml(iq256_rows1, type, {1}, 306)) return iq256_rows1;
+    std::fprintf(stderr, "native experts: the one-token %s rows differ from ggml-cpu's dot in this build - "
+                         "ggml's dot for them\n", ggml_type_name((ggml_type) type));
+    return nullptr;
+}
+
+RowsFn exact_rows1(int type) {
+    if (type < 0 || type >= GGML_TYPE_COUNT) return nullptr;
+    static std::once_flag once[GGML_TYPE_COUNT];
+    static RowsFn fn[GGML_TYPE_COUNT];
+    std::call_once(once[type], [type] { fn[type] = pick_rows1(type); });
+    return fn[type];
+}
+
+// the exact rows for nt tokens of a weight type (nt >= 1), nullptr: ggml-cpu's dot
+RowsFn exact_rows_nt(int type, int nt) { return nt >= 2 ? exact_rows(type) : exact_rows1(type); }
 
 }  // namespace
 
@@ -212,8 +245,8 @@ void native_gu_rows_split(const NativeFmt& f, const uint8_t* gate_base, const ui
                           float swiglu_limit) {
     const int n = (int) f.n_embd;
     const bool clamp = swiglu_limit != std::numeric_limits<float>::infinity();
-    if (nt >= 2 && r1 > r0) {
-        if (const RowsFn fn = exact_rows(f.gu_type)) {
+    if (r1 > r0) {
+        if (const RowsFn fn = exact_rows_nt(f.gu_type, nt)) {
             // every gate row of the range for all tokens (each row decoded once per group of tokens), then every up
             // row, then the same epilogue as below on the same values
             const int nr = r1 - r0;
@@ -260,8 +293,8 @@ void native_gu_rows_split(const NativeFmt& f, const uint8_t* gate_base, const ui
 
 void native_down_rows_split(const NativeFmt& f, const uint8_t* down_base, const void* const* hq,
                             int nt, float* const* out, int r0, int r1) {
-    if (nt >= 2 && r1 > r0) {
-        if (const RowsFn fn = exact_rows(f.d_type)) {
+    if (r1 > r0) {
+        if (const RowsFn fn = exact_rows_nt(f.d_type, nt)) {
             thread_local std::vector<float*> o;
             o.resize((size_t) nt);
             for (int t = 0; t < nt; ++t) o[(size_t) t] = out[t] + r0;

@@ -2188,6 +2188,14 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
             return a - wb;
         };
         const size_t qblk = mmq::q8_block_bytes();
+        // the SwiGLU in the gate/up product's write-back where MMQ has it: the product
+        // writes T x n_ff values instead of T x 2 n_ff that a separate kernel reads back, bit-identical to it.
+        // STRATA_GLM_MMQ_GLU=0: the separate kernel.
+        static const bool glu_on = [] {
+            const char* v = getenv("STRATA_GLM_MMQ_GLU");
+            return v == nullptr || std::atoi(v) != 0;
+        }();
+        const bool glu = glu_on && mmq::glu_supported(Ly.gu_type, nff);
         // one expert set through gate/up, swiglu and down: its rows [r0 + hb[0], r0 + hb[n_exp]) of the sorted order
         // (hb: the set's bounds on the host, d_bounds the same on the device), in parts of at most W rows
         const auto run_set = [&](const uint8_t* wbase, int n_exp, size_t stride, const int* d_bounds, const int* hb,
@@ -2218,8 +2226,12 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
                     gu.max_rows = max_rows;
                     gu.dst = GU - (size_t) a * (2 * nff);
                     gu.ld_dst = 2 * nff;
-                    S->mq->run(gu, s);
-                    gb::swiglu_rows(GU, GU, nrows, nff, g.swiglu_exp, s, 2 * nff);   // (in place: no T x K x n_ff buffer)
+                    if (glu) {
+                        S->mq->run_glu(gu, g.swiglu_exp, s);   // (h in each row's first n_ff floats, as below)
+                    } else {
+                        S->mq->run(gu, s);
+                        gb::swiglu_rows(GU, GU, nrows, nff, g.swiglu_exp, s, 2 * nff);   // (in place: no T x K x n_ff buffer)
+                    }
                     mmq::quantize(GU, nullptr, M.Hq, Ly.d_type, nff, 2 * nff, nrows, s);
                     mmq::Product dn;
                     dn.w = wbase + (size_t) i0 * stride + Ly.down_off;
