@@ -5,8 +5,8 @@
 // once per head group of every token that selects it, so the conversion is most of what INT8 adds to a prompt (a
 // V100 at 8K: its attention +20%).  Four int-to-float conversions and four F32 multiplies a word became two FP16
 // pairs: a code goes to FP16 exactly (the bits 0x64, q + 128 are 1024 + q + 128; less 1152 is q), and FP16's own
-// multiply rounds the exact product once, as the F32 product (exact: 8 x 11 bits) then rounded to FP16 did; a scale
-// below FP16's normal range takes that F32 product itself - the same bits for every code and every finite scale
+// multiply rounds the exact product once, as the F32 product (exact: 8 x 11 bits) then rounded to FP16 did; on AMD a
+// scale below FP16's normal range takes that F32 product itself - the same bits for every code and every finite scale
 // (tests/glm_lat8_test.cu checks all of them).
 #pragma once
 
@@ -47,24 +47,28 @@ __device__ __forceinline__ uint2 lat8_q4_f32(uint32_t w, float d) {
     return make_uint2(*(const unsigned*) &a, *(const unsigned*) &b);
 }
 __device__ __forceinline__ bool lat8_normal(__half d) { return (__half_as_ushort(d) & 0x7C00u) != 0; }
-// values [4 c4, 4 c4 + 4) of a record (an FP16 row's uint2 there)
+// values [4 c4, 4 c4 + 4) of a record (an FP16 row's uint2 there).  NVIDIA's FP16 multiply keeps subnormals and the
+// zeros' signs as the F32 product does (every scale checked on a V100), so only AMD takes the F32 product for such a
+// scale - the branch alone cost the V100's prompt attention the whole gain (3.42 -> 3.69 s at 8K)
 __device__ __forceinline__ uint2 lat8_h4(const uint8_t* rec, int kv, int c4) {
     const uint32_t w = ((const uint32_t*) rec)[c4];
     const __half d = ((const __half*) (rec + kv))[(4 * c4) >> 5];
-    return lat8_normal(d) ? lat8_q4(w, __half2half2(d)) : lat8_q4_f32(w, __half2float(d));
+#if defined(STRATA_USE_HIP)
+    if (!lat8_normal(d)) return lat8_q4_f32(w, __half2float(d));
+#endif
+    return lat8_q4(w, __half2half2(d));
 }
 // values [8 c8, 8 c8 + 8) of a record (an FP16 row's uint4 there)
 __device__ __forceinline__ uint4 lat8_h8(const uint8_t* rec, int kv, int c8) {
     const uint2 w = ((const uint2*) rec)[c8];
     const __half d = ((const __half*) (rec + kv))[c8 >> 2];
-    uint2 lo, hi;
-    if (lat8_normal(d)) {
-        lo = lat8_q4(w.x, __half2half2(d));
-        hi = lat8_q4(w.y, __half2half2(d));
-    } else {
-        lo = lat8_q4_f32(w.x, __half2float(d));
-        hi = lat8_q4_f32(w.y, __half2float(d));
+#if defined(STRATA_USE_HIP)
+    if (!lat8_normal(d)) {
+        const uint2 lo = lat8_q4_f32(w.x, __half2float(d)), hi = lat8_q4_f32(w.y, __half2float(d));
+        return make_uint4(lo.x, lo.y, hi.x, hi.y);
     }
+#endif
+    const uint2 lo = lat8_q4(w.x, __half2half2(d)), hi = lat8_q4(w.y, __half2half2(d));
     return make_uint4(lo.x, lo.y, hi.x, hi.y);
 }
 
