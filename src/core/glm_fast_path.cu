@@ -1515,7 +1515,10 @@ bool Glm5Model::fast_setup(std::string& err) {
         const char* wv = getenv("STRATA_GLM_WARM");
         if ((wv == nullptr || std::atoi(wv) != 0) && !fast_warm(err)) return false;
 #ifdef _WIN32
-        {   // #56: which node the tier drew this start - visibility only, the engine cannot place it
+        // #56: which node the tier drew this start - visibility only, the engine cannot place it.  Only on a PC with two
+        // NUMA nodes or more: on one node it tells nothing, and its "node 0 of 2 seen" (2: the tier's blocks, one an
+        // expert size) read as two nodes to single-socket users (#114, #129, #147)
+        if (ULONG highest_node = 0; GetNumaHighestNodeNumber(&highest_node) && highest_node > 0) {
             int tier_node = -1, seen = 0;
             bool agree = true;   // arenas on different nodes: no line
             for (const auto& R : F->rc)
