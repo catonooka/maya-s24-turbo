@@ -3073,6 +3073,21 @@ int main(int argc, char** argv) {
         setenv("CUDA_MODULE_LOADING", "EAGER", 0);
 #endif
     }
+#if defined(_WIN32)
+    // Windows' power throttling (EcoQoS) runs a process whose windows are all in the background on a hybrid CPU's
+    // efficiency cores at low clocks, and the CPU lane crawled there - an i7-13700: decode 9-12 tok/s with Maya's
+    // window focused, ~2 tok/s behind other windows, the same either way once `powercfg /powerthrottling disable`
+    // named the engine (#114).  The engine opts out itself.  Resolved at runtime as PrefetchVirtualMemory is
+    // (expert_source.cpp): the struct is PROCESS_POWER_THROTTLING_STATE (version 1; EXECUTION_SPEED managed, and off)
+    // and 4 is ProcessPowerThrottling - a Windows without them refuses the call and nothing changes
+    {
+        struct Throttle { ULONG version, control, state; } off{1u, 0x1u, 0u};
+        using SetInfoFn = BOOL (WINAPI*)(HANDLE, int, LPVOID, DWORD);
+        const HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+        const SetInfoFn set_info = k32 ? reinterpret_cast<SetInfoFn>(GetProcAddress(k32, "SetProcessInformation")) : nullptr;
+        if (set_info != nullptr) set_info(GetCurrentProcess(), 4, &off, (DWORD) sizeof off);
+    }
+#endif
     Options o;
     bool have_tokens = false;
     bool have_logits_stride = false;
