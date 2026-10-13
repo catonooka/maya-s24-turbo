@@ -296,6 +296,9 @@ struct MoeWin {
 };
 constexpr int kMaxWinTokens = kMaxMvCols;   // the window's tokens moe_win_experts groups (16 x 8 entries)
 bool moe_win_experts(int gu_type, int d_type, const MoeWin& w, cudaStream_t s);
+/// moe_win_experts' grouping alone (w's plan_ptr, T, k -> grp_ptr / grp_start / grp_ent / n_groups), for kernels of
+/// other formats (EXL3: exl3::win_experts)
+void moe_win_group(const MoeWin& w, cudaStream_t s);
 /// The CPU LANE's split: of f RAM-tier experts in a route, cpu_take(plan, f) go to the host (4 bits per f, f = 0..8).
 inline int cpu_take(unsigned long long plan, int f) { return (int) ((plan >> (4 * f)) & 15ull); }
 /// Waits (on the device) for the host's CPU-lane answer of the last route when it had CPU experts, then adds it to

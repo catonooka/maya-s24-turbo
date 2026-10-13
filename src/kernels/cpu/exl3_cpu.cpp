@@ -9,6 +9,7 @@
 
 #include "strata/kernels/f16_bits.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -173,6 +174,64 @@ EXL3_AVX512 void band_avx512(const Exl3Part& m, const float* xh, int tc0, int ks
     for (int t = 0; t < 8; ++t) _mm512_storeu_ps(out + t * 16, acc[t]);
 }
 
+// band_avx512 for N activations at once (xh[i] -> out[i]), as exllamav3's CPU kernel takes up to 4 token rows: each
+// tile row's 16 states are pulled out and byte-summed once, then one FMA per activation - activation i's FMAs are
+// band_avx512's for it alone, in its order, so out[i] is the same bit for bit.  An extra activation costs one FMA of
+// the row's ~12 instructions.  (The tiles' accumulators live in memory, loaded once a tile and slice as there: only
+// the N of the tile in hand take registers.)
+template <int K, int N>
+EXL3_AVX512 void band_avx512_n(const Exl3Part& m, const float* const* xh, int tc0, int ks0, int ks1,
+                               float* const* out /* N x 128 */) {
+    constexpr int W = 8 * K;
+    static constexpr RowTab<K> T = make_rowtab<K>();
+    constexpr auto ld_mask = [](int n) -> __mmask16 {
+        return n >= 16 ? (__mmask16) 0xffffu : n <= 0 ? (__mmask16) 0 : (__mmask16) ((1u << n) - 1u);
+    };
+    constexpr __mmask16 m0 = ld_mask(W), m1 = ld_mask(W - 16), m2 = ld_mask(W - 32), m3 = ld_mask(W - 48);
+    const int ld = m.n / 16;
+    const size_t row_words = (size_t) ld * W;
+    const __m512i mult = _mm512_set1_epi32((int) kMul1);
+    const __m512i ones8 = _mm512_set1_epi8(1), ones16 = _mm512_set1_epi16(1);
+    const __m512i low16 = _mm512_set1_epi32(0xffff);
+    __m512 acc[8][N];
+    for (int t = 0; t < 8; ++t)
+        for (int i = 0; i < N; ++i) acc[t][i] = _mm512_setzero_ps();
+    const uint32_t* row = m.trellis + (size_t) ks0 * row_words + (size_t) tc0 * W;
+    for (int ks = ks0; ks < ks1; ++ks, row += row_words) {
+        const char* pf = (const char*) (row + 4 * row_words);
+        for (int l = 0; l < 8 * W * 4; l += 64) _mm_prefetch(pf + l, _MM_HINT_T0);
+        const float* xk[N];
+        for (int i = 0; i < N; ++i) xk[i] = xh[i] + ks * 16;
+        for (int t = 0; t < 8; ++t) {
+            const uint32_t* w = row + t * W;
+            const __m512i p0 = _mm512_maskz_loadu_epi32(m0, w);
+            const __m512i p1 = m1 ? _mm512_maskz_loadu_epi32(m1, w + 16) : _mm512_setzero_si512();
+            const __m512i p2 = m2 ? _mm512_maskz_loadu_epi32(m2, w + 32) : _mm512_setzero_si512();
+            const __m512i p3 = m3 ? _mm512_maskz_loadu_epi32(m3, w + 48) : _mm512_setzero_si512();
+            __m512 a[N];
+#pragma GCC unroll 8
+            for (int i = 0; i < N; ++i) a[i] = acc[t][i];
+#pragma GCC unroll 16
+            for (int r = 0; r < 16; ++r) {
+                const __m512i wa = gather_words<K>(T, T.i0, T.hi0, r, p0, p1, p2, p3);
+                const __m512i wb = gather_words<K>(T, T.i1, T.hi1, r, p0, p1, p2, p3);
+                const __m512i st = _mm512_and_si512(
+                    _mm512_or_si512(_mm512_srlv_epi32(wb, _mm512_loadu_si512((const void*) T.sr[r])),
+                                    _mm512_sllv_epi32(wa, _mm512_loadu_si512((const void*) T.sl[r]))),
+                    low16);
+                const __m512 f = _mm512_cvtepi32_ps(
+                    _mm512_madd_epi16(_mm512_maddubs_epi16(_mm512_mullo_epi32(st, mult), ones8), ones16));
+#pragma GCC unroll 8
+                for (int i = 0; i < N; ++i) a[i] = _mm512_fmadd_ps(f, _mm512_set1_ps(xk[i][r]), a[i]);
+            }
+#pragma GCC unroll 8
+            for (int i = 0; i < N; ++i) acc[t][i] = a[i];
+        }
+    }
+    for (int i = 0; i < N; ++i)
+        for (int t = 0; t < 8; ++t) _mm512_storeu_ps(out[i] + t * 16, acc[t][i]);
+}
+
 bool detect_avx512() {
     if (const char* f = std::getenv("STRATA_FORCE_AVX2"); f != nullptr && f[0] == '1') return false;
     unsigned r[4] = {0, 0, 0, 0};
@@ -213,6 +272,25 @@ void band_any(const Exl3Part& m, const float* xh, int tc0, int ks0, int ks1, flo
     band_scalar<K>(m, xh, tc0, ks0, ks1, acc);
 }
 
+// n activations (1..kExl3CpuMaxN) on one band
+template <int K>
+void band_any_n(const Exl3Part& m, const float* const* xh, int n, int tc0, int ks0, int ks1, float* const* acc) {
+#if defined(EXL3_X86)
+    if (exl3_cpu_vector() && n > 1) {
+        switch (n) {
+            case 2: band_avx512_n<K, 2>(m, xh, tc0, ks0, ks1, acc); return;
+            case 3: band_avx512_n<K, 3>(m, xh, tc0, ks0, ks1, acc); return;
+            case 4: band_avx512_n<K, 4>(m, xh, tc0, ks0, ks1, acc); return;
+            case 5: band_avx512_n<K, 5>(m, xh, tc0, ks0, ks1, acc); return;
+            case 6: band_avx512_n<K, 6>(m, xh, tc0, ks0, ks1, acc); return;
+            case 7: band_avx512_n<K, 7>(m, xh, tc0, ks0, ks1, acc); return;
+            default: band_avx512_n<K, 8>(m, xh, tc0, ks0, ks1, acc); return;
+        }
+    }
+#endif
+    for (int i = 0; i < n; ++i) band_any<K>(m, xh[i], tc0, ks0, ks1, acc[i]);
+}
+
 }  // namespace
 
 bool exl3_cpu_vector() {
@@ -251,6 +329,27 @@ void exl3_cpu_band_acc(const Exl3Part& m, const float* xh, int c0, int ks0, int 
         case 8: band_any<8>(m, xh, tc0, ks0, ks1, acc); break;
         default:
             for (int i = 0; i < 128; ++i) acc[i] = 0.0f;
+    }
+}
+
+void exl3_cpu_band_acc_n(const Exl3Part& m, const float* const* xh, int n, int c0, int ks0, int ks1,
+                         float* const* acc) {
+    const int tc0 = c0 / 16;
+    for (int i0 = 0; i0 < n; i0 += kExl3CpuMaxN) {
+        const int c = std::min(kExl3CpuMaxN, n - i0);
+        switch (m.K) {
+            case 1: band_any_n<1>(m, xh + i0, c, tc0, ks0, ks1, acc + i0); break;
+            case 2: band_any_n<2>(m, xh + i0, c, tc0, ks0, ks1, acc + i0); break;
+            case 3: band_any_n<3>(m, xh + i0, c, tc0, ks0, ks1, acc + i0); break;
+            case 4: band_any_n<4>(m, xh + i0, c, tc0, ks0, ks1, acc + i0); break;
+            case 5: band_any_n<5>(m, xh + i0, c, tc0, ks0, ks1, acc + i0); break;
+            case 6: band_any_n<6>(m, xh + i0, c, tc0, ks0, ks1, acc + i0); break;
+            case 7: band_any_n<7>(m, xh + i0, c, tc0, ks0, ks1, acc + i0); break;
+            case 8: band_any_n<8>(m, xh + i0, c, tc0, ks0, ks1, acc + i0); break;
+            default:
+                for (int i = 0; i < c; ++i)
+                    for (int j = 0; j < 128; ++j) acc[i0 + i][j] = 0.0f;
+        }
     }
 }
 

@@ -29,6 +29,11 @@ float exl3_cpu_prepare_block(const uint16_t* suh, const float* x, float* xh);
 void exl3_cpu_band(const Exl3Part& m, const float* xh, float xsum, int c0, float* y);
 /// The same in parts: the byte-sum products of the 16-row slices [ks0, ks1) (xh from slice 0) ...
 void exl3_cpu_band_acc(const Exl3Part& m, const float* xh, int c0, int ks0, int ks1, float* acc);
+/// exl3_cpu_band_acc for n activations of the same matrix at once (xh[i] -> acc[i], each 128 floats): each tile row is
+/// decoded once for up to kExl3CpuMaxN of them, and acc[i] is exl3_cpu_band_acc's for xh[i] alone, bit for bit.
+constexpr int kExl3CpuMaxN = 8;
+void exl3_cpu_band_acc_n(const Exl3Part& m, const float* const* xh, int n, int c0, int ks0, int ks1,
+                         float* const* acc);
 /// ... and, with the parts' acc summed over every slice, the outputs (the codebook's affine form, H, svh).
 void exl3_cpu_band_out(const Exl3Part& m, const float* acc, float xsum, int c0, float* y);
 

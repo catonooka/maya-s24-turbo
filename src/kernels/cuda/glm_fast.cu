@@ -4061,8 +4061,9 @@ void mv_config(int r, int u, int wpb, int lds) {
 }  // namespace hip_expert_bench
 #endif
 
-// A batch's EXL3 jobs (w: an exl3::Mat) through exl3::mv, marked done: every column one EXL3 job, in launches of up to
-// exl3::kMaxMvJobs - nt > 0: nt activations one after another (mv_nt's layout), else each job's ncol at its strides
+// A batch's EXL3 jobs (w: an exl3::Mat) through exl3::mv, marked done, in launches of up to exl3::kMaxMvJobs - nt > 0:
+// nt activations one after another (mv_nt's layout), else each job's ncol at its strides; a job's activations (a
+// verify window's tokens) stay one EXL3 job of up to exl3::kMaxMvCols, its weights decoded once for several of them
 static bool exl3_jobs(const MvJob* jobs, int n, int nt, bool* done, cudaStream_t s) {
     exl3::MvJob xj[exl3::kMaxMvJobs];
     int nx = 0;
@@ -4073,7 +4074,7 @@ static bool exl3_jobs(const MvJob* jobs, int n, int nt, bool* done, cudaStream_t
         const int64_t xq_cs = nt > 0 ? (int64_t) (j.n_in / 32) * (int64_t) sizeof(block_q8_1) : j.xq_cstride;
         const int64_t xf_cs = nt > 0 ? j.n_in : j.xf_cstride;
         const int64_t y_cs = nt > 0 ? j.n_out : j.y_cstride;
-        for (int c = 0; c < ncol; ++c) {
+        for (int c = 0; c < ncol; c += exl3::kMaxMvCols) {
             exl3::MvJob& x = xj[nx++];
             x.m = (const exl3::Mat*) j.w;
             x.xf = j.xf != nullptr ? j.xf + c * xf_cs : nullptr;
@@ -4081,6 +4082,10 @@ static bool exl3_jobs(const MvJob* jobs, int n, int nt, bool* done, cudaStream_t
             x.y = j.y + c * y_cs;
             x.bias = j.bias;
             x.alpha = j.alpha;
+            x.ncol = std::min(exl3::kMaxMvCols, ncol - c);
+            x.xf_cs = (size_t) xf_cs;
+            x.xq_cs = (size_t) xq_cs;
+            x.y_cs = (size_t) y_cs;
             if (nx == exl3::kMaxMvJobs) {
                 if (!exl3::mv(xj, nx, s)) return false;
                 nx = 0;
@@ -4934,6 +4939,11 @@ bool moe_win_experts(int gu_type, int d_type, const MoeWin& w, cudaStream_t s) {
     moe_win_combine_kernel<<<dim3((unsigned) ((w.n_embd + 255) / 256), (unsigned) w.T), 256, 0, s>>>(w);
     launch_check("moe_win_experts");
     return true;
+}
+
+void moe_win_group(const MoeWin& w, cudaStream_t s) {
+    moe_win_group_kernel<<<1, 32, 0, s>>>(w);
+    launch_check("moe_win_group");
 }
 
 namespace {

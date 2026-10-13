@@ -11,6 +11,7 @@
 
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -498,6 +499,235 @@ void test_set(int K, int cb) {
           host_copy(d_out, ref.size()), ref, 3e-3);
 }
 
+// mv with several activations (a verify window's tokens) against one mv job per activation: the same bits
+void test_mv_n(int k, int n, int K, int cb, bool q8, int ncol) {
+    HostMat h = make_mat(k, n, K, cb);
+    ex::Mat m;
+    m.trellis = dev_copy(h.tr);
+    m.suh = dev_copy(h.suh);
+    m.svh = dev_copy(h.svh);
+    m.k = k;
+    m.n = n;
+    m.K = K;
+    m.cb = cb;
+    // activations k + 128 floats (and q8_1 blocks) apart, outputs n + 64 apart: the strides are the job's
+    const size_t xs = (size_t) k + 128, ys = (size_t) n + 64, qs = xs / 32 * 36;
+    std::vector<float> x((size_t) ncol * xs), bias = rand_x(n);
+    std::vector<uint8_t> xq((size_t) ncol * qs);
+    for (int c = 0; c < ncol; ++c) {
+        std::vector<float> xc = rand_x(k, 2.0f), deq;
+        std::vector<uint8_t> qc;
+        std::copy(xc.begin(), xc.end(), x.begin() + (std::ptrdiff_t) (c * xs));
+        q8_1(xc, qc, deq);
+        std::copy(qc.begin(), qc.end(), xq.begin() + (std::ptrdiff_t) (c * qs));
+    }
+    float* d_x = dev_copy(x);
+    uint8_t* d_xq = dev_copy(xq);
+    float* d_bias = dev_copy(bias);
+    float *d_y1 = nullptr, *d_yn = nullptr;
+    CK(cudaMalloc(&d_y1, (size_t) ncol * ys * sizeof(float)));
+    CK(cudaMalloc(&d_yn, (size_t) ncol * ys * sizeof(float)));
+    CK(cudaMemset(d_y1, 0, (size_t) ncol * ys * sizeof(float)));
+    CK(cudaMemset(d_yn, 0, (size_t) ncol * ys * sizeof(float)));
+    for (int c = 0; c < ncol; ++c) {
+        ex::MvJob j;
+        j.m = &m;
+        j.xf = q8 ? nullptr : d_x + c * xs;
+        j.xq = q8 ? (const void*) (d_xq + c * qs) : nullptr;
+        j.y = d_y1 + c * ys;
+        j.bias = d_bias;
+        j.alpha = 0.75f;
+        if (!ex::mv(&j, 1, 0)) ++g_fail;
+    }
+    ex::MvJob j;
+    j.m = &m;
+    j.xf = q8 ? nullptr : d_x;
+    j.xq = q8 ? (const void*) d_xq : nullptr;
+    j.y = d_yn;
+    j.bias = d_bias;
+    j.alpha = 0.75f;
+    j.ncol = ncol;
+    j.xf_cs = xs;
+    j.xq_cs = qs;
+    j.y_cs = ys;
+    for (int rep = 0; rep < 2; ++rep)   // twice: the split's counters must come back to zero
+        if (!ex::mv(&j, 1, 0)) ++g_fail;
+    CK(cudaDeviceSynchronize());
+    const std::vector<float> a = host_copy(d_y1, (size_t) ncol * ys), b = host_copy(d_yn, (size_t) ncol * ys);
+    size_t diff = 0;
+    for (size_t i = 0; i < a.size(); ++i) diff += std::memcmp(&a[i], &b[i], sizeof(float)) != 0;
+    const std::string what = "mv x" + std::to_string(ncol) + " k" + std::to_string(k) + " n" + std::to_string(n) +
+                             " K" + std::to_string(K) + " cb" + std::to_string(cb) + (q8 ? " q8_1" : " f32");
+    std::printf("  %-44s %zu of %zu differ from one job each  %s\n", what.c_str(), diff, a.size(),
+                diff == 0 ? "ok" : "FAIL");
+    if (diff != 0) ++g_fail;
+    cudaFree((void*) m.trellis);
+    cudaFree((void*) m.suh);
+    cudaFree((void*) m.svh);
+    cudaFree(d_x);
+    cudaFree(d_xq);
+    cudaFree(d_bias);
+    cudaFree(d_y1);
+    cudaFree(d_yn);
+}
+
+// a verify window's routed experts (win_experts: each distinct expert once for its tokens) against each token's
+// moe_gate_up + moe_down: the same bits.  T tokens, k plan entries each over a few experts (shared ones, a skipped
+// entry, a token whose CPU-lane flag is off)
+void test_win(int K, int cb, int T) {
+    const int E = 512, F = 384, k = 4, NX = 5;
+    const float limit = 1.5f;
+    ex::ExpertLayout lay;
+    lay.cb = cb;
+    std::vector<uint8_t*> d_blob((size_t) NX);
+    for (int e = 0; e < NX; ++e) {
+        std::vector<uint8_t> b;
+        size_t at = 0;
+        for (int r = 0; r < 3; ++r) {
+            const HostMat p = r < 2 ? make_mat(E, F, K, cb) : make_mat(F, E, K, cb);
+            const size_t o_suh = at, o_svh = o_suh + p.suh.size() * 2, o_tr = o_svh + p.svh.size() * 2 + 4;
+            at = o_tr + p.tr.size() * 4;
+            b.resize(at);
+            std::memcpy(&b[o_suh], p.suh.data(), p.suh.size() * 2);
+            std::memcpy(&b[o_svh], p.svh.data(), p.svh.size() * 2);
+            std::memcpy(&b[o_tr], p.tr.data(), p.tr.size() * 4);
+            lay.suh[r] = o_suh;
+            lay.svh[r] = o_svh;
+            lay.trellis[r] = o_tr;
+            lay.K[r] = K;
+        }
+        d_blob[(size_t) e] = dev_copy(b);
+    }
+    // plans [T][8]: entry i of token t on expert (t + 2 i) % NX, entry 1 of every third token skipped
+    std::vector<unsigned long long> plan((size_t) T * 8, 0ull);
+    std::vector<float> pw((size_t) T * 8, 0.0f);
+    std::uniform_real_distribution<float> uw(0.05f, 0.5f);
+    for (int t = 0; t < T; ++t)
+        for (int i = 0; i < k; ++i) {
+            if (i == 1 && t % 3 == 0) continue;
+            plan[(size_t) t * 8 + i] = (unsigned long long) d_blob[(size_t) ((t + 2 * i) % NX)];
+            pw[(size_t) t * 8 + i] = uw(g_rng);
+        }
+    // the groups, as glmf::moe_win_group makes them (expert order of first appearance, entries in order)
+    std::vector<unsigned long long> gp;
+    std::vector<std::vector<int>> members;
+    for (int e = 0; e < T * 8; ++e) {
+        if (e % 8 >= k || plan[(size_t) e] == 0ull) continue;
+        size_t g = 0;
+        while (g < gp.size() && gp[g] != plan[(size_t) e]) ++g;
+        if (g == gp.size()) {
+            gp.push_back(plan[(size_t) e]);
+            members.emplace_back();
+        }
+        members[g].push_back(e);
+    }
+    std::vector<int> gstart(1, 0), gent;
+    for (auto& mm : members) {
+        for (int e : mm) gent.push_back(e);
+        gstart.push_back((int) gent.size());
+    }
+    std::vector<int> ng = {(int) gp.size()}, flag((size_t) T);
+    for (int t = 0; t < T; ++t) flag[(size_t) t] = t % 2;
+    std::vector<float> x = rand_x(T * E), cpu = rand_x(T * E), sh = rand_x(T * E);
+    auto* d_plan = dev_copy(plan);
+    float* d_pw = dev_copy(pw);
+    float* d_x = dev_copy(x);
+    float* d_cpu = dev_copy(cpu);
+    float* d_sh = dev_copy(sh);
+    int* d_flag = dev_copy(flag);
+    auto* d_gp = dev_copy(gp);
+    int* d_gs = dev_copy(gstart);
+    int* d_ge = dev_copy(gent);
+    int* d_ng = dev_copy(ng);
+    float *d_h = nullptr, *d_part = nullptr, *d_o1 = nullptr, *d_on = nullptr;
+    CK(cudaMalloc(&d_h, (size_t) T * 8 * F * sizeof(float)));
+    CK(cudaMalloc(&d_part, (size_t) T * 8 * E * sizeof(float)));
+    CK(cudaMalloc(&d_o1, (size_t) T * E * sizeof(float)));
+    CK(cudaMalloc(&d_on, (size_t) T * E * sizeof(float)));
+    for (int t = 0; t < T; ++t) {
+        ex::MoeArgs a;
+        a.plan_ptr = d_plan + t * 8;
+        a.plan_w = d_pw + t * 8;
+        a.cpu_part = d_cpu + (size_t) t * E;
+        a.cpu_flag = d_flag + t;
+        a.lay = lay;
+        a.k = k;
+        a.n_embd = E;
+        a.n_ff = F;
+        a.limit = limit;
+        ex::moe_gate_up(a, d_x + (size_t) t * E, nullptr, 0);
+        ex::moe_down(a, nullptr, d_sh + (size_t) t * E, d_o1 + (size_t) t * E, 0);
+    }
+    ex::WinArgs w;
+    w.grp_ptr = d_gp;
+    w.grp_start = d_gs;
+    w.grp_ent = d_ge;
+    w.n_groups = d_ng;
+    w.plan_ptr = d_plan;
+    w.plan_w = d_pw;
+    w.cpu_part = d_cpu;
+    w.cpu_flag = d_flag;
+    w.x = d_x;
+    w.x_stride = E;
+    w.h = d_h;
+    w.part = d_part;
+    w.sh_out = d_sh;
+    w.out = d_on;
+    w.out_stride = E;
+    w.lay = lay;
+    w.T = T;
+    w.k = k;
+    w.n_embd = E;
+    w.n_ff = F;
+    w.limit = limit;
+    if (!ex::win_experts(w, 0)) ++g_fail;
+    CK(cudaDeviceSynchronize());
+    const std::vector<float> a = host_copy(d_o1, (size_t) T * E), b = host_copy(d_on, (size_t) T * E);
+    size_t diff = 0;
+    for (size_t i = 0; i < a.size(); ++i) diff += std::memcmp(&a[i], &b[i], sizeof(float)) != 0;
+    const std::string what = "win K" + std::to_string(K) + " cb" + std::to_string(cb) + " " + std::to_string(T) +
+                             " tokens, " + std::to_string(gp.size()) + " experts";
+    std::printf("  %-44s %zu of %zu differ from the token path  %s\n", what.c_str(), diff, a.size(),
+                diff == 0 ? "ok" : "FAIL");
+    if (diff != 0) ++g_fail;
+    for (auto* p : d_blob) cudaFree(p);
+    for (void* p : {(void*) d_plan, (void*) d_pw, (void*) d_x, (void*) d_cpu, (void*) d_sh, (void*) d_flag,
+                    (void*) d_gp, (void*) d_gs, (void*) d_ge, (void*) d_ng, (void*) d_h, (void*) d_part, (void*) d_o1,
+                    (void*) d_on})
+        cudaFree(p);
+}
+
+// the CPU lane's kernel for several activations at once against one call each: the same bits
+void test_cpu_n(int k, int n, int K) {
+    HostMat h = make_mat(k, n, K, 2);
+    cpu::Exl3Part m;
+    m.trellis = h.tr.data();
+    m.suh = h.suh.data();
+    m.svh = h.svh.data();
+    m.k = k;
+    m.n = n;
+    m.K = K;
+    constexpr int NT = 11;   // past kExl3CpuMaxN: two runs
+    std::vector<std::vector<float>> xh;
+    const float* xp[NT];
+    for (int i = 0; i < NT; ++i) xh.push_back(rand_x(k));
+    for (int i = 0; i < NT; ++i) xp[i] = xh[(size_t) i].data();
+    std::vector<float> one((size_t) NT * 128), all((size_t) NT * 128);
+    float* ap[NT];
+    for (int i = 0; i < NT; ++i) ap[i] = all.data() + (size_t) i * 128;
+    size_t diff = 0;
+    for (int c0 = 0; c0 < n; c0 += 128)
+        for (int nt = 2; nt <= NT; ++nt) {
+            const int ks0 = c0 == 0 ? 0 : 3, ks1 = k / 16 - (nt % 2);
+            for (int i = 0; i < nt; ++i) cpu::exl3_cpu_band_acc(m, xp[i], c0, ks0, ks1, one.data() + (size_t) i * 128);
+            cpu::exl3_cpu_band_acc_n(m, xp, nt, c0, ks0, ks1, ap);
+            for (size_t i = 0; i < (size_t) nt * 128; ++i) diff += std::memcmp(&one[i], &all[i], sizeof(float)) != 0;
+        }
+    const std::string what = "cpu x2..11 k" + std::to_string(k) + " n" + std::to_string(n) + " K" + std::to_string(K);
+    std::printf("  %-44s %zu differ from one call each  %s\n", what.c_str(), diff, diff == 0 ? "ok" : "FAIL");
+    if (diff != 0) ++g_fail;
+}
+
 // the CPU lane's kernel (mul1) against the reference: every band of a k x n matrix
 void test_cpu(int k, int n, int K) {
     HostMat h = make_mat(k, n, K, 2);
@@ -544,6 +774,16 @@ int main() {
     for (int K = 1; K <= 8; ++K) test_cpu(512, 256, K);
     test_cpu(4096, 2048, 3);
     test_cpu(2048, 4096, 3);
+    // several activations at once (a verify window): the same bits as one at a time
+    for (int K = 1; K <= 8; ++K) test_mv_n(512, 256, K, 2, false, 3);
+    for (int cb = 0; cb <= 1; ++cb) test_mv_n(256, 384, 4, cb, false, 5);
+    for (int nc : {2, 4, 7, 16}) test_mv_n(4096, 512, 3, 2, false, nc);   // occupancy split
+    test_mv_n(12288, 256, 6, 2, false, 6);                                  // k > 4096
+    test_mv_n(2048, 4096, 5, 2, true, 8);                                   // q8_1 input
+    for (int K : {2, 3, 4, 8}) test_win(K, 2, 7);
+    test_win(3, 1, 2);
+    test_win(3, 2, 16);
+    for (int K : {1, 3, 6, 8}) test_cpu_n(512, 256, K);
     std::printf("exl3_test: %s (%d failures, %d launch errors)\n", g_fail ? "FAIL" : "ok", g_fail,
                 ex::launch_errors());
     return g_fail || ex::launch_errors() ? 1 : 0;
