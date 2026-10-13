@@ -1596,13 +1596,74 @@ bool Glm5Model::fast_setup_finish(std::string& err) {
 }
 
 // ---------------------------------------------------------------- the CPU lane
+// EXL3 on the CPU lane, one (token, expert) entry's rows: the gate and up inputs xh = H(x * suh), the down input, the
+// expert's output, the gate/up byte-sum products per band of 128 columns and half of the inputs, and the down input's
+// block sums.  lane_experts and win_cpu_merged both finish an entry with x3_gate_up_block / x3_down_block - the same
+// code, so a merged window token's answer is lane_experts' bit for bit
+namespace {
+struct X3Rows {
+    float* p;
+    int E, FF;
+    static size_t floats(int E, int FF) { return 3 * (size_t) E + 5 * (size_t) FF + (size_t) FF / 128; }
+    float* x(int r) const { return p + (size_t) r * E; }
+    float* xd() const { return p + 2 * (size_t) E; }
+    float* dn() const { return p + 2 * (size_t) E + FF; }
+    float* acc(int r, int b, int h) const {
+        return p + 3 * (size_t) E + FF + (((size_t) r * (FF / 128) + b) * 2 + h) * 128;
+    }
+    float* xds() const { return p + 3 * (size_t) E + 5 * (size_t) FF; }
+};
+
+// matrix r (0 gate, 1 up, 2 down) of an EXL3 expert blob
+strata::kernels::cpu::Exl3Part x3_part(const uint8_t* blob, const strata::kernels::exl3::ExpertLayout& xl, int r,
+                                       int E, int FF) {
+    strata::kernels::cpu::Exl3Part p;
+    p.trellis = (const uint32_t*) (blob + xl.trellis[r]);
+    p.suh = (const uint16_t*) (blob + xl.suh[r]);
+    p.svh = (const uint16_t*) (blob + xl.svh[r]);
+    p.k = r < 2 ? E : FF;
+    p.n = r < 2 ? FF : E;
+    p.K = xl.K[r];
+    return p;
+}
+
+// band b of the gate and up outputs from their summed halves, the clamped swiglu, and that block of the down input
+void x3_gate_up_block(const X3Rows& R, const strata::kernels::cpu::Exl3Part* pt, const float* xs, int b, float lim) {
+    namespace kc = strata::kernels::cpu;
+    float y[2][128], a[128];
+    for (int r = 0; r < 2; ++r) {
+        const float* a0 = R.acc(r, b, 0);
+        const float* a1 = R.acc(r, b, 1);
+        for (int j = 0; j < 128; ++j) a[j] = a0[j] + a1[j];
+        kc::exl3_cpu_band_out(pt[r], a, xs[r], b * 128, y[r]);
+    }
+    float hb[128];
+    for (int j = 0; j < 128; ++j) {
+        float gv = y[0][j], uv = y[1][j];
+        if (lim > 0.0f) {
+            gv = std::min(gv, lim);
+            uv = std::min(std::max(uv, -lim), lim);
+        }
+        hb[j] = gv / (1.0f + std::exp(-gv)) * uv;
+    }
+    R.xds()[b] = kc::exl3_cpu_prepare_block(pt[2].suh + b * 128, hb, R.xd() + (size_t) b * 128);
+}
+
+// band b of the down output from its byte-sum products a
+void x3_down_block(const X3Rows& R, const strata::kernels::cpu::Exl3Part& pd, const float* a, int b) {
+    float s = 0.0f;
+    for (int j = 0; j < R.FF / 128; ++j) s += R.xds()[j];
+    strata::kernels::cpu::exl3_cpu_band_out(pd, a, s, b * 128, R.dn() + (size_t) b * 128);
+}
+}  // namespace
+
 // ne RAM-tier experts of layer il (blob[i]: [gate | up | down] as in the tiers) on the CPU pool: out = sum_i w[i] *
 // expert_i(x), in i order.  Gate/up rows then down rows, each split in row chunks across the pool and the caller.
-// a route's CPU-lane experts on `pool` with the scratch rows act / hq / ff / dn (fast_cpu_experts: cpu_pool and the
-// lane's own rows; a verify window's second lane: its pool and rows) - each row's dot is one job's, so the answer is
+// a route's CPU-lane experts on `pool` with the scratch rows act / hq / ff / dn / x3 (fast_cpu_experts: cpu_pool and
+// the lane's own rows; a verify window's lanes: their pools and rows) - each row's dot is one job's, so the answer is
 // the same bit for bit whatever the pool
-void Glm5Model::lane_experts(glmfast::Workers& pool, uint8_t* act, uint8_t* hq, float* ff, float* dn, int il, int ne,
-                             const uint8_t* const* blob, const float* w, const float* x, float* out) {
+void Glm5Model::lane_experts(glmfast::Workers& pool, uint8_t* act, uint8_t* hq, float* ff, float* dn, float* x3,
+                             int il, int ne, const uint8_t* const* blob, const float* w, const float* x, float* out) {
     FastState* F = fast_;
     const Glm5Geometry& g = g_;
     const auto& Ly = F->L[(size_t) il];
@@ -1623,74 +1684,39 @@ void Glm5Model::lane_experts(glmfast::Workers& pool, uint8_t* act, uint8_t* hq, 
         return v ? std::max(1, std::min(64, std::atoi(v))) : 0;
     }();
     if (Ly.exl3) {
-        // (one call at a time: the EXL3 lane's scratch is the engine's - a window's second pool waits)
-        static std::mutex exl3_mu;
-        std::lock_guard<std::mutex> exl3_lk(exl3_mu);
         // EXL3 (mul1), in jobs of ~260K weights so a route's few experts still fill the pool: (1) each expert's gate
         // and up inputs; (2) per expert, matrix, band of 128 columns and half of the inputs, the byte-sum products;
         // (3) per expert and band, gate and up finished, the clamped swiglu, and that block of the down input; (4) per
-        // expert and band of 128 outputs, the down rows; the weighted sum in i order
+        // expert and band of 128 outputs, the down rows; the weighted sum in i order.  x3: the caller's rows (8
+        // experts' X3Rows), so the two window lanes run at once
         const int E = n_embd, FF = n_ff, GB = FF / 128, DB = E / 128, KH = E / 32;   // KH: 16-row slices a half
-        // per expert: xg[E] xu[E] xd[FF] dn[E] acc[2 GB 2 128] xds[GB]
-        const size_t per = 3 * (size_t) E + (size_t) FF + 2 * (size_t) GB * 2 * 128 + (size_t) GB;
-        float* buf = F->cpu_x3.data();
-        const auto part = [&](int i, int r) {
-            kc::Exl3Part p;
-            p.trellis = (const uint32_t*) (blob[i] + Ly.xl.trellis[r]);
-            p.suh = (const uint16_t*) (blob[i] + Ly.xl.suh[r]);
-            p.svh = (const uint16_t*) (blob[i] + Ly.xl.svh[r]);
-            p.k = r < 2 ? E : FF;
-            p.n = r < 2 ? FF : E;
-            p.K = Ly.xl.K[r];
-            return p;
-        };
-        const auto xg = [&](int i) { return buf + (size_t) i * per; };
-        const auto xd = [&](int i) { return buf + (size_t) i * per + 2 * (size_t) E; };
-        const auto dn = [&](int i) { return buf + (size_t) i * per + 2 * (size_t) E + FF; };
-        const auto acc = [&](int i, int r, int b, int h) {
-            return buf + (size_t) i * per + 3 * (size_t) E + FF + (((size_t) r * GB + b) * 2 + h) * 128;
-        };
-        const auto xds = [&](int i) { return buf + (size_t) i * per + 3 * (size_t) E + FF + 2 * (size_t) GB * 2 * 128; };
+        const size_t per = X3Rows::floats(E, FF);
+        const auto rows = [&](int i) { return X3Rows{x3 + (size_t) i * per, E, FF}; };
+        const auto part = [&](int i, int r) { return x3_part(blob[i], Ly.xl, r, E, FF); };
+        float xs[8][2];
         pool.run(2 * ne, [&](int job) {
             const int i = job >> 1, r = job & 1;
-            F->cpu_x3s[i][r] = kc::exl3_cpu_prepare(part(i, r), x, xg(i) + (size_t) r * E);
+            xs[i][r] = kc::exl3_cpu_prepare(part(i, r), x, rows(i).x(r));
         });
         pool.run(ne * 2 * GB * 2, [&](int job) {
             const int h = job & 1, b = (job >> 1) % GB, r = (job >> 1) / GB % 2, i = (job >> 1) / GB / 2;
-            kc::exl3_cpu_band_acc(part(i, r), xg(i) + (size_t) r * E, b * 128, h * KH, (h + 1) * KH, acc(i, r, b, h));
+            kc::exl3_cpu_band_acc(part(i, r), rows(i).x(r), b * 128, h * KH, (h + 1) * KH, rows(i).acc(r, b, h));
         });
-        const float lim = g.swiglu_exp;
         pool.run(ne * GB, [&](int job) {
             const int i = job / GB, b = job % GB;
-            float y[2][128], a[128];
-            for (int r = 0; r < 2; ++r) {
-                const float* a0 = acc(i, r, b, 0);
-                const float* a1 = acc(i, r, b, 1);
-                for (int j = 0; j < 128; ++j) a[j] = a0[j] + a1[j];
-                kc::exl3_cpu_band_out(part(i, r), a, F->cpu_x3s[i][r], b * 128, y[r]);
-            }
-            float hb[128];
-            for (int j = 0; j < 128; ++j) {
-                float gv = y[0][j], uv = y[1][j];
-                if (lim > 0.0f) {
-                    gv = std::min(gv, lim);
-                    uv = std::min(std::max(uv, -lim), lim);
-                }
-                hb[j] = gv / (1.0f + std::exp(-gv)) * uv;
-            }
-            xds(i)[b] = kc::exl3_cpu_prepare_block(part(i, 2).suh + b * 128, hb, xd(i) + (size_t) b * 128);
+            const kc::Exl3Part pt[3] = {part(i, 0), part(i, 1), part(i, 2)};
+            x3_gate_up_block(rows(i), pt, xs[i], b, g.swiglu_exp);
         });
         pool.run(ne * DB, [&](int job) {
             const int i = job / DB, b = job % DB;
-            float s = 0.0f, a[128];
-            for (int j = 0; j < GB; ++j) s += xds(i)[j];
+            float a[128];
             const kc::Exl3Part pd = part(i, 2);
-            kc::exl3_cpu_band_acc(pd, xd(i), b * 128, 0, FF / 16, a);
-            kc::exl3_cpu_band_out(pd, a, s, b * 128, dn(i) + (size_t) b * 128);
+            kc::exl3_cpu_band_acc(pd, rows(i).xd(), b * 128, 0, FF / 16, a);
+            x3_down_block(rows(i), pd, a, b);
         });
         for (int r = 0; r < E; ++r) {
             float m = 0.0f;
-            for (int i = 0; i < ne; ++i) m += w[i] * dn(i)[r];
+            for (int i = 0; i < ne; ++i) m += w[i] * rows(i).dn()[r];
             out[r] = m;
         }
         return;
@@ -1747,7 +1773,7 @@ struct Glm5Model::FastState::WinLane {
     static constexpr unsigned kJobs = 16;   // a window's tokens at most (kWinMax)
     std::shared_ptr<glmfast::Workers> pool;
     std::vector<uint8_t> act, hq;
-    std::vector<float> ff, dn;
+    std::vector<float> ff, dn, x3;   // (x3: an EXL3 pack's)
     Job q[kJobs];
     std::atomic<unsigned int> head{0}, tail{0};   // the service thread pushes at head, the lane takes at tail
     std::atomic<bool> quit{false};
@@ -1786,6 +1812,11 @@ struct Glm5Model::FastState::WinLane {
 // native_*_rows_split give every token exactly ggml's dot (the multi-token rows are checked bit for bit against it)
 // and each token's sum adds its own experts in its own order: every answer is fast_cpu_experts' for it alone, bit for
 // bit.  STRATA_GLM_WIN_CPU=0: a token a lane instead.
+// EXL3: the same with exl3_cpu_band_acc_n, which decodes each tile row once for all the tokens of an expert (after
+// exllamav3's CPU kernel, which takes up to 4 token rows) - an extra token costs ~0.2 of one (K 3, one thread of a
+// Xeon 6152: 1 / 2 / 4 / 8 tokens 0.061 / 0.068 / 0.090 / 0.138 ms a band).  The kernel is compute-bound (~12
+// instructions a 16-weight row), where the GGUF rows are DRAM-bound, so the second lane's socket adds its cores.  The
+// entries' rows are lane_experts' (X3Rows, x3_gate_up_block, x3_down_block): bit for bit its answers.
 void Glm5Model::win_cpu_merged(int il, int nb, const gf::MoeRequest* const* rq, gf::CpuAnswer* const* ans,
                                const unsigned int* seq) {
     FastState* F = fast_;
@@ -1817,16 +1848,22 @@ void Glm5Model::win_cpu_merged(int il, int nb, const gf::MoeRequest* const* rq, 
                 u_ent[u][u_n[u]++] = e;
             }
     const size_t act_b = kc::kNativeActBytes, h_b = kc::kNativeHBytes;
-    for (int j = 0; j < nb; ++j) kc::native_quant_act(nf, rq[j]->x, C.act.data() + (size_t) j * act_b);
+    if (!Ly.exl3)
+        for (int j = 0; j < nb; ++j) kc::native_quant_act(nf, rq[j]->x, C.act.data() + (size_t) j * act_b);
     // the distinct experts into two halves of about equal cost (greedy, costliest first)
-    const double extra = kc::native_multi_rows_exact(nf.gu_type) ? 0.3 : 0.8;
+    const double extra = Ly.exl3 ? 0.2 : kc::native_multi_rows_exact(nf.gu_type) ? 0.3 : 0.8;
     const auto cost = [&](int u) { return 1.0 + extra * (u_n[u] - 1); };
     int order[kMaxE], half[2][kMaxE], nh[2] = {0, 0};
     double load[2] = {0.0, 0.0};
     for (int u = 0; u < nu; ++u) order[u] = u;
     std::sort(order, order + nu, [&](int a, int b) { return cost(a) > cost(b); });
+    // (STRATA_GLM_WIN_X3_POOLS=1: an EXL3 layer on the first lane's pool alone - A/B)
+    static const int x3_pools = [] {
+        const char* v = getenv("STRATA_GLM_WIN_X3_POOLS");
+        return v != nullptr && std::atoi(v) == 1 ? 1 : 2;
+    }();
     for (int k = 0; k < nu; ++k) {
-        const int h = load[0] <= load[1] ? 0 : 1;
+        const int h = (Ly.exl3 && x3_pools == 1) || load[0] <= load[1] ? 0 : 1;
         half[h][nh[h]++] = order[k];
         load[h] += cost(order[k]);
     }
@@ -1879,20 +1916,77 @@ void Glm5Model::win_cpu_merged(int il, int nb, const gf::MoeRequest* const* rq, 
             kc::native_down_rows_split(nf, ublob[u] + Ly.down_off, hh, u_n[u], o, r0, r1);
         });
     };
+    // EXL3: lane_experts' four steps over a half's entries, the byte-sum products per distinct expert for all its
+    // tokens at once (jobs claimed in turn: an expert's jobs cost more the more tokens it serves)
+    const int GB = n_ff / 128, DB = n_embd / 128, KH = n_embd / 32;
+    const size_t x3_per = X3Rows::floats(n_embd, n_ff);
+    const auto x3_rows = [&](int e) { return X3Rows{C.x3.data() + (size_t) e * x3_per, n_embd, n_ff}; };
+    const auto x3_p = [&](int u, int r) { return x3_part(ublob[u], Ly.xl, r, n_embd, n_ff); };
+    float x3_s[kMaxE][2];
+    const auto run_half_x3 = [&](int h, glmfast::Workers& pool) {
+        const int* hu = half[h];
+        const int n = nh[h];
+        if (n == 0) return;
+        int me[kMaxE], mu[kMaxE], M = 0;   // the half's entries and their distinct experts
+        for (int k = 0; k < n; ++k)
+            for (int q = 0; q < u_n[hu[k]]; ++q) {
+                me[M] = u_ent[hu[k]][q];
+                mu[M++] = hu[k];
+            }
+        pool.run(2 * M, [&](int job) {
+            const int m = job >> 1, r = job & 1, e = me[m];
+            x3_s[e][r] = kc::exl3_cpu_prepare(x3_p(mu[m], r), rq[e / 8]->x, x3_rows(e).x(r));
+        });
+        pool.run(n * 2 * GB * 2, [&](int job) {
+            const int hh = job & 1, b = (job >> 1) % GB, r = (job >> 1) / GB % 2, u = hu[(job >> 1) / GB / 2];
+            const float* xh[kWinMax];
+            float* acc[kWinMax];
+            for (int q = 0; q < u_n[u]; ++q) {
+                xh[q] = x3_rows(u_ent[u][q]).x(r);
+                acc[q] = x3_rows(u_ent[u][q]).acc(r, b, hh);
+            }
+            kc::exl3_cpu_band_acc_n(x3_p(u, r), xh, u_n[u], b * 128, hh * KH, (hh + 1) * KH, acc);
+        });
+        pool.run(M * GB, [&](int job) {
+            const int m = job / GB, b = job % GB, e = me[m];
+            const kc::Exl3Part pt[3] = {x3_p(mu[m], 0), x3_p(mu[m], 1), x3_p(mu[m], 2)};
+            x3_gate_up_block(x3_rows(e), pt, x3_s[e], b, g.swiglu_exp);
+        });
+        pool.run(n * DB, [&](int job) {
+            const int u = hu[job / DB], b = job % DB;
+            float a[kWinMax][128];
+            const float* xh[kWinMax];
+            float* acc[kWinMax];
+            for (int q = 0; q < u_n[u]; ++q) {
+                xh[q] = x3_rows(u_ent[u][q]).xd();
+                acc[q] = a[q];
+            }
+            const kc::Exl3Part pd = x3_p(u, 2);
+            kc::exl3_cpu_band_acc_n(pd, xh, u_n[u], b * 128, 0, n_ff / 16, acc);
+            for (int q = 0; q < u_n[u]; ++q) x3_down_block(x3_rows(u_ent[u][q]), pd, a[q], b);
+        });
+    };
     // half 1 on the second lane, half 0 here on the first lane's pool (its thread is idle: no window token is queued)
     std::atomic<int> done{0};
-    const std::function<void(glmfast::Workers&)> fn1 = [&](glmfast::Workers& pool) { run_half(1, pool); };
+    const std::function<void(glmfast::Workers&)> fn1 = [&](glmfast::Workers& pool) {
+        if (Ly.exl3) run_half_x3(1, pool);
+        else run_half(1, pool);
+    };
     FastState::WinLane::Job j1;
     j1.fn = &fn1;
     j1.done = &done;
     F->win_lane[1]->push(j1);
-    run_half(0, *F->win_lane[0]->pool);
+    if (Ly.exl3) run_half_x3(0, *F->win_lane[0]->pool);
+    else run_half(0, *F->win_lane[0]->pool);
     while (done.load(std::memory_order_acquire) == 0) cpu_relax();
     for (int j = 0; j < nb; ++j) {
         float* out = ans[j]->part;
+        const float* dn[8];
+        for (int i = 0; i < ne[j]; ++i)
+            dn[i] = Ly.exl3 ? x3_rows(ent[j][i]).dn() : C.dn.data() + (size_t) ent[j][i] * n_embd;
         for (int r = 0; r < n_embd; ++r) {
             float m = 0.0f;
-            for (int i = 0; i < ne[j]; ++i) m += w[j][i] * C.dn[(size_t) ent[j][i] * n_embd + r];
+            for (int i = 0; i < ne[j]; ++i) m += w[j][i] * dn[i][r];
             out[r] = m;
         }
     }
@@ -1920,6 +2014,7 @@ void Glm5Model::win_lanes_make(std::shared_ptr<glmfast::Workers> p0, std::shared
         L->hq.assign((size_t) 8 * kc::kNativeHBytes, 0);
         L->ff.assign((size_t) 8 * g.n_ff_exp, 0.0f);
         L->dn.assign((size_t) 8 * g.n_embd, 0.0f);
+        if (exl3_) L->x3.assign(8 * X3Rows::floats(g.n_embd, g.n_ff_exp), 0.0f);
         // its thread: spins 20 ms for the next route (a window's routes come back to back), then sleeps
         L->th = std::thread([this, F, L] {
             for (;;) {
@@ -1947,8 +2042,8 @@ void Glm5Model::win_lanes_make(std::shared_ptr<glmfast::Workers> p0, std::shared
                     continue;
                 }
                 const auto c0 = std::chrono::steady_clock::now();
-                lane_experts(*L->pool, L->act.data(), L->hq.data(), L->ff.data(), L->dn.data(), j.il, j.ne,
-                             j.blob, j.w, j.x, j.ans->part);
+                lane_experts(*L->pool, L->act.data(), L->hq.data(), L->ff.data(), L->dn.data(), L->x3.data(), j.il,
+                             j.ne, j.blob, j.w, j.x, j.ans->part);
                 std::atomic_thread_fence(std::memory_order_release);
                 j.ans->seq = j.seq;
                 F->cpu_experts.fetch_add((uint64_t) j.ne, std::memory_order_relaxed);
@@ -1966,6 +2061,7 @@ void Glm5Model::win_lanes_make(std::shared_ptr<glmfast::Workers> p0, std::shared
     F->cpu_win.hq.assign((size_t) kWinMax * 8 * kc::kNativeHBytes, 0);
     F->cpu_win.ff.assign((size_t) kWinMax * 8 * g.n_ff_exp, 0.0f);
     F->cpu_win.dn.assign((size_t) kWinMax * 8 * g.n_embd, 0.0f);
+    if (exl3_) F->cpu_win.x3.assign((size_t) kWinMax * 8 * X3Rows::floats(g.n_embd, g.n_ff_exp), 0.0f);
 }
 
 void Glm5Model::win_lanes_stop() {
@@ -1985,8 +2081,8 @@ void Glm5Model::fast_cpu_experts(int il, int ne, const uint8_t* const* blob, con
     const auto& nf = F->cpu_fmt[(size_t) il];
     namespace kc = strata::kernels::cpu;
     const int n_ff = g.n_ff_exp, n_embd = g.n_embd;
-    lane_experts(*F->cpu_pool, F->cpu_act.data(), F->cpu_hq.data(), F->cpu_ff.data(), F->cpu_dn.data(), il, ne, blob, w,
-                 x, out);
+    lane_experts(*F->cpu_pool, F->cpu_act.data(), F->cpu_hq.data(), F->cpu_ff.data(), F->cpu_dn.data(),
+                 F->cpu_x3.data(), il, ne, blob, w, x, out);
     // STRATA_GLM_CPU_LANE_VERIFY=1 (debug, slow): the same experts in double precision from ggml's dequantised rows;
     // the relative L2 distance of the lane's sum, accumulated and printed every 16 calls
     static const bool verify = getenv("STRATA_GLM_CPU_LANE_VERIFY") != nullptr;
@@ -2270,9 +2366,8 @@ bool Glm5Model::fast_cpu_lane_setup(std::string& err) {
     F->cpu_hq.assign((size_t) 8 * kc::kNativeHBytes, 0);
     F->cpu_ff.assign((size_t) 8 * g.n_ff_exp, 0.0f);
     F->cpu_dn.assign((size_t) 8 * g.n_embd, 0.0f);
-    if (exl3_)   // (fast_cpu_experts' EXL3 layout, per expert)
-        F->cpu_x3.assign((size_t) 8 * (3 * (size_t) g.n_embd + (size_t) g.n_ff_exp + 4 * (size_t) g.n_ff_exp +
-                                       (size_t) g.n_ff_exp / 128), 0.0f);
+    if (exl3_)   // (fast_cpu_experts' EXL3 rows, per expert)
+        F->cpu_x3.assign(8 * X3Rows::floats(g.n_embd, g.n_ff_exp), 0.0f);
     // the service thread is the pool's last worker; idle workers spin 20 ms (a decode's routes come ~1 ms apart)
     if (shared) {
         F->cpu_pool = shared_cpu_pool(threads);
@@ -3361,10 +3456,9 @@ void Glm5Model::fast_service() {
             last_route = std::chrono::steady_clock::now();
         }
         std::atomic_thread_fence(std::memory_order_acquire);
-        // (the lanes are made at the CPU lane's setup, after this thread started; an EXL3 pack's routes go to the lanes
-        // a token each - win_cpu_merged runs the native kernels only)
-        const bool held = win_merge && !exl3_ && rq->win_n > 0 && F->cpu_ans_h != nullptr &&
-                          F->win_lane[0] != nullptr && F->win_lane[1] != nullptr;
+        // (the lanes are made at the CPU lane's setup, after this thread started; an EXL3 pack's merged rows with them)
+        const bool held = win_merge && rq->win_n > 0 && F->cpu_ans_h != nullptr && F->win_lane[0] != nullptr &&
+                          F->win_lane[1] != nullptr && (!exl3_ || !F->cpu_win.x3.empty());
         if (rq->error != 0) {
             if (held) {   // a window token's invalid route: nothing to compute, but it may be the layer's last
                 ++w_held;

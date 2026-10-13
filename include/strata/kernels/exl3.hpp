@@ -46,6 +46,8 @@ Mat view(const Mat& m, int c0, int nc);
 bool supported(const Mat& m);
 
 /// y[r] = alpha * (x W)[r] + (bias ? bias[r] : 0).  x: xf (F32) when given, else xq (q8_1 blocks of k values).
+/// ncol > 1: as many activations (a verify window's tokens), activation c at xf + c xf_cs / xq + c xq_cs bytes, its
+/// y at y + c y_cs - the weights read and decoded once for up to 4 of them, and each y bit for bit its own job's.
 struct MvJob {
     const Mat* m = nullptr;
     const float* xf = nullptr;
@@ -53,12 +55,15 @@ struct MvJob {
     float* y = nullptr;
     const float* bias = nullptr;
     float alpha = 1.0f;
+    int ncol = 1;
+    size_t xf_cs = 0, xq_cs = 0, y_cs = 0;
 };
 constexpr int kMaxMvJobs = 8;
+constexpr int kMaxMvCols = 16;   // a job's activations at most
 bool mv(const MvJob* jobs, int n, cudaStream_t s);
 
-/// Allocates the per-stream scratch of mv / moe_down on the current device (call once per stream before a graph
-/// capture; mv allocates it on first use otherwise).
+/// Allocates the per-stream scratch of mv / moe_down on the current device, and lets the several-activation kernels
+/// use their shared memory there (call once per stream before a graph capture; mv does both on first use otherwise).
 bool prepare(cudaStream_t s);
 
 /// One routed expert's blob: three parts (gate, up, down) at byte offsets from the blob base, each holding the FP16
@@ -82,6 +87,35 @@ struct MoeArgs {
 };
 void moe_gate_up(const MoeArgs& a, const float* x, float* h, cudaStream_t s);
 void moe_down(const MoeArgs& a, const float* h, const float* sh_out, float* out, cudaStream_t s);
+
+/// A verify window's routed experts, each distinct expert read once for all the tokens it serves (after exllamav3's
+/// fused MoE, which runs the slots that picked one expert as the rows of one tile): T tokens' plans [T][8] grouped by
+/// expert (glmf::moe_win_group: group g's blob at grp_ptr[g], its entries e = t * 8 + i at grp_ent[grp_start[g] ..
+/// grp_start[g + 1])), token t's F32 input at x + t x_stride, its output at out + t out_stride (plus the CPU lane's
+/// part when cpu_flag[t], plus sh_out's row t) - every token's output is moe_gate_up + moe_down's for it alone, bit for
+/// bit.  h [T * 8][n_ff] and part [T * 8][n_embd] are the caller's scratch.
+struct WinArgs {
+    const unsigned long long* grp_ptr = nullptr;
+    const int *grp_start = nullptr, *grp_ent = nullptr, *n_groups = nullptr;
+    const unsigned long long* plan_ptr = nullptr;   // [T][8]
+    const float* plan_w = nullptr;                  // [T][8]
+    const float* cpu_part = nullptr;                // [T][n_embd]
+    const int* cpu_flag = nullptr;                  // [T]
+    const float* x = nullptr;
+    size_t x_stride = 0;
+    float* h = nullptr;
+    float* part = nullptr;
+    const float* sh_out = nullptr;                  // [T][n_embd] or null
+    float* out = nullptr;
+    size_t out_stride = 0;
+    ExpertLayout lay;
+    int T = 0, k = 8, n_embd = 4096, n_ff = 2048;
+    float limit = 0.0f;
+};
+bool win_experts(const WinArgs& a, cudaStream_t s);
+/// Whether the current device runs the several-activation kernels (win_experts; mv's ncol > 1 runs one activation at a
+/// time without them): they take ~58 KB of shared memory a block, which 48 KB GPUs lack.
+bool several_ok();
 
 /// The prompt path's tensor-core GEMMs (sm_80 and later; mma_supported() says whether this device runs them).
 bool mma_supported();

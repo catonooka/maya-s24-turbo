@@ -496,6 +496,7 @@ struct Glm5Model::FastState {
         float* sh_out = nullptr;            // [tmax][n_embd] its down rows
         void* whq = nullptr;                // [tmax * 8][n_ff / 32] q8_1: each entry's h
         float* wpart = nullptr;             // [tmax * 8][n_embd]: each entry's down rows
+        float* wh = nullptr;                // EXL3: [tmax * 8][n_ff] each entry's h (F32)
         unsigned long long* grp_ptr = nullptr;
         int *grp_start = nullptr, *grp_ent = nullptr, *n_groups = nullptr;
         unsigned int* scr = nullptr;        // [0] the layer's scratch claims, [1] sticky: a slot taken twice
@@ -553,9 +554,9 @@ struct Glm5Model::FastState {
     struct CpuWin {                                          // a merged window layer (win_cpu_merged):
         std::vector<uint8_t> act, hq;                        // each token's activation quant; each entry's h quant
         std::vector<float> ff, dn;                           // each entry's n_ff / n_embd rows
+        std::vector<float> x3;                               // EXL3: each entry's rows (X3Rows)
     } cpu_win;
     std::vector<float> cpu_x3;                               // EXL3: per expert gate / up inputs, h, down input, out
-    float cpu_x3s[8][3] = {};                                // ... and the three prepared inputs' sums
     std::atomic<uint64_t> cpu_experts{0}, cpu_routes{0}, cpu_us{0};
     // STRATA_GLM_SPEC_CANCEL=1 (the pipelined two-half decode, a head half of one GPU): the head's speculative pass reads
     // the pinned, host-mapped word spec_live_h at every layer (skip_gate) into spec_skip_d - 1: its draft still stands,
