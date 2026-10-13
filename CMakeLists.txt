@@ -259,6 +259,13 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     add_test(NAME exl3_test COMMAND exl3_test)
     set_tests_properties(exl3_test PROPERTIES TIMEOUT 120)
   endif()
+  # the INT8 latent records' FP16 reads against the plain conversion, every code x every scale (GPU, no model)
+  if(STRATA_BUILD_TESTS)
+    add_executable(glm_lat8_test tests/glm_lat8_test.cu)
+    target_link_libraries(glm_lat8_test PRIVATE ${_strata_gpu_runtime_target})
+    add_test(NAME glm_lat8_test COMMAND glm_lat8_test)
+    set_tests_properties(glm_lat8_test PROPERTIES TIMEOUT 60)
+  endif()
   # perf-review D-1: the tensor-core prompt attention vs the FP32 kernel and FP64 (GPU, synthetic, no model); with
   # the tests, or alone with -DSTRATA_PARITY_PROMPT_ATTN=ON
   if(STRATA_BUILD_TESTS OR STRATA_PARITY_PROMPT_ATTN)
