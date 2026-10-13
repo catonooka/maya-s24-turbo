@@ -57,25 +57,24 @@ inline __m256i sc16(int a, int b) {
 // One scale for the whole 32-value half (IQ2_XXS, IQ3_XXS, IQ3_S).
 inline __m256i sc32(int s) { return _mm256_set1_epi16(s); }
 
-// keven_signs_q2xs (ggml keeps it static in arch/x86/quants.c): one u64 per 7-bit sign index, byte k
-// = 0xFF when bit k of ksigns_iq2xs[i] is set, 0x01 otherwise.  With this a whole 32-value sign vector
-// is four scalar loads and a set_epi64x - no ksigns byte packing chain and no bit_selector expansion.
-// Built once at load time from the shared ggml-common table so it can never drift from it.
-struct EvenSigns {
-    uint64_t v[128];
-    EvenSigns() {
-        for (int i = 0; i < 128; ++i) {
-            uint64_t r = 0;
-            for (int k = 0; k < 8; ++k)
-                r |= (uint64_t) (((ksigns_iq2xs[i] >> k) & 1) ? 0xFF : 0x01) << (8 * k);
-            v[i] = r;
-        }
-    }
-};
-// Built on first use, not at program start: this file is compiled for AVX2, so a static initializer here would
-// run AVX2 code on every CPU, including ones without it (the kernels below are reached only on AVX2 CPUs).
-inline const EvenSigns& even_signs_table() { static const EvenSigns t; return t; }
-#define even_signs (even_signs_table())
+// The four 7-bit sign indices of a 32-value half (IQ2_XXS, IQ3_XXS: bits 0-27 of w) -> 32 bytes of -1 (sign bit set)
+// / +1, in registers: each index's eighth bit is the parity of its seven (a
+// 16-entry pshufb table on the xor of its two nibbles), a byte shuffle spreads each index over its 8 values and the
+// bit selector picks each value's bit.  The vector ksigns_iq2xs gives (ggml's keven_signs_q2xs), without the four
+// table loads and the set_epi64x of every half.
+inline __m256i sgn7_vec(uint32_t w) {
+    const __m256i shifts = _mm256_setr_epi32(0, 0, 7, 7, 14, 14, 21, 21);
+    const __m256i spread = _mm256_setr_epi8(0, 0, 0, 0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 12,
+                                            0, 0, 0, 0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 12);
+    const __m256i bits = _mm256_set1_epi64x((long long) 0x8040201008040201ull);
+    const __m256i parity = _mm256_broadcastsi128_si256(
+        _mm_setr_epi8(0, -128, -128, 0, -128, 0, 0, -128, -128, 0, 0, -128, 0, -128, -128, 0));
+    __m256i s = _mm256_and_si256(_mm256_srlv_epi32(_mm256_set1_epi32((int) w), shifts), _mm256_set1_epi32(127));
+    s = _mm256_or_si256(s, _mm256_shuffle_epi8(parity, _mm256_and_si256(_mm256_xor_si256(s, _mm256_srli_epi32(s, 4)),
+                                                                        _mm256_set1_epi8(15))));
+    s = _mm256_shuffle_epi8(s, spread);
+    return _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(s, bits), bits), _mm256_set1_epi8(1));
+}
 
 // ggml's hsum_float_8: the same additions in the same order (the exact kernels)
 inline float hsum_ggml(__m256 x) {
@@ -105,8 +104,7 @@ template <> struct Fmt32<16> {   // IQ2_XXS: d, qs[32] u16
         const uint32_t w0 = u32(q), w1 = u32(q + 4);
         g = _mm256_set_epi64x((long long) iq2xxs_grid[w0 >> 24], (long long) iq2xxs_grid[(w0 >> 16) & 255],
                               (long long) iq2xxs_grid[(w0 >> 8) & 255], (long long) iq2xxs_grid[w0 & 255]);
-        sgn = _mm256_set_epi64x((long long) even_signs.v[(w1 >> 21) & 127], (long long) even_signs.v[(w1 >> 14) & 127],
-                                (long long) even_signs.v[(w1 >> 7) & 127], (long long) even_signs.v[w1 & 127]);
+        sgn = sgn7_vec(w1);
         sc = sc32(2 * (int) (w1 >> 28) + 1);
     }
 };
@@ -154,8 +152,7 @@ template <> struct Fmt32<18> {   // IQ3_XXS: d, qs[64] grid bytes, 8 x u32 (4 x 
         g = _mm256_set_epi32((int) iq3xxs_grid[q[7]], (int) iq3xxs_grid[q[6]], (int) iq3xxs_grid[q[5]], (int) iq3xxs_grid[q[4]],
                              (int) iq3xxs_grid[q[3]], (int) iq3xxs_grid[q[2]], (int) iq3xxs_grid[q[1]], (int) iq3xxs_grid[q[0]]);
         const uint32_t w = u32(b + 2 + 64 + 8 * j + 4 * half);
-        sgn = _mm256_set_epi64x((long long) even_signs.v[(w >> 21) & 127], (long long) even_signs.v[(w >> 14) & 127],
-                                (long long) even_signs.v[(w >> 7) & 127], (long long) even_signs.v[w & 127]);
+        sgn = sgn7_vec(w);
         sc = sc32(2 * (int) (w >> 28) + 1);
     }
 };
@@ -451,7 +448,132 @@ void dot_rows_nt(int nt, const uint8_t* w, size_t row_bytes, int n, const void* 
     }
 }
 
+// ---- one token (a decode step's CPU expert): ggml-cpu's own AVX2 dots for IQ3_XXS / IQ3_S with a cheaper decode -
+// IQ3_XXS's sign vectors built in registers (sgn7_vec's steps, as neg masks), IQ3_S's 9-bit grid indices
+// built in scalar registers (ggml builds them in vectors, stores and reloads them), the inner loop unrolled.  The
+// integer lanes and the float steps are ggml's, so every result is bit-identical to its dot.  (The multi-token rows
+// above lose to ggml's dot at one token: Maya-L's IQ3_S gate/up pair on one Xeon 6152 core 4.05 vs 3.05 ms.)
+inline float dot1_iq3_xxs(const uint8_t* row, int nb, const block_q8_K* y) {
+    const __m256i shifts = _mm256_setr_epi32(0, 0, 7, 7, 14, 14, 21, 21);
+    const __m256i spread = _mm256_setr_epi8(0, 0, 0, 0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 12,
+                                            0, 0, 0, 0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 12);
+    const __m256i bits = _mm256_set1_epi64x((long long) 0x8040201008040201ull);
+    const __m256i parity = _mm256_broadcastsi128_si256(
+        _mm_setr_epi8(0, -128, -128, 0, -128, 0, 0, -128, -128, 0, 0, -128, 0, -128, -128, 0));
+    const auto neg = [&](uint32_t w) {   // 0xFF where the value's sign bit is set
+        __m256i s = _mm256_and_si256(_mm256_srlv_epi32(_mm256_set1_epi32((int) w), shifts), _mm256_set1_epi32(127));
+        s = _mm256_or_si256(s, _mm256_shuffle_epi8(parity, _mm256_and_si256(_mm256_xor_si256(s, _mm256_srli_epi32(s, 4)),
+                                                                            _mm256_set1_epi8(15))));
+        s = _mm256_shuffle_epi8(s, spread);
+        return _mm256_cmpeq_epi8(_mm256_and_si256(s, bits), bits);
+    };
+    const block_iq3_xxs* x = (const block_iq3_xxs*) row;
+    __m256 accumf = _mm256_setzero_ps();
+    for (int i = 0; i < nb; ++i) {
+        const float d = h2f(x[i].d) * y[i].d;
+        const uint8_t* q3 = x[i].qs;
+        const uint8_t* gas = x[i].qs + QK_K / 4;
+        const int8_t* q8 = y[i].qs;
+        __m256i sumi1 = _mm256_setzero_si256(), sumi2 = _mm256_setzero_si256();
+#if defined(__GNUC__)
+#pragma GCC unroll 4
+#endif
+        for (int ib32 = 0; ib32 < QK_K / 32; ib32 += 2) {
+            const __m256i q8_1 = _mm256_loadu_si256((const __m256i*) q8); q8 += 32;
+            const __m256i q8_2 = _mm256_loadu_si256((const __m256i*) q8); q8 += 32;
+            const __m256i q2_1 = _mm256_set_epi32((int) iq3xxs_grid[q3[7]], (int) iq3xxs_grid[q3[6]], (int) iq3xxs_grid[q3[5]],
+                                                  (int) iq3xxs_grid[q3[4]], (int) iq3xxs_grid[q3[3]], (int) iq3xxs_grid[q3[2]],
+                                                  (int) iq3xxs_grid[q3[1]], (int) iq3xxs_grid[q3[0]]);
+            q3 += 8;
+            const __m256i q2_2 = _mm256_set_epi32((int) iq3xxs_grid[q3[7]], (int) iq3xxs_grid[q3[6]], (int) iq3xxs_grid[q3[5]],
+                                                  (int) iq3xxs_grid[q3[4]], (int) iq3xxs_grid[q3[3]], (int) iq3xxs_grid[q3[2]],
+                                                  (int) iq3xxs_grid[q3[1]], (int) iq3xxs_grid[q3[0]]);
+            q3 += 8;
+            const uint32_t a0 = u32(gas), a1 = u32(gas + 4);
+            gas += 8;
+            const __m256i n0 = neg(a0), n1 = neg(a1);
+            const __m256i q8s_1 = _mm256_sub_epi8(_mm256_xor_si256(q8_1, n0), n0);
+            const __m256i q8s_2 = _mm256_sub_epi8(_mm256_xor_si256(q8_2, n1), n1);
+            const __m256i dot1 = _mm256_maddubs_epi16(q2_1, q8s_1);
+            const __m256i dot2 = _mm256_maddubs_epi16(q2_2, q8s_2);
+            const __m256i p1 = _mm256_madd_epi16(dot1, _mm256_set1_epi16((short) (2 * (a0 >> 28) + 1)));
+            const __m256i p2 = _mm256_madd_epi16(dot2, _mm256_set1_epi16((short) (2 * (a1 >> 28) + 1)));
+            sumi1 = _mm256_add_epi32(sumi1, p1);
+            sumi2 = _mm256_add_epi32(sumi2, p2);
+        }
+        accumf = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(_mm256_add_epi32(sumi1, sumi2)), accumf);
+    }
+    return 0.25f * hsum_ggml(accumf);
+}
+
+inline float dot1_iq3_s(const uint8_t* row, int nb, const block_q8_K* y) {
+    const __m256i mask1 = _mm256_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+                                           2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3);
+    const __m256i mask2 = _mm256_set1_epi64x((long long) 0x8040201008040201ull);
+    const block_iq3_s* x = (const block_iq3_s*) row;
+    __m256 accumf = _mm256_setzero_ps();
+    for (int i = 0; i < nb; ++i) {
+        const float d = h2f(x[i].d) * y[i].d;
+        const uint8_t* qs = x[i].qs;
+        const uint8_t* qh = x[i].qh;
+        const uint8_t* signs = x[i].signs;
+        const int8_t* q8 = y[i].qs;
+        __m256i sumi1 = _mm256_setzero_si256(), sumi2 = _mm256_setzero_si256();
+#if defined(__GNUC__)
+#pragma GCC unroll 4
+#endif
+        for (int ib32 = 0; ib32 < QK_K / 32; ib32 += 2) {
+            const __m256i q8_1 = _mm256_loadu_si256((const __m256i*) q8); q8 += 32;
+            const __m256i q8_2 = _mm256_loadu_si256((const __m256i*) q8); q8 += 32;
+            const uint32_t h0 = qh[ib32], h1 = qh[ib32 + 1];
+#define G3(k, h) (int) iq3s_grid[qs[k] | ((h << (8 - (k & 7))) & 256)]
+            const __m256i q2_1 = _mm256_set_epi32(G3(7, h0), G3(6, h0), G3(5, h0), G3(4, h0),
+                                                  G3(3, h0), G3(2, h0), G3(1, h0), G3(0, h0));
+            const __m256i q2_2 = _mm256_set_epi32(G3(15, h1), G3(14, h1), G3(13, h1), G3(12, h1),
+                                                  G3(11, h1), G3(10, h1), G3(9, h1), G3(8, h1));
+#undef G3
+            qs += 16;
+            __m256i aux = _mm256_and_si256(_mm256_shuffle_epi8(_mm256_set1_epi32((int) u32(signs)), mask1), mask2);
+            const __m256i s2_1 = _mm256_cmpeq_epi8(aux, mask2);
+            const __m256i q8s_1 = _mm256_sub_epi8(_mm256_xor_si256(s2_1, q8_1), s2_1);
+            aux = _mm256_and_si256(_mm256_shuffle_epi8(_mm256_set1_epi32((int) u32(signs + 4)), mask1), mask2);
+            const __m256i s2_2 = _mm256_cmpeq_epi8(aux, mask2);
+            const __m256i q8s_2 = _mm256_sub_epi8(_mm256_xor_si256(s2_2, q8_2), s2_2);
+            signs += 8;
+            const __m256i dot1 = _mm256_maddubs_epi16(q2_1, q8s_1);
+            const __m256i dot2 = _mm256_maddubs_epi16(q2_2, q8s_2);
+            const int sc = x[i].scales[ib32 / 2];
+            const __m256i p1 = _mm256_madd_epi16(dot1, _mm256_set1_epi16((short) (2 * (sc & 0xf) + 1)));
+            const __m256i p2 = _mm256_madd_epi16(dot2, _mm256_set1_epi16((short) (2 * (sc >> 4) + 1)));
+            sumi1 = _mm256_add_epi32(sumi1, p1);
+            sumi2 = _mm256_add_epi32(sumi2, p2);
+        }
+        accumf = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(_mm256_add_epi32(sumi1, sumi2)), accumf);
+    }
+    return hsum_ggml(accumf);
+}
+
+template <int TY>
+void rows1(const uint8_t* w, size_t row_bytes, int n, const void* const* act, int nt, float* const* out, int r0, int r1) {
+    const int nb = n / QK_K;
+    for (int r = r0; r < r1; ++r) {
+        const uint8_t* row = w + (size_t) r * row_bytes;
+        for (int t = 0; t < nt; ++t) {
+            const block_q8_K* y = (const block_q8_K*) act[t];
+            out[t][r] = TY == 18 ? dot1_iq3_xxs(row, nb, y) : dot1_iq3_s(row, nb, y);
+        }
+    }
+}
+
 }  // namespace
+
+bool iq256_rows1_supported(int type) noexcept { return type == 18 || type == 21; }
+
+void iq256_rows1(int type, const uint8_t* w, size_t row_bytes, int n, const void* const* act, int nt, float* const* out,
+                 int r0, int r1) {
+    if (type == 18) rows1<18>(w, row_bytes, n, act, nt, out, r0, r1);
+    else if (type == 21) rows1<21>(w, row_bytes, n, act, nt, out, r0, r1);
+}
 
 bool iq256_supported(int type) noexcept {
     return type == 16 || type == 17 || type == 18 || type == 21 || type == 22 || type == 23 || type == 12 || type == 13;
