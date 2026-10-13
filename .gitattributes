@@ -13,3 +13,6 @@ data/glm5-synth-dumps/** -text
 data/glm5-synth.gguf -text
 data/glm5-synth-dumps12/** -text
 data/glm5-big-dumps/** -text
+
+# a patch applied at configure time (CMakeLists.txt, the MMQ sources): byte for byte
+third_party/ggml/*.patch -text

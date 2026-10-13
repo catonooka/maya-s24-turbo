@@ -858,8 +858,49 @@ if(STRATA_NATIVE_EXPERTS)
     else()
       set(_strata_gg ${strata_llamacpp_SOURCE_DIR}/ggml)
     endif()
-    set(_strata_mmq ${_strata_gg}/src/ggml-cuda)
+    # The MMQ sources are a copy of the checkout's ggml-cuda in the build tree with third_party/ggml/mmq-fused-swiglu.patch
+    # applied (the experts' SwiGLU in the gate/up product's write-back, on the MoE path; the checkout
+    # stays untouched).  The copy is redone when the checkout, its mmq.cuh or the patch changes.  A checkout the patch
+    # does not apply to builds from its own sources, and the prompt path keeps the separate SwiGLU kernel.
+    set(_strata_mmq_patch ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ggml/mmq-fused-swiglu.patch)
+    set(_strata_mmq_copy ${CMAKE_BINARY_DIR}/strata-ggml-cuda)
+    file(SHA256 ${_strata_mmq_patch} _strata_mmq_patch_sha)
+    file(SHA256 ${_strata_gg}/src/ggml-cuda/mmq.cuh _strata_mmq_src_sha)
+    set(_strata_mmq_stamp "${_strata_gg}|${_strata_mmq_src_sha}|${_strata_mmq_patch_sha}")
+    set(_strata_mmq_done "")
+    if(EXISTS ${_strata_mmq_copy}/.strata-stamp)
+      file(READ ${_strata_mmq_copy}/.strata-stamp _strata_mmq_done)
+    endif()
+    set(_strata_mmq_glu ON)
+    if(NOT _strata_mmq_done STREQUAL _strata_mmq_stamp)
+      find_package(Git REQUIRED)
+      file(REMOVE_RECURSE ${_strata_mmq_copy})
+      file(COPY ${_strata_gg}/src/ggml-cuda/ DESTINATION ${_strata_mmq_copy})
+      # (GIT_CEILING_DIRECTORIES: git applies the patch as a plain patch tool, not inside the repository holding the
+      # build tree)
+      execute_process(COMMAND ${CMAKE_COMMAND} -E env GIT_CEILING_DIRECTORIES=${CMAKE_BINARY_DIR}
+                              ${GIT_EXECUTABLE} apply --ignore-whitespace ${_strata_mmq_patch}
+                      WORKING_DIRECTORY ${_strata_mmq_copy} RESULT_VARIABLE _strata_mmq_rc ERROR_VARIABLE _strata_mmq_err)
+      if(_strata_mmq_rc EQUAL 0)
+        file(WRITE ${_strata_mmq_copy}/.strata-stamp "${_strata_mmq_stamp}")
+      else()
+        message(WARNING "third_party/ggml/mmq-fused-swiglu.patch (made for the pinned ggml, third_party/ggml/VERSION.txt) "
+                        "does not apply to ${_strata_gg}/src/ggml-cuda - its own MMQ sources are built and "
+                        "the prompt path keeps the separate SwiGLU kernel:\n${_strata_mmq_err}")
+        file(REMOVE_RECURSE ${_strata_mmq_copy})
+        set(_strata_mmq_glu OFF)
+      endif()
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_strata_mmq_patch} ${_strata_gg}/src/ggml-cuda/mmq.cuh)
+    if(_strata_mmq_glu)
+      set(_strata_mmq ${_strata_mmq_copy})
+    else()
+      set(_strata_mmq ${_strata_gg}/src/ggml-cuda)
+    endif()
     add_library(strata_mmq STATIC src/prefill/moe_mmq.cu src/prefill/ggml_cuda_host.cu ${_strata_mmq}/quantize.cu)
+    if(_strata_mmq_glu)
+      target_compile_definitions(strata_mmq PRIVATE STRATA_MMQ_GLU=1)
+    endif()
     foreach(_t q2_0 iq2_xxs iq2_xs iq2_s iq3_xxs iq3_s iq4_nl iq4_xs q8_0 iq1_s q2_k q3_k q4_k q5_k q6_k)   # q8_0: the drafter's matrices (E-9); iq1_s, k-quants: GLM experts (docs/QUANT-PLAN.md)
       target_sources(strata_mmq PRIVATE ${_strata_mmq}/template-instances/mmq-instance-${_t}.cu)
     endforeach()
@@ -874,6 +915,15 @@ if(STRATA_NATIVE_EXPERTS)
     target_compile_definitions(strata_prefill PUBLIC STRATA_PREFILL_MMQ=1)
     # the GLM fast path's prompt path (src/core/glm_prefill.cu) multiplies its experts with MMQ too
     target_link_libraries(strata_engine PUBLIC strata_mmq ${_strata_gpu_blas_target})
+    if(STRATA_BUILD_TESTS)
+      # the fused gate/up + SwiGLU product against the plain product + the SwiGLU kernel, bit for bit (synthetic
+      # weights from ggml's quantizers)
+      add_executable(glm_mmq_glu_test tests/glm_mmq_glu_test.cu)
+      target_include_directories(glm_mmq_glu_test PRIVATE ${_strata_gpu_include_directories})
+      target_link_libraries(glm_mmq_glu_test PRIVATE strata_mmq strata_kernels ggml-base ${_strata_gpu_runtime_target})
+      add_test(NAME glm_mmq_glu_test COMMAND glm_mmq_glu_test)
+      set_tests_properties(glm_mmq_glu_test PROPERTIES TIMEOUT 300)
+    endif()
   elseif(STRATA_PREFILL_MMQ)
     # Compile only the pinned GGML MMQ and activation-quantizer sources used by prefill. This uses
     # common.cuh's native HIP path without enabling a second GGML HIP backend.

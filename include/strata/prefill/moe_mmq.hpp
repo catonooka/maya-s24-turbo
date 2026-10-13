@@ -45,6 +45,10 @@ struct Product {
     int64_t ld_dst = 0;
 };
 
+/// This build and the current device have the fused gate/up + SwiGLU product (Context::run_glu) for `ggml_type` with
+/// `n_ff` output rows: CUDA on an NVIDIA GPU with int8 tensor cores (Turing or later), n_ff a multiple of 128.
+bool glu_supported(int ggml_type, int64_t n_ff);
+
 /// The launch context (llama.cpp's MMQ keeps a small scratch pool for its stream-k fixup).  One per prompt path.
 class Context {
 public:
@@ -53,6 +57,12 @@ public:
     Context(const Context&) = delete;
     Context& operator=(const Context&) = delete;
     void run(const Product& p, void* stream);
+    /// The gate/up product with the SwiGLU in its write-back: `p` as for the plain product
+    /// of an expert's [2 n_ff, n_embd] gate-then-up rows (w_rows = 2 n_ff), but dst row r gets only
+    /// h = silu(min(gate, limit)) * clamp(up, -limit, limit) in its first n_ff floats (limit = INFINITY: plain SwiGLU) -
+    /// the plain product's values through a SwiGLU kernel built without fast math, bit for bit.  Only where
+    /// glu_supported(p.type, n_ff).
+    void run_glu(const Product& p, float limit, void* stream);
 
 private:
     void* ctx_ = nullptr;
