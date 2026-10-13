@@ -2674,7 +2674,7 @@ def main() -> int:
                                    "other devices on your network (set --api-key too)")
     ap.add_argument("--api-key", help="require this key from API clients and the dashboard")
     ap.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
-                    help="an engine setting kept in the config, e.g. STRATA_GLM_RAM_HEADROOM_GB=4 (README-MAYA.md)")
+                    help="an engine setting kept in the config, e.g. STRATA_GLM_RAM_HEADROOM_GB=4 (docs/SETTINGS.md)")
     ap.add_argument("--nvcc", help="the CUDA toolkit's nvcc to build with (default: the newest that fits your GPUs)")
     ap.add_argument("--host-compiler", help="the C++ compiler nvcc uses, e.g. g++-12 (when the default g++ is newer "
                                             "than your CUDA accepts)")

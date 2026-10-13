@@ -268,7 +268,7 @@ def gpus():
 
 
 GPU_PICK = None                                         # --gpu N (issue #51); None: the card with the most VRAM
-                                                        # prompt buffers too (docs/MULTI_GPU.md)
+                                                        # prompt buffers too
 
 
 def gpu_info(pick=None):

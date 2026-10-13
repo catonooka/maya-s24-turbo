@@ -359,7 +359,7 @@ void usage() {
                  "  --kv fp16|int8       KV storage (plan v0.3 P7): int8 codes + fp16 scale per 64 values, half the\n"
                  "                       VRAM; default fp16 until gate G-C accepts int8\n"
                  "  --kv q4_0            4-bit K/V after a Hadamard rotation (PR #21): half of int8's memory,\n"
-                 "                       slightly lower precision (see bench/results/2026-09-27-kv-q4)\n"
+                 "                       slightly lower precision\n"
                  "  --kv k8v4            hybrid: INT8 K (exact attention scores) + rotated Q4_0 V, 816 B/cell\n"
                  "                       (vs int8's 1,056); not with --kv-resident\n"
                  "  --kv-resident N      KV streaming: keep N cells of each QSA layer in VRAM (min 20480) and the\n"
@@ -3387,7 +3387,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "maya generate: --resident-cpu-experts does not support layer splits or remote expert caches\n");
         return 2;
     }
-    // the helper-GPU expert caches (--expert-cache-remote, docs/SECOND_GPU.md): CUDA1..3 on one GPU; with a layer
+    // the helper-GPU expert caches (--expert-cache-remote): CUDA1..3 on one GPU; with a layer
     // split, the visible GPUs no stage runs on, in order
     int remote_dev[3] = {1, 2, 3};
     if (multi_gpu) {
@@ -4051,16 +4051,14 @@ int main(int argc, char** argv) {
         // A rate under ~0.2 GiB/s is not the hardware.  Task Scheduler / service contexts throttle this
         // read+fill about 24x (measured 0.05 vs 1.42 GiB/s for the same binary, args and cache state; the
         // scheduler's defaults - Below normal priority and a least-privilege token - were the only
-        // difference between the runs).  Say so instead of letting the user blame the disk; see
-        // docs/DETAILS.md, "Running it at startup (Task Scheduler)".
+        // difference between the runs).  Say so instead of letting the user blame the disk.
 #ifdef _WIN32   // a Windows launch context; elsewhere a load this slow is the disk
         if (arena_src.load_gib_per_second() > 0.0 && arena_src.load_gib_per_second() < 0.2) {
             std::fprintf(stderr,
                          "maya generate: hint: ~24x below what this hardware streams from a normal "
                          "launch. If Maya is started by Task Scheduler or a service, register the task "
                          "with Priority 4 (Normal) and 'Run with highest privileges' - the scheduler's "
-                         "defaults (Below normal + a least-privilege token) throttle the load. See "
-                         "docs/DETAILS.md ('Running it at startup').\n");
+                         "defaults (Below normal + a least-privilege token) throttle the load.\n");
         }
 #endif
         srcp = &arena_src;
@@ -4387,8 +4385,7 @@ int main(int argc, char** argv) {
         // (on - off = -0.005 +- 0.005 nats). Neither output is more correct than the other.
         std::fprintf(stderr,
                      "maya generate: the GPU computes the experts in the cache; it rounds differently from the CPU,\n"
-                     "                 so a reply can differ slightly from a run without the cache (same quality:\n"
-                     "                 bench/results/2026-09-27-cache-parity).\n");
+                     "                 so a reply can differ slightly from a run without the cache (the same quality).\n");
         if (o.expert_cache_per_layer) {
             int64_t lo = 0, hi = 0;
             xcache.layer_slot_range(0, lo, hi);

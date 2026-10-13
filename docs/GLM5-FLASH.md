@@ -167,8 +167,8 @@ Either way this is the *cheapest* architecture delta; the risk is only parity di
   REFUSES other shapes ("a different n_embd or a different expert width is REFUSED rather than
   mis-indexed", `expert_source.hpp:18-21`). GLM does not go through it: the **native path**
   (`native_expert.hpp`) is runtime-geometry (per-layer `NativeFmt` with `n_embd`, `n_ff`, ggml types from
-  the GGUF), and that is the path GLM must ride - exactly as the Coder and the Orca compatibility pack do
-  (`docs/ORCA.md`). Consequence for the study: GLM packs are native packs; the canonical Q2_0 pack path
+  the GGUF), and that is the path GLM must ride - exactly as the Coder and the Orca compatibility pack did.
+  Consequence for the study: GLM packs are native packs; the canonical Q2_0 pack path
   is out of scope for the port.
 * **Expert blob size.** 3 × 4096 × 2048 = 25.2 M params/expert ≈ 3.2× the implemented expert. Blob sizes
   become per-layer-native (already supported: `layer_offsets_`/`layer_blob_bytes_`,
@@ -182,12 +182,12 @@ Either way this is the *cheapest* architecture delta; the risk is only parity di
   follow the target model; the Qwen draft-vocab embed size is hardcoded at one call site
   (`generate.cpp:1374`, 248320) and must come from the pack. GLM's MTP tensors must be in the GGUF
   (llama.cpp's glm5 conversion carries nextn tensors) and `tools/mtp_pack.py` taught the tensor names.
-  Draft acceptance is an empirical question per model (ORCA.md says the same for the Orca fine-tune).
+  Draft acceptance is an empirical question per model.
 * **Vision.** `strata-vision` is built from the pinned llama.cpp `mtmd` (`tools/vision/`). GLM's 24-block
   ViT at 448 px is a standard layout; support reduces to what the pinned llama.cpp supports for
   `glm5-next` vision + a converted `mmproj` GGUF, plus the family wiring in `setup.py`. If the pinned
   llama.cpp predates glm5 vision support, this is a submodule pin bump with a re-run of the parity tests.
-* **Tokenizer.** The packer exports the model's own tokenizer from the GGUF (ORCA.md's rule: never share
+* **Tokenizer.** The packer exports the model's own tokenizer from the GGUF (the rule: never share
   another model's tokenizer). GLM's BPE (154,880 vocab) flows through `gguf-py` like Qwen's; verify the
   pre-tokenizer regex is one `gguf-py` knows. A GLM chat template (`serve/chat_template.jinja` is
   Qwen's) is needed for the server, plus its image/video token ids (154854/154855).
@@ -264,7 +264,7 @@ pages again quickly (`expert_source.cpp:332-343`). The expert access pattern is 
 
 ## 5. Expected performance envelope (estimates, ±30 %)
 
-Same method as `docs/DETAILS.md`'s GPU table: GPU part scaled by bandwidth and VRAM-held expert share,
+The method: GPU part scaled by bandwidth and VRAM-held expert share,
 CPU part by remaining expert bytes. Assume an RTX 3090-class card (24 GB) + DDR5, Q2_0-class pack:
 
 * ~3,000 VRAM-cached experts cover ~70 % of reads (profile economics transfer; per-expert bytes are
@@ -397,7 +397,7 @@ counts) read into `ModelGeometry`.
 
 **Phase 4 - serve and measure.** Vision helper against the glm5 mmproj; end-to-end parity vs the oracle
 per residual ladder (`dump_layers`); needle tests across 1 K-1 M; the benchmark matrix; then the
-`docs/DETAILS.md` tables gain a GLM section.
+benchmark tables gain a GLM section.
 
 Rough effort weighting: Phase 2 ≈ 60 %, Phase 1 ≈ 15 %, Phase 3 ≈ 15 %, Phase 4 ≈ 10 %. The critical
 path runs through the MLA attention kernels and their parity harness.
