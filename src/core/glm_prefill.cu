@@ -1226,7 +1226,8 @@ void Glm5Model::prefill_destroy() {
 }
 
 // ---------------------------------------------------------------- one half's layers over a chunk
-bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t* next_ids) {
+bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t* next_ids,
+                             const float* const* next_img) {
     FastState* F = fast_;
     PrefillState* S = pf_;
     const Glm5Geometry& g = g_;
@@ -2616,8 +2617,9 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
         S->mark("hc", s);
     }
     // ---- the NextN block's caches for these positions (the half that carries it): position p reads h_p and the
-    //      embedding of the token at p + 1, so only the cache-writing half of the block runs - eh_proj, the attention
-    //      norm, kv_a and the indexer's key/gate - no queries, no attention, no FFN
+    //      embedding of the token at p + 1 - an image's row where p + 1 is one of its positions (next_img), as the
+    //      trunk read it - so only the cache-writing half of the block runs - eh_proj, the attention norm, kv_a and
+    //      the indexer's key/gate - no queries, no attention, no FFN
     if (mtp_il_ >= 0 && next_ids != nullptr) {
         int Tv = 0;   // rows whose next token is known (all but possibly the prompt's last)
         while (Tv < T && next_ids[Tv] >= 0) ++Tv;
@@ -2630,8 +2632,12 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
             }
             const size_t row_b = ggml_row_size((ggml_type) pack_emb_type_, E);
             if (!glmfast::cuda_ok(cudaStreamSynchronize(s), "glm prompt mtp embedding", err)) return false;
-            for (int t = 0; t < Tv; ++t)
-                tt->to_float(pack_emb_src_ + (size_t) next_ids[t] * row_b, S->emb_h + (size_t) t * E, E);
+            for (int t = 0; t < Tv; ++t) {
+                if (next_img != nullptr && next_img[t] != nullptr)
+                    std::memcpy(S->emb_h + (size_t) t * E, next_img[t], (size_t) E * sizeof(float));
+                else
+                    tt->to_float(pack_emb_src_ + (size_t) next_ids[t] * row_b, S->emb_h + (size_t) t * E, E);
+            }
             Carve c{S->uni};
             float* h = c.take<float>((size_t) Tv * E);
             float* emb = c.take<float>((size_t) Tv * E);
@@ -2816,13 +2822,17 @@ bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err
     const int nc = (int) ((n + Tc - 1) / Tc);
     const auto chunk_len = [&](int c) { return (int) std::min<int64_t>(Tc, n - (int64_t) c * Tc); };
     // the token after every position of chunk c (the draft block's caches read it): the prompt's own next token,
-    // the caller's for the last position (-1: unknown - that position is filled by the first draft of the decode)
-    const auto next_of = [&](int c, std::vector<int32_t>& out) {
+    // the caller's for the last position (-1: unknown - that position is filled by the first draft of the decode);
+    // img: the image row standing for that token where it is an <|image|> (empty without images)
+    const auto next_of = [&](int c, std::vector<int32_t>& out, std::vector<const float*>& img) {
         const int T = chunk_len(c);
         out.resize((size_t) T);
+        img.clear();
+        if (!img_pos_.empty()) img.assign((size_t) T, nullptr);
         for (int t = 0; t < T; ++t) {
             const int64_t j = (int64_t) c * Tc + t + 1;
             out[(size_t) t] = j < n ? tokens[(size_t) j] : prefill_next_;
+            if (!img.empty() && j < n) img[(size_t) t] = image_row(pos_start + j);
         }
     };
     // chunk c's embedding rows into this half's R (host-dequantized from the shard mapping)
@@ -2854,8 +2864,10 @@ bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err
             cudaSetDevice(dev_);
             if (!embed(c)) return false;
             std::vector<int32_t> nx0;
-            if (mtp_il_ >= 0) next_of(c, nx0);   // a single device carries the draft block itself
-            if (!prefill_half(p0, T, err, nx0.empty() ? nullptr : nx0.data())) return false;
+            std::vector<const float*> im0;
+            if (mtp_il_ >= 0) next_of(c, nx0, im0);   // a single device carries the draft block itself
+            if (!prefill_half(p0, T, err, nx0.empty() ? nullptr : nx0.data(), im0.empty() ? nullptr : im0.data()))
+                return false;
             Glm5Model* prev = this;
             for (Glm5Model* m = split_next_.get(); m != nullptr; m = m->split_next_.get()) {
                 PrefillState* SP = prev->pf_;
@@ -2868,8 +2880,10 @@ bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err
                 cudaMemcpyAsync(m->pf_->R, SP->hop_h, hop, cudaMemcpyHostToDevice, m->fast_->cs);
                 m->pos_ = p0;
                 std::vector<int32_t> nx;
-                if (m->mtp_il_ >= 0) next_of(c, nx);
-                if (!m->prefill_half(p0, T, err, nx.empty() ? nullptr : nx.data())) return false;
+                std::vector<const float*> im;
+                if (m->mtp_il_ >= 0) next_of(c, nx, im);
+                if (!m->prefill_half(p0, T, err, nx.empty() ? nullptr : nx.data(), im.empty() ? nullptr : im.data()))
+                    return false;
                 prev = m;
             }
             pos_ = p0 + T;
@@ -2947,8 +2961,9 @@ bool Glm5Model::prefill_run(const std::vector<int32_t>& tokens, std::string& err
                     cv.notify_all();
                     m->pos_ = p0;
                     std::vector<int32_t> nx;
-                    if (m->mtp_il_ >= 0) next_of(c, nx);
-                    if (!m->prefill_half(p0, T, e2, nx.empty() ? nullptr : nx.data())) {
+                    std::vector<const float*> im;
+                    if (m->mtp_il_ >= 0) next_of(c, nx, im);
+                    if (!m->prefill_half(p0, T, e2, nx.empty() ? nullptr : nx.data(), im.empty() ? nullptr : im.data())) {
                         fail(e2.empty() ? "glm prefill: part " + std::to_string(k) + " failed" : e2);
                         return;
                     }
