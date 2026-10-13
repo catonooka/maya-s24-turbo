@@ -417,6 +417,43 @@ static void numa_pinned_free(void* p, size_t bytes) {
 #endif
 }
 
+// The RAM tier's sizing pins through these: STRATA_GLM_PIN_CAP_MB=<MB> (tests) refuses what would take the bytes they
+// hold past it - a Windows pinning cap where there is none.  (The parts of a split pin one after another.)
+static int64_t g_pin_held = 0;
+static cudaError_t pin_alloc(void** p, size_t bytes, unsigned flags) {
+    static const int64_t cap = getenv("STRATA_GLM_PIN_CAP_MB") ? std::atoll(getenv("STRATA_GLM_PIN_CAP_MB")) << 20 : -1;
+    if (cap >= 0 && g_pin_held + (int64_t) bytes > cap) return cudaErrorMemoryAllocation;
+    const cudaError_t e = cudaHostAlloc(p, bytes, flags);
+    if (e == cudaSuccess) g_pin_held += (int64_t) bytes;
+    return e;
+}
+static void pin_free(void* p, size_t bytes) {
+    cudaFreeHost(p);
+    g_pin_held -= (int64_t) bytes;
+}
+constexpr size_t kPinRoom = (size_t) 512 << 20;   // what a tier leaves pinnable above it (the driver's own buffers)
+
+// How much more pins now, up to `limit` bytes: probes of 1 GB, then of 256 MB, until one is refused (freed again).
+// Measured at a pinning cap's first refusal, it sizes the tier's classes from there on: the steps down (3%, then 12%)
+// landed up to a step under the cap, and the slots left under it held experts the disk then served (a Windows PC with
+// 128 GB: the tier 2.5 GB under its cap, 6-13 disk reads a token instead of 0.5-1, decode 11-18 tok/s instead of
+// 18-23 - #129)
+static int64_t pin_room(int64_t limit) {
+    std::vector<std::pair<void*, size_t>> probes;
+    int64_t got = 0;
+    for (const size_t probe : {(size_t) 1 << 30, (size_t) 256 << 20})
+        for (void* q = nullptr; got + (int64_t) probe <= limit; q = nullptr) {
+            if (pin_alloc(&q, probe, cudaHostAllocDefault) != cudaSuccess) {
+                cudaGetLastError();
+                break;
+            }
+            probes.push_back({q, probe});
+            got += (int64_t) probe;
+        }
+    for (const auto& [q, bytes] : probes) pin_free(q, bytes);
+    return got;
+}
+
 
 // a start-time upload of pageable host data through a pinned buffer of ours (the disk staging): a pageable copy needs
 // pinned buffers of the driver's own, and with the RAM tiers just under a pinning cap (Windows) the warmed tables'
@@ -1402,37 +1439,60 @@ bool Glm5Model::fast_setup(std::string& err) {
                 return false;
             }
         F->stage_bytes = sstride;
+        // at a pinning cap's first refusal the room left under it is measured (pin_room), and from there on each class
+        // takes its planned share of what is left - less the room kept above the tier
+        int64_t pin_left = -1;
+        const auto share = [&](size_t c) {
+            int64_t planned = 0;
+            for (size_t k = c; k < cls_n.size(); ++k) planned += cls_n[k] * (int64_t) cls_stride[k];
+            const double f = (double) std::max<int64_t>(0, pin_left - (int64_t) kPinRoom) / (double) std::max<int64_t>(1, planned);
+            return (int64_t) (f * (double) cls_n[c]);
+        };
         for (size_t c = 0; c < cls_stride.size() && wsum > 0; ++c) {
             auto& R = F->rc[c];
             R.stride = cls_stride[c];
             int64_t n = cls_n[c];
             const int64_t cap = cls_cap[c];
             const int64_t least = std::min<int64_t>(16, cap);   // the floor, or the whole cap when that is smaller
+            if (pin_left >= 0) n = std::max(least, std::min(n, share(c)));
             void* p = nullptr;
-            // a refusal near a pinning cap: 1/32 less a try for the first four (a tier just over a cap loses ~3%, not
-            // the 12% of a 7/8 step), then 1/8 less
+            // a refusal near a pinning cap: the size measured (above), and should that be refused too, 1/32 less a
+            // try for the first four (a tier just over a cap loses ~3%, not the 12% of a 7/8 step), then 1/8 less
             for (int tries = 0; n >= least; ++tries) {
                 if ((p = numa_pinned((size_t) n * R.stride)) != nullptr) {   // (over every socket: numa_pinned)
                     R.registered = true;
                     break;
                 }
-                if (cudaHostAlloc(&p, (size_t) n * R.stride, cudaHostAllocPortable) == cudaSuccess) {
+                if (pin_alloc(&p, (size_t) n * R.stride, cudaHostAllocPortable) == cudaSuccess) {
                     // ... and leave room under the cap: a pageable copy needs pinned buffers of the driver's own, and
                     // with two tiers pinned right up to it the warmed tables' upload failed (#105).  512 MB more that
                     // will not pin: a step less
                     void* room = nullptr;
-                    if (cudaHostAlloc(&room, (size_t) 512 << 20, cudaHostAllocDefault) == cudaSuccess) {
-                        cudaFreeHost(room);
+                    if (pin_alloc(&room, kPinRoom, cudaHostAllocDefault) == cudaSuccess) {
+                        pin_free(room, kPinRoom);
                         break;
                     }
                     cudaGetLastError();
-                    cudaFreeHost(p);
+                    pin_free(p, (size_t) n * R.stride);
                 }
                 cudaGetLastError();
                 p = nullptr;
+                if (pin_left < 0) {
+                    int64_t planned = 0;
+                    for (size_t k = c; k < cls_n.size(); ++k) planned += cls_n[k] * (int64_t) cls_stride[k];
+                    pin_left = pin_room(planned + (int64_t) kPinRoom);
+                    const int64_t fit = share(c);
+                    std::fprintf(stderr, "glm fast: CUDA%d a pinning cap: %.2f GB more pin, the RAM tier sized to it\n",
+                                 dev_, (double) pin_left / 1073741824.0);
+                    if (fit < n) {
+                        n = std::max(least, fit);
+                        continue;
+                    }
+                }
                 const int64_t less = tries < 4 ? n * 31 / 32 : n * 7 / 8;
                 n = (n > least && less < least) ? least : less;
             }
+            if (p != nullptr && pin_left >= 0) pin_left = std::max<int64_t>(0, pin_left - n * (int64_t) R.stride);
             if (p == nullptr) {
                 err = "glm fast: the pinned RAM tier did not allocate";
                 return false;
