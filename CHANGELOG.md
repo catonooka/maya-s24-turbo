@@ -4,6 +4,30 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.7 - 2026-10-13
+
+Faster prompts with the INT8 cache, Windows fixes for speed in the background and for the RAM tier, and a guard
+against model files that change after setup.
+
+- **Windows: full speed with Maya's window in the background.** The engine opts out of Windows' power throttling
+  (EcoQoS) itself, which moved its CPU lane onto a hybrid Intel CPU's efficiency cores whenever every Maya window was
+  in the background - decode dropped to a fraction of its focused speed (#114, thanks to @githug2024 for testing
+  `powercfg`).
+- **Windows: the RAM tier fills the pinning limit.** Where Windows refuses to pin a planned tier, the engine now
+  measures how much still pins and sizes the tier to it, instead of stepping down 3% at a time - those steps left a
+  128 GB PC's tier 2.5 GB under its limit, and the SSD served those experts (#129, measured by @anbow1). With several
+  expert sizes each takes its planned share. The log's "RAM tier sits on node X of N seen" line now appears only on
+  PCs with two NUMA nodes or more, where it means something (#114, #129, #147).
+- **A guard against model files that change after setup** (#155, traced by @zhanghuqqqq). Before the setup builds a pack from a Maya model's
+  files, it checks them against their published sha256 - files it downloaded were always checked, files already in the
+  folder now are too, once each. The pack records the files it was built from, and a start refuses it if they changed
+  afterwards (`./maya.sh --setup --repack` builds it again): a pack built while a download manager was still filling
+  files it had created at full size answered garbage.
+- **Prompts with the INT8 cache** (`--kv int8`). The prompt attention converts the cache's INT8 records to FP16 for
+  less (a byte permute and FP16 arithmetic instead of int-to-float conversions), with the same bits as before - checked
+  for every code and every scale on NVIDIA and AMD. On two V100s the attention's extra time over FP16 went from +18% to
+  +11%, and INT8 prompts are now within about 2% of FP16's (8K-32K).
+
 ## v1.1.6 - 2026-10-13
 
 Long contexts with the attention's cache in RAM, EXL3 with the DFlash2 drafter up to twice as fast, and faster experts

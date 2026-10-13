@@ -19,7 +19,9 @@ It takes 20-40 minutes plus the download:
    instead, or use files you already have: `./maya.sh --gguf-dir DIR` - other quants than these four are
    experimental: they run, but Maya is not measured with them. With DFlash2 it also downloads the drafter (0.7 GB,
    checked against its sha256) next to the models;
-6. builds the *pack* - the engine's index of the model files, about 1 GB, written into the model folder;
+6. builds the *pack* - the engine's index of the model files, about 1 GB, written into the model folder. A Maya
+   model's files that were already there are checked against their sha256 first (once each); the pack records the
+   files, and a start refuses it if they change afterwards (`--repack` builds it again);
 7. **pictures**: compiles the image encoder (10-20 minutes, once) and fetches its files (1.1 GB, shown and asked
    first); `--no-vision` skips it;
 8. writes `maya-<model>.json` and `run-maya-<model>.sh`; with DFlash2 it runs the
