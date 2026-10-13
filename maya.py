@@ -1431,6 +1431,28 @@ def sha256_ok(path: Path, want) -> bool:
     return h.hexdigest() in [w.lower() for w in ([want] if isinstance(want, str) else want)]
 
 
+VERIFIED = ".maya-verified.json"                   # in a model folder: the files whose sha256 matched, by size and time
+
+
+def sha256_checked(path: Path, want) -> bool:
+    """sha256_ok, read once: a file that matched is remembered (VERIFIED) with its size and modification time, and not
+    read again until either changes."""
+    book = read_json(path.parent / VERIFIED)
+    st = path.stat()
+    seen = book.get(path.name) or {}
+    if seen.get("size") == st.st_size and seen.get("mtime_ns") == st.st_mtime_ns:
+        return True
+    say(f"  checking {path.name}'s sha256 ...")
+    if not sha256_ok(path, want):
+        return False
+    book[path.name] = {"size": st.st_size, "mtime_ns": st.st_mtime_ns}
+    try:
+        (path.parent / VERIFIED).write_text(json.dumps(book, indent=1), encoding="utf-8")
+    except OSError:
+        pass
+    return True
+
+
 def offer_download(a, quant: str, d: Path, shards: list) -> bool:
     """Shows what would be downloaded - the source, the size, the exact commands - and downloads only after a yes
     (or --download-model).  False: nothing was downloaded."""
@@ -1488,10 +1510,8 @@ def offer_download(a, quant: str, d: Path, shards: list) -> bool:
         if why:
             fail(f"{s.name} after the download: {why}", f"delete it and run {ME} --download-model again")
         want = m["sha256"].get(hf_name(m, s))
-        if want:
-            say(f"  checking {s.name}'s sha256 ...")
-            if not sha256_ok(s, want):
-                fail(f"{s.name}: the sha256 does not match the published one", "delete it and download it again")
+        if want and not sha256_checked(s, want):
+            fail(f"{s.name}: the sha256 does not match the published one", "delete it and download it again")
         ok(f"{s.name} downloaded")
     return True
 
@@ -1562,6 +1582,39 @@ def pack_source(pack: Path):
     return m.group(1) if m else None
 
 
+PACK_SOURCES = "sources.json"                      # in a pack: its model files' sizes and times when it was built
+
+
+def pack_stale(pack: Path, shards: list):
+    """Why a pack no longer matches its model files, or None.  The pack holds where every tensor sits in them: a file
+    that changed after the pack was built leaves those places wrong (#155: a pack built while a download manager was
+    still filling files it had created at full size indexed regions with no data yet, and the engine answered garbage,
+    fast).  A pack from before the record (PACK_SOURCES): a model file written after the pack's index counts."""
+    rec = read_json(pack / PACK_SOURCES).get("files")
+    if rec:
+        old = {r.get("name"): r for r in rec}
+        for s in shards:
+            r, st = old.get(s.name) or {}, s.stat()
+            if r.get("size") != st.st_size or r.get("mtime_ns") != st.st_mtime_ns:
+                return f"{s.name} changed after the pack was built"
+        return None
+    try:
+        built = (pack / "native_experts.txt").stat().st_mtime
+    except OSError:
+        return None
+    late = [s.name for s in shards if s.stat().st_mtime > built + 60]
+    return f"{late[0]} was written after the pack was built" if late else None
+
+
+def stamp_pack(pack: Path, shards: list) -> None:
+    """The model files' sizes and times into the pack (PACK_SOURCES), for pack_stale."""
+    files = [{"name": s.name, "size": s.stat().st_size, "mtime_ns": s.stat().st_mtime_ns} for s in shards]
+    try:
+        (pack / PACK_SOURCES).write_text(json.dumps({"files": files}, indent=1), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def pack_step(a, d: Path, shards: list, llama: Path, quant: str | None = None) -> Path:
     step(6, "the pack (the engine's index of the model files)")
     if quant is not None and is_exl3(quant):
@@ -1572,8 +1625,21 @@ def pack_step(a, d: Path, shards: list, llama: Path, quant: str | None = None) -
     if pack_source(pack) not in (None, shards[0].name):
         pack = d / f"pack-{quant_of(shards[0])}".lower()
     if not a.repack and pack_source(pack) == shards[0].name and all((pack / f).exists() for f in PACK_FILES):
-        ok(f"pack already built: {pack}")
-        return pack
+        why = pack_stale(pack, shards)
+        if why is None:
+            if not (pack / PACK_SOURCES).exists():
+                stamp_pack(pack, shards)
+            ok(f"pack already built: {pack}")
+            return pack
+        warn(f"the pack is built again: {why}")
+    # the files a pack is built from: a Maya download's against its published sha256 (once a file - a download is
+    # checked as it lands), so a file still being written or damaged stops here, not as garbage answers (#155)
+    m = MODELS.get(quant or "") or {}
+    for s in shards:
+        want = (m.get("sha256") or {}).get(hf_name(m, s)) if m else None
+        if want and not sha256_checked(s, want):
+            fail(f"{s.name}: the sha256 does not match the published one - still being downloaded, or damaged",
+                 f"let the download finish, or delete the file and run {ME} --download-model")
     if not os.access(d, os.W_OK):
         fail(f"{d} is not writable: the pack is written next to the GGUF files (the engine finds them at <pack>/..)",
              "link the .gguf files into a writable folder (" + ("mklink /H DIR\\<file> <file>, for each file" if WIN
@@ -1590,6 +1656,7 @@ def pack_step(a, d: Path, shards: list, llama: Path, quant: str | None = None) -
     missing = [f for f in PACK_FILES if not (pack / f).exists()]
     if missing:
         fail(f"the pack builder did not write {pack / missing[0]}", "the reason is in the messages above")
+    stamp_pack(pack, shards)
     ok(f"pack: {pack}")
     return pack
 
@@ -2134,6 +2201,15 @@ def server_command(cfg_path: Path, a) -> tuple:
                     (Path(cfg.get("tokenizer", "")) / "vocab.json", "the tokenizer")):
         if p is None or not p.exists():
             fail(f"{cfg_path.name}: {what} is missing ({p})", f"run {ME} --setup to repair it")
+    # a model file changed after its pack was built (pack_stale, #155): the pack's places in it are wrong
+    src = pack_source(pack)
+    if src is not None and src != EXL3_GGUF and all(s.exists() for s in shard_set(pack.parent / src)):
+        why = pack_stale(pack, shard_set(pack.parent / src))
+        if why is not None:
+            fail(f"{cfg_path.name}: {why}, so its index of where the tensors sit is wrong",
+                 f"run {ME} --setup --repack to build it again (a few minutes)")
+        if not (pack / PACK_SOURCES).exists():
+            stamp_pack(pack, shard_set(pack.parent / src))
     if add_profile(cfg):                               # a config written before the expert profile (an update)
         cfg_path.write_text(json.dumps(cfg, indent=1), encoding="utf-8")
         ok(f"{cfg_path.name}: starts from the shipped expert profile now (--expert-profile {PROFILE})")
