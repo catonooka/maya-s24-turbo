@@ -117,6 +117,10 @@ builds everything once (20-40 minutes plus the download) and **starts the model*
 - **Several requests at once:** `./maya.sh --parallel 4` (Windows: `START-MAYA.bat --parallel 4`; up to 8) keeps
   it in the config, and the dashboard shows how many answers are being written. Each extra request keeps its own
   context in VRAM, so a few fewer experts fit there ([how](docs/SETTINGS.md#several-requests-at-once)).
+- **Long contexts:** new setups keep each attention layer's cache in RAM with a window of it in VRAM
+  (`--kv-streaming on`; `./maya.sh --setup` adds it to an existing config), so the VRAM holds more experts - at 512K
+  on an RTX 3090, prompts 4-9x faster and decode +5%; 1M context fits one 3090
+  ([how](docs/SETTINGS.md)).
 - **Faster answers with a DFlash2 drafter:** `./maya.sh --setup --draft dflash2` (NVIDIA RTX 30 / A100 and newer)
   downloads a small drafter that drafts up to 7 tokens a round and gives the same answers - Maya-L +44% on nine GPUs
   and +12% on two (against the MTP block), +19% on one RTX 3090 ([how](docs/SETTINGS.md#drafting-with-dflash2)). How

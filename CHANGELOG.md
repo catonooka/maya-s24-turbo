@@ -4,6 +4,31 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.6 - 2026-10-13
+
+Long contexts with the attention's cache in RAM, EXL3 with the DFlash2 drafter up to twice as fast, and faster experts
+on the CPU and in prompts.
+
+- **KV streaming for long contexts** (#86 by @needmorevram). Each attention layer's cache can live in pinned RAM with a
+  window of it in VRAM (`--kv-streaming on`, `--kv-resident N`, 32,768 positions by default), so the VRAM it frees
+  holds experts. It pays off where the cache is large beside the cards: at 512K on an RTX 3090, 1,176 expert slots
+  instead of 714, prompts 4-9x faster and decode +5%; 1M context starts on one 3090; four conversations at 128K on two
+  GPUs (`--parallel 4`) decode 37% faster together. New setups turn it on; an existing config gets it from
+  `./maya.sh --setup` (Windows: `START-MAYA.bat --setup`). Decoding gives the same tokens as without it.
+- **EXL3 with the DFlash2 drafter decodes each weight once per window** (#164 by @needmorevram). A verify window
+  decoded every EXL3 weight once for each of its tokens; now once for all of them, with the same bits. On an RTX 3090 +
+  5060 Ti, DFlash2 with EXL3 decodes about twice as fast and is now 15-29% ahead of the MTP block (which itself gains
+  4-7%); on one RTX 3090 it is 13-30% faster than plain decode in chats.
+- **Faster CPU experts for IQ3 quants** (#166 by @needmorevram). The CPU lane's one-token IQ3_S / IQ3_XXS rows - all
+  of Maya-L's gate/up weights - decode 10-13% faster on a few cores, bit-identical to before (checked against ggml's
+  own dot at first use; `STRATA_GLM_CPU_1T=0` turns it off).
+- **Prompts: the experts' SwiGLU inside the MMQ product** (#166). On RTX 20 and newer, the prompt path's gate/up
+  product writes the SwiGLU directly instead of handing a buffer twice its size to a separate kernel: that step -17% on
+  an RTX 5060 Ti, -3.4% on an RTX 3090, the same values (`STRATA_GLM_MMQ_GLU=0` turns it off). It is applied to the
+  pinned ggml when the engine is built; without git (a source zip) the engine builds as before.
+- **Docs:** pages inherited from the code Maya grew out of, about other models, are gone; the README has five more
+  machines measured by users.
+
 ## v1.1.5 - 2026-10-13
 
 Conversations that share their start read only what is new, safer serving for agents, faster CPU experts, and opt-in
