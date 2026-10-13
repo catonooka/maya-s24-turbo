@@ -378,7 +378,7 @@ bool Glm5Model::fast_dsa_window(int il, int64_t p0, int t0, int T, std::string& 
         d.q_lora = g.q_lora;
         d.kv_raw = W.kv_raw + (size_t) t * g.kv_lora;
         d.kv_norm = Ly.kv_a_norm;
-        d.lat = (uint16_t*) (state_ + dsa_lat_[(size_t) il]);
+        kv_prep_targets(kv_, il, (uint16_t*) (state_ + dsa_lat_[(size_t) il]), d);   // (KV streaming: + host copy)
         d.kv_lora = g.kv_lora;
         d.lat_q8 = lat_q8_;
         d.ik_raw = W.ik_raw + (size_t) t * g.idx_key;
@@ -432,9 +432,11 @@ bool Glm5Model::fast_dsa_window(int il, int64_t p0, int t0, int T, std::string& 
         const int top_pools = std::min(g.top_pools_max(), pool_done);
         const int n_sel = g.idx_kpool * top_pools + (g.idx_select_tail ? g.idx_kpool - 1 : 0);
         gf::dsa_select(F->score, pool_done, g.idx_kpool, top_pools, n_sel, (int) p, F->cells, s);
-        if (batched && gf::mla_attend(W.q_abs + (size_t) t * ad, (const uint16_t*) (state_ + dsa_lat_[(size_t) il]),
-                                      F->cells, n_sel, g.n_head, g.qk_nope, g.kv_lora, W.ctx + (size_t) t * ad, s,
-                                      lat_q8_))
+        // KV streaming: this token's blocks resident before its attention (the next token's resolve runs after it)
+        uint16_t* const lat = (uint16_t*) (state_ + dsa_lat_[(size_t) il]);
+        const int* cells = kv_attend_cells(kv_, il, lat, F->cells, n_sel, F->slot_cells, s);
+        if (batched && gf::mla_attend(W.q_abs + (size_t) t * ad, lat, cells, n_sel, g.n_head, g.qk_nope, g.kv_lora,
+                                      W.ctx + (size_t) t * ad, s, lat_q8_))
             continue;
         if (batched) {   // (the first token: the split attention is not available here - every token per token)
             batched = false;
@@ -443,8 +445,8 @@ bool Glm5Model::fast_dsa_window(int il, int64_t p0, int t0, int T, std::string& 
                 return false;
             }
         }
-        gf::mla(W.q + (size_t) t * qd, Ly.k_b, Ly.v_b, (const uint16_t*) (state_ + dsa_lat_[(size_t) il]), F->cells,
-                n_sel, g.n_head, g.qk_nope, g.kv_lora, g.v_head, (uint8_t*) W.attn_q + (size_t) t * W.aq_s, s, lat_q8_);
+        gf::mla(W.q + (size_t) t * qd, Ly.k_b, Ly.v_b, lat, cells, n_sel, g.n_head, g.qk_nope, g.kv_lora, g.v_head,
+                (uint8_t*) W.attn_q + (size_t) t * W.aq_s, s, lat_q8_);
     }
     if (batched)
         gf::mla_out(W.ctx + (size_t) t0 * ad, ad, Ly.v_b, g.n_head, g.kv_lora, g.v_head, T,

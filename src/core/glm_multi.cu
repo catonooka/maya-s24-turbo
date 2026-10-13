@@ -40,6 +40,7 @@ void Glm5Model::seq_bind(int s) {
     std::swap(o.dsa_ik, dsa_ik_);
     std::swap(o.dsa_ig, dsa_ig_);
     std::swap(o.dsa_pool, dsa_pool_);
+    o.kv = kv_;   // (KV streaming: the bound sequence's stream lives in kv_, its SeqCtx holds none)
     SeqCtx& n = seq_[(size_t) s];
     state_ = n.state;
     pos_ = n.pos;
@@ -61,6 +62,8 @@ void Glm5Model::seq_bind(int s) {
     std::swap(n.dsa_ik, dsa_ik_);
     std::swap(n.dsa_ig, dsa_ig_);
     std::swap(n.dsa_pool, dsa_pool_);
+    kv_ = n.kv;
+    n.kv = nullptr;
     cur_seq_ = s;
 }
 
@@ -75,8 +78,11 @@ uint64_t Glm5Model::seq_layout(int64_t ctx, SeqCtx& c) const {
     const int64_t hc_dim = (int64_t) g.hc * g.n_embd;
     const int64_t max_pools = ctx / g.idx_kpool;
     int64_t floats = 2 * hc_dim;
-    const int64_t lat_floats = lat_q8_ ? (int64_t) gf::lat8_rec_bytes(g.kv_lora) / 4 * ctx
-                                       : (int64_t) g.kv_lora * ctx / 2;
+    // (KV streaming: the arena holds the VRAM slots of kv_resident_cells positions, as load_pack lays it out)
+    const int64_t kv_cells = kv_resident_cells(g.idx_kpool, ctx);
+    const int64_t lat_rows = kv_cells > 0 ? kv_cells : ctx;
+    const int64_t lat_floats = lat_q8_ ? (int64_t) gf::lat8_rec_bytes(g.kv_lora) / 4 * lat_rows
+                                       : (int64_t) g.kv_lora * lat_rows / 2;
     for (auto* v : {&c.kda_S, &c.kda_conv, &c.dsa_lat, &c.dsa_ik, &c.dsa_ig, &c.dsa_pool})
         v->assign((size_t) g.n_layers + 1, 0);
     c.ik_ring = (int) std::min<int64_t>(ctx, 8192 + 64);
@@ -140,6 +146,12 @@ bool Glm5Model::seq_alloc_arenas(std::string& err) {
         cudaMemset(a, 0, c.bytes);
         c.state = a;
         more += c.bytes;
+        // KV streaming: its own host copy and residency maps (a context of the window or less is not streamed)
+        const int64_t kv_cells = kv_resident_cells(g_.idx_kpool, ctx);
+        if (kv_cells > 0) {
+            c.kv = kv_stream_make(kv_cells, ctx, err);
+            if (c.kv == nullptr && !err.empty()) return false;
+        }
     }
     // every sequence's snapshot (its recurrent states and the open key pool: the prompt cache, PAUSE) now as well:
     // made on demand, after the expert pool had taken the card, only the first found room

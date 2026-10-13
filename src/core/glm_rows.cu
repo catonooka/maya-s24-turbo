@@ -186,6 +186,7 @@ bool Glm5Model::multi_rows(const int* seqs, const int32_t* tokens, const strata:
         const std::vector<int64_t> *kda_S = nullptr, *kda_conv = nullptr, *dsa_lat = nullptr, *dsa_ik = nullptr,
                                    *dsa_ig = nullptr, *dsa_pool = nullptr;
         const float* img = nullptr;
+        const KvStream* kv = nullptr;   // KV streaming: that sequence's stream (null: not streamed)
     };
     Row rw[gf::kMaxMvNt];
     for (int i = 0; i < n; ++i) {
@@ -212,6 +213,7 @@ bool Glm5Model::multi_rows(const int* seqs, const int32_t* tokens, const strata:
             r.dsa_ik = &dsa_ik_;
             r.dsa_ig = &dsa_ig_;
             r.dsa_pool = &dsa_pool_;
+            r.kv = kv_;
             r.img = image_row(r.p);
             max_ctx = max_ctx_;
         } else {
@@ -225,6 +227,7 @@ bool Glm5Model::multi_rows(const int* seqs, const int32_t* tokens, const strata:
             r.dsa_ik = &c.dsa_ik;
             r.dsa_ig = &c.dsa_ig;
             r.dsa_pool = &c.dsa_pool;
+            r.kv = c.kv;
             r.img = image_row_in(c.img_pos, c.img_rows, r.p, E);
             max_ctx = c.max_ctx;
         }
@@ -342,7 +345,7 @@ bool Glm5Model::multi_rows(const int* seqs, const int32_t* tokens, const strata:
                 d.q_lora = g.q_lora;
                 d.kv_raw = rows(S->kv_raw, g.kv_lora, i);
                 d.kv_norm = Ly.kv_a_norm;
-                d.lat = (uint16_t*) (rw[i].state + (*rw[i].dsa_lat)[(size_t) il]);
+                kv_prep_targets(rw[i].kv, il, (uint16_t*) (rw[i].state + (*rw[i].dsa_lat)[(size_t) il]), d);
                 d.kv_lora = g.kv_lora;
                 d.lat_q8 = lat_q8_;
                 d.ik_raw = rows(S->ik_raw, g.idx_key, i);
@@ -378,8 +381,9 @@ bool Glm5Model::multi_rows(const int* seqs, const int32_t* tokens, const strata:
                 const int top_pools = std::min(g.top_pools_max(), pool_done);
                 const int n_sel = g.idx_kpool * top_pools + (g.idx_select_tail ? g.idx_kpool - 1 : 0);
                 gf::dsa_select(F->score, pool_done, g.idx_kpool, top_pools, n_sel, (int) p, F->cells, s);
-                gf::mla(rows(S->q, (int64_t) g.n_head * g.qk_nope, i), Ly.k_b, Ly.v_b,
-                        (const uint16_t*) (rw[i].state + (*rw[i].dsa_lat)[(size_t) il]), F->cells, n_sel, g.n_head,
+                uint16_t* const lat = (uint16_t*) (rw[i].state + (*rw[i].dsa_lat)[(size_t) il]);
+                const int* cells = kv_attend_cells(rw[i].kv, il, lat, F->cells, n_sel, F->slot_cells, s);
+                gf::mla(rows(S->q, (int64_t) g.n_head * g.qk_nope, i), Ly.k_b, Ly.v_b, lat, cells, n_sel, g.n_head,
                         g.qk_nope, g.kv_lora, g.v_head, rows_q(S->attn_q, (int64_t) g.n_head * g.v_head, i), s,
                         lat_q8_);
             }
