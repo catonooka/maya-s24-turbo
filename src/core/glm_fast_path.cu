@@ -1778,10 +1778,12 @@ struct Glm5Model::FastState::WinLane {
 // rows are read ONCE for all the tokens that routed to it, and the distinct experts are split over both window lanes
 // (FastState::win_lane, a pool a socket).  With two lanes the lane is DRAM-bound (~78 GB/s together on the 2-socket
 // Xeon, one lane alone ~65), so a shared expert read once is time saved; its rows' extra dots are what the second
-// socket's cores are for.  Work is cut by cost - a row costs 1 + 0.8 per extra token (two activations a row took 1.8x
-// one) - into the halves and the pieces, so no thread waits on the shared rows.  native_*_rows_split loop the tokens
-// inside each row with the same dot and each token's sum adds its own experts in its own order: every answer is
-// fast_cpu_experts' for it alone, bit for bit.  STRATA_GLM_WIN_CPU=0: a token a lane instead.
+// socket's cores are for.  Work is cut by cost - a row costs 1 + 0.8 per extra token with ggml's one-pair dots (two
+// activations a row took 1.8x one), 1 + 0.3 with the multi-token rows (IQ3_S/IQ4_XS: 2 / 4 / 8 tokens 1.33x / 1.74x /
+// 3.5x one, 40 threads of a Xeon 6152) - into the halves and the pieces, so no thread waits on the shared rows.
+// native_*_rows_split give every token exactly ggml's dot (the multi-token rows are checked bit for bit against it)
+// and each token's sum adds its own experts in its own order: every answer is fast_cpu_experts' for it alone, bit for
+// bit.  STRATA_GLM_WIN_CPU=0: a token a lane instead.
 void Glm5Model::win_cpu_merged(int il, int nb, const gf::MoeRequest* const* rq, gf::CpuAnswer* const* ans,
                                const unsigned int* seq) {
     FastState* F = fast_;
@@ -1815,7 +1817,8 @@ void Glm5Model::win_cpu_merged(int il, int nb, const gf::MoeRequest* const* rq, 
     const size_t act_b = kc::kNativeActBytes, h_b = kc::kNativeHBytes;
     for (int j = 0; j < nb; ++j) kc::native_quant_act(nf, rq[j]->x, C.act.data() + (size_t) j * act_b);
     // the distinct experts into two halves of about equal cost (greedy, costliest first)
-    const auto cost = [&](int u) { return 1.0 + 0.8 * (u_n[u] - 1); };
+    const double extra = kc::native_multi_rows_exact(nf.gu_type) ? 0.3 : 0.8;
+    const auto cost = [&](int u) { return 1.0 + extra * (u_n[u] - 1); };
     int order[kMaxE], half[2][kMaxE], nh[2] = {0, 0};
     double load[2] = {0.0, 0.0};
     for (int u = 0; u < nu; ++u) order[u] = u;
