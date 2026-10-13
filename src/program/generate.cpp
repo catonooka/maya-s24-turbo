@@ -1577,8 +1577,8 @@ static int glm_pack_generate(const Options& o) {
                 if (!o.serve) return;
                 std::lock_guard<std::mutex> lk(pp_mu);
                 const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-                std::printf("PP %s%zu %zu %.1f %.1f\n", tag.c_str(), reuse + done, prompt.size(), ms,
-                            (double) done / (ms / 1000.0 + 1e-9));
+                std::printf("PP %s%zu %zu %.1f %.1f %zu\n", tag.c_str(), reuse + done, prompt.size(), ms,
+                            (double) done / (ms / 1000.0 + 1e-9), reuse);
                 std::fflush(stdout);
             };
             const std::vector<size_t> marks = ckpt_marks(prompt, reuse, prompt.size() - 1);
@@ -1645,8 +1645,8 @@ static int glm_pack_generate(const Options& o) {
             i += chunk;
             if (o.serve) {
                 const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-                std::printf("PP %s%zu %zu %.1f %.1f\n", tag.c_str(), i, prompt.size(), ms,
-                            (double) (i - reuse) / (ms / 1000.0 + 1e-9));
+                std::printf("PP %s%zu %zu %.1f %.1f %zu\n", tag.c_str(), i, prompt.size(), ms,
+                            (double) (i - reuse) / (ms / 1000.0 + 1e-9), reuse);
             }
             if (stop_req.load()) { finish = "cancel"; break; }
         }
@@ -5528,8 +5528,8 @@ int main(int argc, char** argv) {
             // progress for the server window: PP <position reached> <prompt tokens> <ms> <fresh tokens/s>
             const int64_t done = p0 + T;
             const double ms = std::chrono::duration<double, std::milli>(Clock::now() - pp_t0).count();
-            std::printf("PP %lld %lld %.0f %.1f\n", (long long) done, (long long) pp_total, ms,
-                        ms > 0.0 ? 1000.0 * (double) (done - pp_from) / ms : 0.0);
+            std::printf("PP %lld %lld %.0f %.1f %lld\n", (long long) done, (long long) pp_total, ms,
+                        ms > 0.0 ? 1000.0 * (double) (done - pp_from) / ms : 0.0, (long long) pp_from);
             strata::core::progress_at("reading the prompt (batched), done up to token", done);
             strata::core::progress_beat();
             std::fflush(stdout);
@@ -6093,8 +6093,8 @@ int main(int argc, char** argv) {
                     q += T;
                 }
                 const double ms = std::chrono::duration<double, std::milli>(Clock::now() - pp_t0).count();
-                std::printf("PP %lld %lld %.0f %.1f\n", (long long) b, (long long) pp_total, ms,
-                            ms > 0.0 ? 1000.0 * (double) (b - pp_from) / ms : 0.0);
+                std::printf("PP %lld %lld %.0f %.1f %lld\n", (long long) b, (long long) pp_total, ms,
+                            ms > 0.0 ? 1000.0 * (double) (b - pp_from) / ms : 0.0, (long long) pp_from);
                 strata::core::progress_beat();
                 std::fflush(stdout);
                 return true;
