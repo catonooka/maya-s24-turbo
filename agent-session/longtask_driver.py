@@ -21,7 +21,7 @@ STAGES = [
    "(bench.py, functest.py, monitor.py, report.py, cli.py). For each: purpose, CLI, key functions, "
    "output formats. Facts to embed: server is OpenAI-compatible at http://127.0.0.1:8080, model "
    "name glm-5.3-flash, /v1/status endpoint exists (JSON with context, uptime_s), engine log at "
-   "/home/aisever/project-maya/maya-maya-s24.log has 'glm stat:' health lines. Token counts MUST "
+   "/home/USER/project-maya/maya-maya-s24.log has 'glm stat:' health lines. Token counts MUST "
    "come from usage.completion_tokens. Emit the file as ```text:benchkit/SPEC.md ...```"),
  ("S2 CORE", "Now implement benchkit/bench.py per SPEC: single-stream probes (prose/facts/code, "
    "2 runs each, report run-2) + concurrency ladder C1/C2/C4 with threads. CLI: --probes, --conc "

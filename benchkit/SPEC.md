@@ -14,7 +14,7 @@ Context window: 262,144 tokens (262k)
   - `context` — context window size (262000-range value)
   - `uptime_s` — server uptime in seconds
   Other fields may be present; monitor/report must tolerate extra keys.
-- **Engine log**: `/home/aisever/project-maya/maya-maya-s24.log` contains health lines
+- **Engine log**: `/home/USER/project-maya/maya-maya-s24.log` contains health lines
   matching the prefix `glm stat:`. These lines are the authoritative source for engine-side
   health metrics (e.g., throughput, queue state, KV cache pressure as emitted by the engine).
 - **Token counting rule (HARD REQUIREMENT)**: All token counts reported by benchkit MUST be

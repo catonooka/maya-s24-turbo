@@ -45,7 +45,7 @@ import urllib.request as urequest
 # ---------------------------------------------------------------- constants
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8080"
-DEFAULT_LOG_PATH = "/home/aisever/project-maya/maya-maya-s24.log"
+DEFAULT_LOG_PATH = "/home/USER/project-maya/maya-maya-s24.log"
 DEFAULT_INTERVAL_S = 5.0
 DEFAULT_DURATION_S = 0  # 0 = run until Ctrl-C
 DECODE_ALERT_THRESHOLD = 20.0  # tok/s; below -> low_decode alert

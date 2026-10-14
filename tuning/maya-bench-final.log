@@ -17,4 +17,4 @@ Project Maya v1.1.5 - GLM-5.3-Flash on your own GPU(s).
       52.6 tokens/s  Write a complete HTML page with a canvas that draws a bouncing ball animation in JavaScript.
   prefill (reading the prompt): 595 tokens/s, 2048 tokens
   prefill (reading the prompt): 1010 tokens/s, 8192 tokens
-  [ok] written: /home/aisever/project-maya/maya-bench.txt - attach it (with ./maya.sh --report) to a speed report
+  [ok] written: /home/USER/project-maya/maya-bench.txt - attach it (with ./maya.sh --report) to a speed report

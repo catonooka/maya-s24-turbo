@@ -8,7 +8,7 @@ history = [json.loads(l) for l in open(os.path.join(HOME, 'session.jsonl'))]
 
 # get real log lines for the parser
 import subprocess
-stat_lines = subprocess.run("grep -a 'glm stat' /home/aisever/project-maya/maya-maya-s24.log | tail -3",
+stat_lines = subprocess.run("grep -a 'glm stat' /home/USER/project-maya/maya-maya-s24.log | tail -3",
                             shell=True, capture_output=True, text=True).stdout
 
 err = f"""Your monitor.py has two bugs found in live testing. Fix and re-emit the COMPLETE file.
@@ -17,7 +17,7 @@ BUG 1 — crash at shutdown:
 TypeError: 'Event' object is not callable  (threading.Event stored as self._stop, then called self._stop())
 
 BUG 2 — glm stat parsing yields null decode_tok_s / vram_hit. Your parser does not match the real log lines.
-Real lines from /home/aisever/project-maya/maya-maya-s24.log (binary-ish file: contains NUL bytes, use errors='replace'):
+Real lines from /home/USER/project-maya/maya-maya-s24.log (binary-ish file: contains NUL bytes, use errors='replace'):
 {stat_lines}
 Expected: decode_tok_s=55.57, vram_hit=81.76 from line 1 style. Note the log file contains NUL bytes and lines
 accumulate across boots — parse the LAST matching line. Also 'concurrency' from /v1/status is under
