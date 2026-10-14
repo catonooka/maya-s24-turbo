@@ -13,6 +13,10 @@
 //   * a matrix with more than 4096 inputs, or too few output blocks to fill the device, splits its inputs over
 //     blocks: the partial sums go to a per-stream scratch and the LAST block of an output block adds them up in
 //     split order (deterministic) and runs the output rotation.
+//
+// NVIDIA GPUs before sm_80 (V100, T4, RTX 20) decode with v1.1.8's kernels instead (exl3_legacy.cu, use_legacy
+// below): this file's CUDA-core fallback was slower there (a V100 with EXL3-3.05bpw: decode 4.9 -> 4.4 tok/s).  The
+// prompt path below is this file's on every GPU.
 #include "strata/kernels/exl3.hpp"
 
 #include <cuda_fp16.h>
@@ -21,9 +25,27 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <map>
 #include <mutex>
 #include <utility>
+
+#if !defined(STRATA_USE_HIP)
+namespace strata::kernels::exl3::legacy {   // exl3_legacy.cu: v1.1.8's decode kernels
+int launch_errors();
+bool prepare(cudaStream_t s);
+bool several_ok();
+bool mv(const MvJob* jobs, int n, cudaStream_t s);
+void moe_gate_up(const MoeArgs& a, const float* x, float* h, cudaStream_t s);
+void moe_down(const MoeArgs& a, const float* h, const float* sh_out, float* out, cudaStream_t s);
+bool win_experts(const WinArgs& a, cudaStream_t s);
+}  // namespace strata::kernels::exl3::legacy
+#define EXL3_LEGACY(call) \
+    if (use_legacy()) return legacy::call
+#else
+#define EXL3_LEGACY(call) (void) 0
+#endif
 
 namespace strata::kernels::exl3 {
 namespace {
@@ -1206,6 +1228,33 @@ int sm_count() {
     return std::max(1, sms);
 }
 
+// Whether the current device decodes with v1.1.8's kernels (exl3_legacy.cu): NVIDIA before sm_80, where this file's
+// tiles run on the CUDA cores and were slower; STRATA_GLM_EXL3_DECODE=legacy | new picks one on any GPU (A/B).  The
+// token path and the verify windows take the same family on a device, so a window stays bit for bit its token path.
+// Asked once per device.
+bool use_legacy() {
+#if defined(STRATA_USE_HIP)
+    return false;
+#else
+    static std::atomic<int> cache[64];   // 0 not asked, 1 v1.1.8's kernels, 2 this file's
+    int dev = 0;
+    cudaGetDevice(&dev);
+    if (dev < 0 || dev >= 64) return false;
+    int c = cache[dev].load(std::memory_order_acquire);
+    if (c == 0) {
+        int major = 0;
+        cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev);
+        const char* v = std::getenv("STRATA_GLM_EXL3_DECODE");
+        c = v != nullptr && std::strcmp(v, "legacy") == 0 ? 1 : v != nullptr && std::strcmp(v, "new") == 0 ? 2
+            : major < 8                                    ? 1
+                                                           : 2;
+        if (c == 1) std::fprintf(stderr, "exl3: CUDA%d decodes with v1.1.8's kernels\n", dev);
+        cache[dev].store(c, std::memory_order_release);
+    }
+    return c == 1;
+#endif
+}
+
 // mv's input split for m: S blocks of kr inputs per output block, at most kMaxKR inputs a block and about two blocks
 // per SM (the same for every activation count, so a job of several sums each activation as a job of one)
 void mv_split(const Mat& m, int sms, int& S, int& kr) {
@@ -1232,13 +1281,26 @@ bool supported(const Mat& m) {
            m.n % 128 == 0 && m.K >= 1 && m.K <= 8 && m.cb >= 0 && m.cb <= 2;
 }
 
-int launch_errors() { return g_launch_errors.load(std::memory_order_relaxed); }
+int launch_errors() {
+#if !defined(STRATA_USE_HIP)
+    return g_launch_errors.load(std::memory_order_relaxed) + legacy::launch_errors();
+#else
+    return g_launch_errors.load(std::memory_order_relaxed);
+#endif
+}
 
-bool prepare(cudaStream_t s) { return scratch(s) != nullptr; }
+bool prepare(cudaStream_t s) {
+    EXL3_LEGACY(prepare(s));
+    return scratch(s) != nullptr;
+}
 
-bool several_ok() { return true; }
+bool several_ok() {
+    EXL3_LEGACY(several_ok());
+    return true;
+}
 
 bool mv(const MvJob* jobs, int n, cudaStream_t s) {
+    EXL3_LEGACY(mv(jobs, n, s));
     if (n <= 0 || n > kMaxMvJobs) return false;
     Scratch* sc = scratch(s);
     if (sc == nullptr) return false;
@@ -1347,6 +1409,7 @@ static bool moe_args(const MoeArgs& a, KMoe& m, cudaStream_t s) {
 }
 
 void moe_gate_up(const MoeArgs& a, const float* x, float* h, cudaStream_t s) {
+    EXL3_LEGACY(moe_gate_up(a, x, h, s));
     KMoe m;
     if (!moe_args(a, m, s)) return;
     if (a.lay.K[0] != a.lay.K[1]) {
@@ -1360,6 +1423,7 @@ void moe_gate_up(const MoeArgs& a, const float* x, float* h, cudaStream_t s) {
 }
 
 void moe_down(const MoeArgs& a, const float* h, const float* sh_out, float* out, cudaStream_t s) {
+    EXL3_LEGACY(moe_down(a, h, sh_out, out, s));
     KMoe m;
     if (!moe_args(a, m, s)) return;
     if (h != nullptr) m.h = const_cast<float*>(h);
@@ -1370,6 +1434,7 @@ void moe_down(const MoeArgs& a, const float* h, const float* sh_out, float* out,
 }
 
 bool win_experts(const WinArgs& a, cudaStream_t s) {
+    EXL3_LEGACY(win_experts(a, s));
     if (a.T < 1 || a.k < 1 || a.k > 8 || a.n_embd % kCols != 0 || a.n_ff % kCols != 0 || a.n_embd > kMaxKR ||
         a.n_ff > kMaxKR || a.lay.K[0] != a.lay.K[1] || a.h == nullptr || a.part == nullptr || a.out == nullptr) {
         std::fprintf(stderr, "exl3 win_experts: not covered (T %d k %d n_embd %d n_ff %d, gate K %d up K %d)\n", a.T,
