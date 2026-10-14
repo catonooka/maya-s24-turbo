@@ -4,6 +4,34 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.10 - 2026-10-14
+
+The Strix Halo and Gorgon Halo release: faster answers and faster prompts on the Ryzen AI Max APUs, a faster cold start
+from a hard disk, and prompts through both links of an NVLink pair.
+
+- **Strix Halo and Gorgon Halo: faster answers.** On the Ryzen AI Max APUs (Radeon 8050S / 8060S / 8065S, `gfx115x`),
+  which hold the whole model in GPU memory, answers come faster with the same text. On a Radeon 8065S (Ryzen AI Max+ PRO
+  495, Windows 11, Maya-S), 256-token answers to short prompts run at 28.4-29.6 tokens/s instead of 19.7, and at
+  23.2-23.5 instead of 18.4-18.5 after 3K- and 8K-token prompts; longer answers (about 600 tokens) hold 26.3 and 23.4.
+  It is on by default on these APUs only; every other GPU decodes as in v1.1.9. `STRATA_GLM_MTP_DECODE=0` turns it off,
+  `1` tries it on one GPU elsewhere (usually slower where experts stream from RAM); it stays off with `--parallel` or a
+  DFlash2 drafter. Thanks to @boxwrench for testing on a Strix Halo.
+- **Every expert stays in GPU memory on the APUs** (#101). Where the GPU's budget holds every expert plus the room a
+  prompt borrows (a Radeon 8065S under Windows), the start loads all of them, and a long prompt no longer moves experts
+  out to read them back from the SSD: answers after an 8K-token prompt +7%. On by default on AMD
+  (`STRATA_GLM_COMPLETE_POOL`, `STRATA_GLM_RESIDENT_SKIP`); NVIDIA keeps its pool unless they are set to `1`.
+- **Faster prompts on Strix Halo and Gorgon Halo** (#98 and #113 by @boxwrench). A prompt's routed experts run in one
+  fused int8 pass, and the wave32 WMMA attention is the default on `gfx1151`: on the Radeon 8065S, 3K- and 8K-token
+  prompts read at 271 and 278 tokens/s instead of 233 and 253. `STRATA_GLM_PREFILL_FUSED=0` and
+  `STRATA_GLM_PREFILL_ATTN=f16q` give the old paths.
+- **A faster cold start from a hard disk** (#182 by @hmartiniano). The start reads a GGUF pack's experts in the order
+  they lie in its files, as it already did for EXL3, instead of the order the routes rank them: on a SATA hard disk a
+  186 GB model started in ~43 s instead of ~15 min. Which experts go to VRAM and RAM is unchanged.
+- **Two GPUs over NVLink: prompts through both links** (#121 by @q8atnight). With `STRATA_GLM_DUAL_PREFILL=1`, in a
+  prompt of one chunk the waiting GPU stages every second expert over its own PCIe link and NVLink (Maya-M on two RTX
+  3090 with NVLink: 1K- and 4K-token prompts +28% and +24%). The start checks that peer copies arrive intact and keeps
+  it off on a machine whose GPUs report peer access but deliver wrong bytes.
+
 ## v1.1.9 - 2026-10-14
 
 EXL3 decodes on the tensor cores of RTX 30 and newer, EXL3 prompts are faster, and turboderp's 4.05-bit EXL3 quant is

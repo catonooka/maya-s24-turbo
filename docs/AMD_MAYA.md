@@ -155,6 +155,12 @@ in the GPU pool (288 slots/layer, 12,096 total, ~99.9% hits). These measurements
 precede the automatic sizing change; verify its startup log and repeated
 prompt/answer rounds on the real box. See [tracking issue #6](https://github.com/mw00/project-maya/issues/6).
 
+**Answers and prompts (v1.1.10).** Where every expert sits in the GPU pool, the APUs answer faster with the same
+text (`STRATA_GLM_MTP_DECODE`, on by default on `gfx115x` only). On the Gorgon Halo of [Windows](#windows) (Radeon
+8065S, Maya-S, 32K context), 256-token answers run at 28.4-29.6 tokens/s to short prompts and at 23.2-23.5 after
+3K- and 8K-token prompts, against 18.4-19.7 without it; 3K- and 8K-token prompts read at 271 and 278 tokens/s
+(the fused prompt experts and the `wmma2` attention, both on by default on `gfx1151`).
+
 ## Windows
 
 `START-MAYA.bat --backend hip` sets Maya up natively on Windows 10/11 for the same GPUs, Strix Halo and Gorgon Halo
