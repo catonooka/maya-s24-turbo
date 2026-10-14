@@ -1,0 +1,52 @@
+{
+ "exe": "/home/USER/project-maya/build/strata",
+ "args": [
+  "--glm-pack",
+  "/home/USER/Maya-data/models/EXL3-3.05bpw/pack",
+  "--max-context",
+  "131072",
+  "--prefill",
+  "auto",
+  "--kv-streaming",
+  "on",
+  "--expert-profile",
+  "/home/USER/project-maya/data/expert-profile-glm.bin"
+ ],
+ "cwd": "/home/USER/project-maya",
+ "tokenizer": "/home/USER/Maya-data/models/EXL3-3.05bpw/pack/tokenizer",
+ "model_name": "glm-5.3-flash",
+ "gpu": [
+  0,
+  1
+ ],
+ "sampling": {
+  "temperature": 1.0,
+  "top_p": 0.95
+ },
+ "reasoning_effort": "high",
+ "lib_dirs": [
+  "/usr/local/cuda-13.4/lib64",
+  "/usr/local/cuda-13.4/targets/x86_64-linux/lib"
+ ],
+ "port": 8080,
+ "vision": {
+  "exe": "/home/USER/project-maya/build-vision/bin/strata-vision",
+  "mmproj": "/home/USER/Maya-data/models/EXL3-3.05bpw/vision/mmproj-GLM-5.3-Flash-F16.gguf",
+  "model": "/home/USER/Maya-data/models/EXL3-3.05bpw/vision/GLM-5.3-Flash-vocab.gguf",
+  "gpu": true
+ },
+ "log": "/home/USER/project-maya/maya-exl3-3.05bpw.log",
+ "installer": {
+  "models_dir": "/home/USER/Maya-data/models",
+  "quant": "EXL3-3.05bpw",
+  "gguf": null,
+  "gguf_dir": null,
+  "draft": "mtp",
+  "written": "2026-10-14 15:14"
+ },
+ "host": "0.0.0.0",
+ "env": {
+  "STRATA_GLM_RAM_RESIDENT": "1",
+  "STRATA_GLM_KV_INT8": "1"
+ }
+}
