@@ -27,7 +27,7 @@ tuning stack below and vision enabled.
 
 ## Hardware
 
-2× RTX 3090 24 GB (NVLink, 300 W cap) · Threadripper PRO 3955WX · 247 GB DDR4 · NVMe.
+2× RTX 3090 24 GB (No Nvlink, 300 W cap) · Threadripper PRO 3955WX · 247 GB DDR4 · NVMe.
 Everything here should reproduce on any 2×24 GB + ~128 GB RAM box.
 
 ## The tuning stack
