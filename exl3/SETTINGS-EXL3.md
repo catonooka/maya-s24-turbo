@@ -96,3 +96,14 @@ Watch: --parallel N (concurrent serving), KV-streaming at >262k, STRATA_GLM_Q3/q
 - Calibration + engine loads MUST run under `sudo systemd-run` (user-slice oomd kills pinned-RAM loads).
 - functest.py vision probe now builds a valid PNG programmatically (old hand-hex PNG = false 400).
 - `git stash -u` then `stash drop` loses untracked files — recover via `<stash>^3` commit.
+
+## 0xSero-style RAM/CPU-lane push on EXL3 — measured 2026-10-14, NEGATIVE (architecture, not config)
+- Host: 8-channel DDR4-2400 (8x32GB, 247GB) — same RAM class as 0xSero's EPYC rig. Their speed comes
+  from computing ~152 experts/token ON THE CPU in parallel with GPU work (async elastic lane).
+- Maya's EXL3 CPU lane is SYNCHRONOUS on this build: any CPU share adds its full latency to the token.
+  Measured: PCIE_SHARE 0.5 -> 4.5 t/s (lane 43/tok in 361ms); 0.85+LANE24 (3.86ms/expert) -> 18.1 t/s;
+  0.95 -> engine routes ~everything to PCIe = 29.0 (baseline). Best config remains: lane OFF (auto).
+- Root: engine's lane planner prices per-expert LATENCY (7.0ms CPU vs 0.36ms PCIe = 20x) and with
+  Zen2 AVX2 trellis that per-expert cost can't drop; 0xSero's win is THROUGHPUT overlap, which needs
+  an async lane design. An overlap-capable EXL3 CPU lane (or PCIe fetch + CPU compute pipelined per
+  layer) is the concrete upstream ask: at 50% overlap of ~87 fetch-experts' cost, decode 29 -> ~45.
