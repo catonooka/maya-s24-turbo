@@ -4,6 +4,28 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.8 - 2026-10-14
+
+Contributors' fixes and additions: speculative sampling on Turing cards, AMD's tuning table for the installed library,
+prompt-reading progress on the stream, and tool calls with templates that open thinking only when asked.
+
+- **Speculative sampling on Turing cards** (#161 by @sociolog). With `STRATA_GLM_SPEC_SAMPLE=1`, its draft kernel
+  needed more registers than a Turing card (RTX 20, T4) has for a block of 1024 threads, and the launch failed wherever
+  the MTP block sat on such a card. The kernel is now bounded to fit; other cards run it as before.
+- **AMD: the tuning table for the installed hipBLASLt** (#162 by @Tsury, #158). The setup passes every prompt tuning
+  table made for the card's architecture, and the engine takes the one made for the installed hipBLASLt version.
+  Before, it passed only the newest, and a PC with another library version fell back to plain hipBLAS. A Strix Halo
+  (gfx1151) table for hipBLASLt 100401 is added: on @Tsury's Linux PC with that library, a tool-calling session's
+  prompts took 29 s instead of 52 s.
+- **Prompt progress on the stream** (#163 by @eliaskg). A streamed chat request with `"return_progress": true` gets
+  `prompt_progress` chunks (`total`, `cache`, `processed`, `time_ms`) while a long prompt is read, so a client can draw
+  a progress bar. Nothing changes unless a request asks; non-streamed requests and the Anthropic API are as before.
+- **Tool calls with templates that open thinking only when asked** (#148 by @beverm2391). With Max thinking, a model
+  whose chat template opens `<think>` only when `enable_thinking` is true returned its tool calls inside the reasoning
+  text. The template now gets the thinking default the reply parser assumes. Maya's GLM template renders as before.
+- **Docs:** the CPU image encoder with the AMD engine on Linux, set up by hand (#159 by @Tsury); what to install when
+  the CUDA profiler or NVTX headers are missing (#160 by @Tsury).
+
 ## v1.1.7 - 2026-10-13
 
 Faster prompts with the INT8 cache, Windows fixes for speed in the background and for the RAM tier, and a guard

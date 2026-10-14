@@ -107,7 +107,8 @@ builds everything once (20-40 minutes plus the download) and **starts the model*
   **Monitor** of the model and your hardware, and a context size you can change in Settings.
 - **Your apps and coding agents:** an OpenAI-compatible API at `http://127.0.0.1:8080/v1`, and Anthropic's at
   `http://127.0.0.1:8080/v1/messages` (Claude Code: `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`). Tool calls are
-  streamed as the model writes them. A web page served from another address can call it too once you allow its
+  streamed as the model writes them, and a long prompt's reading progress too when a request asks for it
+  (`"return_progress": true`). A web page served from another address can call it too once you allow its
   address (`"cors_origins"`, [docs/SETUP.md](docs/SETUP.md#web-pages-on-another-address)).
 - **Thinking:** Off, Low, High (the default) or Max, in Settings or per request.
 - **Pictures:** attach one in the chat, or send image parts through either API.
