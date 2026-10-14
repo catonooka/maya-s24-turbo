@@ -3070,6 +3070,49 @@ bool Glm5Model::dual_prefill_ready() {
             cudaSetDevice(dev_);
             return false;
         }
+    }
+    // the copies must ARRIVE: a driver can report peer access that a platform does not carry - two Tesla V100s behind
+    // a Xeon E5 v4's host bridge (PHB) took the peer copies and delivered 99.6% of the bytes wrong, and the prompt's
+    // experts with them (a router fed non-finite values).  A 4 MB pattern each way, compared on the host.
+    {
+        const size_t nb = (size_t) 4 << 20;
+        std::vector<uint8_t> pat(nb), got(nb);
+        for (size_t i = 0; i < nb; ++i) pat[i] = (uint8_t) ((i * 2654435761u) >> 13);
+        void *da = nullptr, *db = nullptr;
+        bool ok = true;
+        cudaSetDevice(dev_);
+        ok = ok && cudaMalloc(&da, nb) == cudaSuccess;
+        cudaSetDevice(B->dev_);
+        ok = ok && cudaMalloc(&db, nb) == cudaSuccess;
+        for (int dir = 0; dir < 2 && ok; ++dir) {
+            void* src = dir == 0 ? da : db;
+            void* dst = dir == 0 ? db : da;
+            const int sd = dir == 0 ? dev_ : B->dev_, td = dir == 0 ? B->dev_ : dev_;
+            cudaSetDevice(sd);
+            ok = cudaMemcpy(src, pat.data(), nb, cudaMemcpyHostToDevice) == cudaSuccess &&
+                 cudaMemcpyPeer(dst, td, src, sd, nb) == cudaSuccess;
+            cudaSetDevice(td);
+            ok = ok && cudaMemcpy(got.data(), dst, nb, cudaMemcpyDeviceToHost) == cudaSuccess &&
+                 std::memcmp(got.data(), pat.data(), nb) == 0;
+        }
+        cudaGetLastError();
+        if (da != nullptr) {
+            cudaSetDevice(dev_);
+            cudaFree(da);
+        }
+        if (db != nullptr) {
+            cudaSetDevice(B->dev_);
+            cudaFree(db);
+        }
+        if (!ok) {
+            std::fprintf(stderr, "glm prefill: CUDA%d and CUDA%d report peer access but a peer copy came out wrong on "
+                                 "this machine - the dual-link prompt stays off\n", dev_, B->dev_);
+            cudaSetDevice(dev_);
+            return false;
+        }
+    }
+    for (Glm5Model* m : {this, B}) {
+        cudaSetDevice(m->dev_);
         // m's events: its own idle mark, and the ready marks of the copies the OTHER part makes for it (other's device)
         if (cudaEventCreateWithFlags(&m->pf_->ev_hidle, cudaEventDisableTiming) != cudaSuccess) {
             cudaSetDevice(dev_);
