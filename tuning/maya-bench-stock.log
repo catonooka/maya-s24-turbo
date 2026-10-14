@@ -1,0 +1,20 @@
+Project Maya v1.1.5 - GLM-5.3-Flash on your own GPU(s).
+
+=== Step 1: benchmark: maya-maya-s24.json (loading the model first - a minute or a few) ===
+  [ok] loaded in 68 s
+  decode    48.2 tokens/s   Write a Python function that parses a CSV file into a list o
+  decode    49.1 tokens/s   Explain how photosynthesis works, step by step, for a high-s
+  decode    50.3 tokens/s   Write a complete HTML page with a canvas that draws a bounci
+  prefill    591 tokens/s   a 2048-token prompt
+  prefill   1009 tokens/s   a 8192-token prompt
+
+  Project Maya v1.1.5 benchmark, 2026-10-13 18:29
+  GPUs: NVIDIA GeForce RTX 3090 24 GB, NVIDIA GeForce RTX 3090 24 GB; RAM 247 GB; CPU AMD Ryzen Threadripper PRO 3955WX 16-Cores
+  setup: maya-maya-s24.json, context 262144, GPUs [0, 1]
+  decode (writing the answer): mean 49.2 tokens/s over 3 answers of 256 tokens (greedy, thinking off)
+      48.2 tokens/s  Write a Python function that parses a CSV file into a list of dictionaries, with type hints and a docstring.
+      49.1 tokens/s  Explain how photosynthesis works, step by step, for a high-school student.
+      50.3 tokens/s  Write a complete HTML page with a canvas that draws a bouncing ball animation in JavaScript.
+  prefill (reading the prompt): 591 tokens/s, 2048 tokens
+  prefill (reading the prompt): 1009 tokens/s, 8192 tokens
+  [ok] written: /home/aisever/project-maya/maya-bench.txt - attach it (with ./maya.sh --report) to a speed report

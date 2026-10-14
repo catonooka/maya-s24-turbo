@@ -1,0 +1,1 @@
+{"S1 SPEC": {"ok": true, "attempts": 1}, "S2 CORE": {"ok": true, "attempts": 1}, "S3 BATTERY": {"ok": true, "attempts": 1}, "S4 MONITOR": {"ok": true, "attempts": 1}, "S5 CLI": {"ok": true, "attempts": 2}, "S6 ANALYZE": {"ok": true, "attempts": 1}}

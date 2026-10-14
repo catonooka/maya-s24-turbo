@@ -1,0 +1,129 @@
+[03:11:00] driver start: 0 stages done, history 0 msgs
+[03:11:00] === S1 SPEC ===
+[03:12:03]     model turn: 3021 tok out, 273 in, 64s wall, 47.5 t/s
+[03:12:03]     wrote benchkit/SPEC.md (2331 bytes)
+[03:12:03] === S1 SPEC PASSED (attempt 1) ===
+[03:12:03] === S2 CORE ===
+[03:13:32]     model turn: 4371 tok out, 3268 in, 88s wall, 49.5 t/s
+[03:13:32]     wrote benchkit/bench.py (15641 bytes)
+[03:13:32] === S2 CORE PASSED (attempt 1) ===
+[03:13:32] === S3 BATTERY ===
+[03:15:38]     model turn: 6182 tok out, 7317 in, 127s wall, 48.8 t/s
+[03:15:38]     wrote benchkit/functest.py (23115 bytes)
+[03:15:38] === S3 BATTERY PASSED (attempt 1) ===
+[03:15:38] === S4 MONITOR ===
+[03:16:55]     model turn: 3526 tok out, 13252 in, 76s wall, 46.1 t/s
+[03:16:55]     wrote benchkit/monitor.py (12787 bytes)
+[03:16:55] === S4 MONITOR PASSED (attempt 1) ===
+[03:16:55] === S5 CLI ===
+[03:18:42]     model turn: 5321 tok out, 16413 in, 107s wall, 49.6 t/s
+[03:18:42]     S5 CLI attempt 1 failed validation; feeding back
+[03:20:48]     model turn: 5984 tok out, 21454 in, 125s wall, 47.8 t/s
+[03:20:48]     wrote benchkit/report.py (12925 bytes)
+[03:20:48]     wrote benchkit/cli.py (5163 bytes)
+[03:20:48]     wrote benchkit/__init__.py (1688 bytes)
+[03:20:48]     wrote benchkit/__main__.py (1348 bytes)
+[03:20:48] === S5 CLI PASSED (attempt 2) ===
+[03:20:48] === S6 ANALYZE ===
+[03:21:30]     model turn: 1666 tok out, 27253 in, 43s wall, 39.1 t/s
+[03:21:30]     wrote benchkit/REPORT.md (1202 bytes)
+[03:21:30] === S6 ANALYZE PASSED (attempt 1) ===
+[03:21:30] ALL STAGES COMPLETE
+[03:21:30] FULL RUN exit 1
+
+[03:21:30] driver exit
+[03:34:19] driver start: 6 stages done, history 70 msgs
+[03:34:19] === S6 ANALYZE ===
+[03:36:53]     model turn: 2942 tok out, 126542 in, 155s wall, 19.0 t/s
+[03:36:53]     wrote benchkit/REPORT.md (6984 bytes)
+[03:36:53] === S6 ANALYZE PASSED (attempt 1) ===
+[03:36:53] ALL STAGES COMPLETE
+[03:38:30] FULL RUN exit 0
+kens)  clean ascii
+{
+  "meta": {
+    "base_url": "http://127.0.0.1:8080",
+    "model": "glm-5.3-flash",
+    "checks": [
+      "plain_chat",
+      "forced_tool",
+      "zero_arg_tool",
+      "multiturn_tool",
+      "sse_stream",
+      "greedy_determinism",
+      "long_ctx_needle",
+      "ascii_sanity"
+    ]
+  },
+  "results": [
+    {
+      "name": "plain_chat",
+      "passed": true,
+      "detail": "reply='Paris'",
+      "latency_ms": 941.4,
+      "completion_tokens": 4,
+      "usage_missing": false
+    },
+    {
+      "name": "forced_tool",
+      "passed": true,
+      "detail": "tool=get_weather args={'city': 'Kyoto'}",
+      "latency_ms": 1845.3,
+      "completion_tokens": 9,
+      "usage_missing": false
+    },
+    {
+      "name": "zero_arg_tool",
+      "passed": true,
+      "detail": "tool=ping_server args={}",
+      "latency_ms": 1534.1,
+      "completion_tokens": 2,
+      "usage_missing": false
+    },
+    {
+      "name": "multiturn_tool",
+      "passed": true,
+      "detail": "final='The weather in Oslo is currently **4\u00b0C** with light snow. \u2744\ufe0f'",
+      "latency_ms": 3945.0,
+      "completion_tokens": 34,
+      "usage_missing": false
+    },
+    {
+      "name": "sse_stream",
+      "passed": true,
+      "detail": "len=20 digits_ok=True usage=yes",
+      "latency_ms": 1212.6,
+      "completion_tokens": 22,
+      "usage_missing": false
+    },
+    {
+      "name": "greedy_determinism",
+      "passed": true,
+      "detail": "identical",
+      "latency_ms": 1114.8,
+      "completion_tokens": 9,
+      "usage_missing": false
+    },
+    {
+      "name": "long_ctx_needle",
+      "passed": true,
+      "detail": "reply='MAGNOLIA-7F'",
+      "latency_ms": 35978.8,
+      "completion_tokens": 10,
+      "usage_missing": false
+    },
+    {
+      "name": "ascii_sanity",
+      "passed": true,
+      "detail": "clean ascii",
+      "latency_ms": 1007.6,
+      "completion_tokens": 21,
+      "usage_missing": false
+    }
+  ],
+  "passed": 8,
+  "total": 8,
+  "all_passed": true
+}
+
+[03:38:30] driver exit

@@ -1,0 +1,85 @@
+{
+  "meta": {
+    "base_url": "http://127.0.0.1:8080",
+    "model": "glm-5.3-flash",
+    "checks": [
+      "plain_chat",
+      "forced_tool",
+      "zero_arg_tool",
+      "multiturn_tool",
+      "sse_stream",
+      "greedy_determinism",
+      "long_ctx_needle",
+      "ascii_sanity"
+    ]
+  },
+  "results": [
+    {
+      "name": "plain_chat",
+      "passed": true,
+      "detail": "reply='Paris'",
+      "latency_ms": 884.0,
+      "completion_tokens": 4,
+      "usage_missing": false
+    },
+    {
+      "name": "forced_tool",
+      "passed": true,
+      "detail": "tool=get_weather args={'city': 'Kyoto'}",
+      "latency_ms": 1835.7,
+      "completion_tokens": 9,
+      "usage_missing": false
+    },
+    {
+      "name": "zero_arg_tool",
+      "passed": true,
+      "detail": "tool=ping_server args={}",
+      "latency_ms": 1548.3,
+      "completion_tokens": 2,
+      "usage_missing": false
+    },
+    {
+      "name": "multiturn_tool",
+      "passed": true,
+      "detail": "final='The weather in Oslo is currently **4\u00b0C** with light snow. \u2744\ufe0f'",
+      "latency_ms": 3817.4,
+      "completion_tokens": 28,
+      "usage_missing": false
+    },
+    {
+      "name": "sse_stream",
+      "passed": true,
+      "detail": "len=20 digits_ok=True usage=yes",
+      "latency_ms": 1134.8,
+      "completion_tokens": 22,
+      "usage_missing": false
+    },
+    {
+      "name": "greedy_determinism",
+      "passed": true,
+      "detail": "identical",
+      "latency_ms": 1095.8,
+      "completion_tokens": 9,
+      "usage_missing": false
+    },
+    {
+      "name": "long_ctx_needle",
+      "passed": true,
+      "detail": "reply='MAGNOLIA-7F'",
+      "latency_ms": 35717.9,
+      "completion_tokens": 10,
+      "usage_missing": false
+    },
+    {
+      "name": "ascii_sanity",
+      "passed": true,
+      "detail": "clean ascii",
+      "latency_ms": 964.4,
+      "completion_tokens": 21,
+      "usage_missing": false
+    }
+  ],
+  "passed": 8,
+  "total": 8,
+  "all_passed": true
+}

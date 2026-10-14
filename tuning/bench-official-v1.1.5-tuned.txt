@@ -1,0 +1,42 @@
+Project Maya v1.1.5 benchmark, 2026-10-13 19:09
+GPUs: NVIDIA GeForce RTX 3090 24 GB, NVIDIA GeForce RTX 3090 24 GB; RAM 247 GB; CPU AMD Ryzen Threadripper PRO 3955WX 16-Cores
+setup: maya-maya-s24.json, context 262144, GPUs [0, 1]
+decode (writing the answer): mean 51.1 tokens/s over 3 answers of 256 tokens (greedy, thinking off)
+    50.4 tokens/s  Write a Python function that parses a CSV file into a list of dictionaries, with type hints and a docstring.
+    50.4 tokens/s  Explain how photosynthesis works, step by step, for a high-school student.
+    52.6 tokens/s  Write a complete HTML page with a canvas that draws a bouncing ball animation in JavaScript.
+prefill (reading the prompt): 595 tokens/s, 2048 tokens
+prefill (reading the prompt): 1010 tokens/s, 8192 tokens
+
+engine lines:
+glm split auto: CUDA0 (NVIDIA GeForce RTX 3090) memory 936 GB/s, 23.13 GB free
+glm split auto: CUDA1 (NVIDIA GeForce RTX 3090) memory 936 GB/s, 23.22 GB free
+glm split auto: the host reads RAM at 63 GB/s (a part's CPU lane: 32); the routes from the default coverage curve (no usage counts); the pipelined decode: a token costs the slower part
+glm split auto: layers [0, 25) on CUDA0, [25, 45) on CUDA1 - a token 12.7 ms predicted (CUDA0 12.7 ms, 119 slots a layer | CUDA1 11.4 ms, 125 slots a layer), 80% of the routed experts in VRAM
+glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
+glm fast: CUDA0 VRAM before the expert pool: 3.88 of 23.56 GB in use - dense weights 2.77, state/KV (262144 ctx) 0.41, activations 0.06, other (context, MTP, scratch, prompt path) 0.64
+glm fast: the expert profile ~/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: CUDA0 layers [0,25) expert pool 18.99 GB, 109-152 slots/layer (2863 total)
+glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
+glm fast: CUDA1 VRAM before the expert pool: 3.62 of 23.56 GB in use - dense weights 2.47, state/KV (262144 ctx) 0.40, activations 0.07, other (context, MTP, scratch, prompt path) 0.69
+glm fast: CUDA1 layers [25,45) expert pool 19.25 GB, 106-153 slots/layer, the draft layer 136 (2863 total)
+glm fast: CUDA0 RAM tier 28.42 GB pinned, 4297 slots
+glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
+glm fast: CUDA0 tiers warm: 6336 experts (45.0 GB) in 13 s (3.43 GB/s)
+glm fast: CUDA0 RAM-resident verified: all 6336 experts are in VRAM or pinned RAM
+glm fast: CUDA1 RAM tier 26.82 GB pinned, 3989 slots
+glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
+glm fast: CUDA1 tiers warm: 6048 experts (43.6 GB) in 13 s (3.48 GB/s)
+glm fast: CUDA1 RAM-resident verified: all 6048 experts are in VRAM or pinned RAM
+glm fast: CUDA0 CPU lane: 8 threads, an expert 0.310 ms on the CPU vs 0.290 ms over PCIe -> of 0..8 RAM-tier experts the CPU takes 0 1 1 2 3 4 4 5 6
+glm fast: CUDA1 CPU lane: 8 threads, an expert 0.298 ms on the CPU vs 0.287 ms over PCIe -> of 0..8 RAM-tier experts the CPU takes 0 1 1 2 3 4 4 5 6
+glm split: layers [0, 25) on CUDA0, [25, 45) on CUDA1 (one 64 KB host hop per boundary per token)
+glm stat: decode 20.41 ms/tok (49.00 tok/s) | vram hit 75.80% | ram fetches 27.32/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 6.35/tok | cpu lane 58.68/tok in 20.05 ms/tok | prompt 43.9 ms/tok | vram 5605/5726 ram 6773/8286
+glm stat: decode 19.85 ms/tok (50.39 tok/s) | vram hit 75.24% | ram fetches 27.34/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 8.52/tok | cpu lane 61.26/tok in 18.77 ms/tok | prompt 35.1 ms/tok | vram 5603/5726 ram 6772/8286
+glm stat: decode 19.86 ms/tok (50.35 tok/s) | vram hit 80.82% | ram fetches 21.67/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 9.65/tok | cpu lane 50.50/tok in 16.43 ms/tok | prompt 33.8 ms/tok | vram 5600/5726 ram 6776/8286
+glm stat: decode 19.02 ms/tok (52.59 tok/s) | vram hit 76.96% | ram fetches 24.87/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 10.87/tok | cpu lane 55.82/tok in 18.22 ms/tok | prompt 34.5 ms/tok | vram 5607/5726 ram 6764/8286
+glm stat (prompt only): prompt 1.8 ms/tok | vram 5314/5726 ram 7016/8286
+glm slots: setting the conversation aside failed (cannot write ~/Maya-data/models/Maya-S24/pack/slots/slot-1791918563699-1.bin.tmp)
+glm stat (prompt only): prompt 1.7 ms/tok | vram 5324/5726 ram 7010/8286
+glm slots: setting the conversation aside failed (cannot write ~/Maya-data/models/Maya-S24/pack/slots/slot-1791918567144-2.bin.tmp)
+glm stat (prompt only): prompt 1.0 ms/tok | vram 5081/5726 ram 7258/8286

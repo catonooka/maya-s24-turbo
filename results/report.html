@@ -1,0 +1,61 @@
+<!DOCTYPE html><html><head><meta charset='utf-8'>
+<title>benchkit report</title>
+<style>
+body { font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial,
+       sans-serif; margin: 2rem; color: #1a1a1a; background: #fafafa; }
+h1 { font-size: 1.4rem; border-bottom: 2px solid #2b6cb0; padding-bottom: .3rem; }
+h2 { font-size: 1.1rem; margin-top: 1.8rem; color: #2b6cb0; }
+h3 { font-size: .95rem; margin-top: 1.2rem; }
+table { border-collapse: collapse; margin-top: .6rem; background: #fff;
+        box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+th, td { border: 1px solid #d4d4d4; padding: .35rem .7rem; text-align: left;
+         font-size: .85rem; }
+th { background: #edf2f7; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.pass { color: #1a7f37; font-weight: 600; }
+.fail { color: #b42318; font-weight: 600; }
+.alert { color: #b42318; }
+.muted { color: #666; font-size: .8rem; }
+.meta { font-size: .85rem; color: #444; margin-top: .2rem; }
+.badge { display: inline-block; padding: .15rem .5rem; border-radius: 4px;
+         font-size: .75rem; font-weight: 600; }
+.badge.ok { background: #d7f0dd; color: #1a7f37; }
+.badge.bad { background: #fbe4e2; color: #b42318; }
+</style></head><body>
+<h1>benchkit report</h1>
+<p>Verdict: <span class='badge ok'>HEALTHY</span></p>
+<h2>Bench</h2>
+<div class='meta'>model=glm-5.3-flash  base=http://127.0.0.1:8080  probes=prose,facts,code  conc=1,2,4</div>
+<h3>Single-stream probes <span class='muted'>(run-2 is the reported number)</span></h3>
+<table><tr><th>probe</th><th>run</th><th>latency_ms</th><th>completion_tokens</th><th>tok/s</th><th>status</th></tr>
+<tr><td>prose</td><td class="num">1</td><td class="num">3619.9</td><td class="num">157</td><td class="num">43.37</td><td class='pass'>ok</td></tr>
+<tr><td>prose</td><td class="num">2</td><td class="num">2675.4</td><td class="num">152</td><td class="num">56.81</td><td class='pass'>ok</td></tr>
+<tr><td>facts</td><td class="num">1</td><td class="num">2210.7</td><td class="num">81</td><td class="num">36.64</td><td class='pass'>ok</td></tr>
+<tr><td>facts</td><td class="num">2</td><td class="num">1351.9</td><td class="num">89</td><td class="num">65.84</td><td class='pass'>ok</td></tr>
+<tr><td>code</td><td class="num">1</td><td class="num">5931.4</td><td class="num">231</td><td class="num">38.95</td><td class='pass'>ok</td></tr>
+<tr><td>code</td><td class="num">2</td><td class="num">5884.0</td><td class="num">316</td><td class="num">53.70</td><td class='pass'>ok</td></tr>
+</table>
+<h3>Concurrency ladder</h3>
+<table><tr><th>C</th><th>latency_ms</th><th>tok/s</th><th>status</th></tr>
+<tr><td class='num'>1</td><td class="num">3959.8</td><td class="num">37.63</td><td class='pass'>ok</td></tr>
+<tr><td class='num'>2</td><td class="num">5621.4</td><td class="num">27.04</td><td class='pass'>ok</td></tr>
+<tr><td class='num'>2</td><td class="num">2192.0</td><td class="num">36.95</td><td class='pass'>ok</td></tr>
+<tr><td class='num'>4</td><td class="num">12753.5</td><td class="num">12.15</td><td class='pass'>ok</td></tr>
+<tr><td class='num'>4</td><td class="num">14995.4</td><td class="num">5.33</td><td class='pass'>ok</td></tr>
+<tr><td class='num'>4</td><td class="num">9010.3</td><td class="num">27.64</td><td class='pass'>ok</td></tr>
+<tr><td class='num'>4</td><td class="num">2837.2</td><td class="num">56.39</td><td class='pass'>ok</td></tr>
+</table>
+<p class='meta'>Summary: single_p50=2675.4 ms  mean_tok_s=58.78  usage_missing=0  errors=0</p>
+<h2>Functest</h2>
+<p><span class="badge ok">8/8 passed</span> <span class='meta'>model=glm-5.3-flash</span></p>
+<table><tr><th>check</th><th>result</th><th>latency_ms</th><th>completion_tokens</th><th>detail</th></tr>
+<tr><td>plain_chat</td><td class='pass'>PASS</td><td class="num">884.0</td><td class="num">4</td><td class='muted'>reply=&#x27;Paris&#x27;</td></tr>
+<tr><td>forced_tool</td><td class='pass'>PASS</td><td class="num">1835.7</td><td class="num">9</td><td class='muted'>tool=get_weather args={&#x27;city&#x27;: &#x27;Kyoto&#x27;}</td></tr>
+<tr><td>zero_arg_tool</td><td class='pass'>PASS</td><td class="num">1548.3</td><td class="num">2</td><td class='muted'>tool=ping_server args={}</td></tr>
+<tr><td>multiturn_tool</td><td class='pass'>PASS</td><td class="num">3817.4</td><td class="num">28</td><td class='muted'>final=&#x27;The weather in Oslo is currently **4°C** with light snow. ❄️&#x27;</td></tr>
+<tr><td>sse_stream</td><td class='pass'>PASS</td><td class="num">1134.8</td><td class="num">22</td><td class='muted'>len=20 digits_ok=True usage=yes</td></tr>
+<tr><td>greedy_determinism</td><td class='pass'>PASS</td><td class="num">1095.8</td><td class="num">9</td><td class='muted'>identical</td></tr>
+<tr><td>long_ctx_needle</td><td class='pass'>PASS</td><td class="num">35717.9</td><td class="num">10</td><td class='muted'>reply=&#x27;MAGNOLIA-7F&#x27;</td></tr>
+<tr><td>ascii_sanity</td><td class='pass'>PASS</td><td class="num">964.4</td><td class="num">21</td><td class='muted'>clean ascii</td></tr>
+</table>
+</body></html>
