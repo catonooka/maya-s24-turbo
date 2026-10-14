@@ -3332,7 +3332,7 @@ constexpr int GU_WARPS = 16;  // ... 2 gate + 2 up rows per warp (8 per warp mea
 // into sh_out while the routed experts' blocks run - in moe_down it was a serial tail (~25 us of 72)
 #if defined(STRATA_USE_HIP)
 template<int TG, int NW = GU_WARPS, bool LUT = false, bool GLOBAL = false, bool SPLIT = false,
-         bool DIRECT = false, bool WIDE = false, int MINWAVES = 0>
+         bool DIRECT = false, bool WIDE = false, int MINWAVES = 0, bool MULTI = false>
 __attribute__((amdgpu_waves_per_eu(MINWAVES > 0 ? MINWAVES : 1)))
 __global__ void __launch_bounds__(NW * 32)
 #else
@@ -3348,14 +3348,29 @@ moe_gate_up_kernel(MoeDev d, int k, int n_embd, int n_ff, float limit,
     if (d.skip != nullptr && *d.skip) return;
 #if !defined(STRATA_USE_HIP)
     constexpr int NW = GU_WARPS;
+    const int ei = blockIdx.y, chunk = blockIdx.x, n_chunks = (int) gridDim.x;
+#else
+    int ei = blockIdx.y, chunk = blockIdx.x, n_chunks = (int) gridDim.x;
+    if constexpr (MULTI) {
+        // moe_experts_multi: x = (expert, token) with the token fastest, y = the chunk - every token's blocks for a chunk
+        // run together; token t's plan, input, h and shared expert at d's mt_ strides
+        const int t = (int) blockIdx.x % d.mt_T;
+        ei = (int) blockIdx.x / d.mt_T;
+        chunk = blockIdx.y;
+        n_chunks = (int) gridDim.y;
+        d.plan_ptr += 8 * t;
+        xq += (size_t) t * d.mt_xq_s;
+        hq += (size_t) t * d.mt_hq_s;
+        if (sh_hq != nullptr) sh_hq += (size_t) t * d.mt_sh_hq_s;
+        if (sh_out != nullptr) sh_out += (size_t) t * d.mt_out_s;
+    }
 #endif
-    const int ei = blockIdx.y, chunk = blockIdx.x;
     const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
 #if defined(STRATA_USE_HIP)
     if constexpr (!SPLIT)
 #endif
     if (ei == k) {
-        const int per = (n_embd + (int) gridDim.x - 1) / (int) gridDim.x;
+        const int per = (n_embd + n_chunks - 1) / n_chunks;
         const int r1 = min(n_embd, (chunk + 1) * per);
         for (int r = chunk * per + warp; r < r1; r += NW) {
             const float v = any_row_dot(sh_type, sh_down, r, sh_hq, nullptr, n_ff_sh, lane);
@@ -3413,7 +3428,8 @@ moe_gate_up_kernel(MoeDev d, int k, int n_embd, int n_ff, float limit,
 constexpr int DOWN_ROWS = 4;
 
 #if defined(STRATA_USE_HIP)
-template<int TD, int NR = DOWN_ROWS, bool LUT = false, bool GLOBAL = false, bool DIRECT = false, bool WIDE = false>
+template<int TD, int NR = DOWN_ROWS, bool LUT = false, bool GLOBAL = false, bool DIRECT = false, bool WIDE = false,
+         bool MULTI = false>
 #else
 template<int TD>
 #endif
@@ -3423,6 +3439,22 @@ __global__ void __launch_bounds__(256) moe_down_kernel(MoeDev d, int k, int n_em
     if (d.skip != nullptr && *d.skip) return;
 #if !defined(STRATA_USE_HIP)
     constexpr int NR = DOWN_ROWS;
+    const int rb0 = blockIdx.x;
+#else
+    int rb0 = blockIdx.x;
+    if constexpr (MULTI) {
+        // moe_experts_multi: x = (row block, token) with the token fastest; token t's plan, h, shared expert output,
+        // output and CPU part at d's mt_ strides
+        const int t = (int) blockIdx.x % d.mt_T;
+        rb0 = (int) blockIdx.x / d.mt_T;
+        d.plan_ptr += 8 * t;
+        d.plan_w += 8 * t;
+        hq += (size_t) t * d.mt_hq_s;
+        if (sh_out != nullptr) sh_out += (size_t) t * d.mt_out_s;
+        out += (size_t) t * d.mt_out_s;
+        d.cpu_flag += t;
+        d.cpu_part += (size_t) t * d.mt_cpu_s;
+    }
 #endif
     // NR output rows per block; warp w computes those rows for expert w (one activation load per call
     // for all of them), the combine runs in plan order like the reference's axpy chain
@@ -3442,7 +3474,7 @@ __global__ void __launch_bounds__(256) moe_down_kernel(MoeDev d, int k, int n_em
     }
     __syncthreads();
     const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
-    const int r0 = blockIdx.x * NR;
+    const int r0 = rb0 * NR;
     const size_t drb = rbytes<TD>(n_ff);
     {
         float s[NR];
@@ -4845,6 +4877,69 @@ void moe_down(int d_type, const MoeDev& d_in, int k, int n_embd, int n_ff, size_
         default: std::fprintf(stderr, "glm_fast moe_down: type %d unsupported\n", d_type); return;
     }
     launch_check("moe_down");
+}
+
+bool moe_experts_multi(int gu_type, int d_type, const MoeDev& d_in, int k, int n_embd, int n_ff, float limit,
+                       size_t down_off, const void* xq, void* hq, const void* sh_down, int sh_type, const void* sh_hq,
+                       int n_ff_sh, float* sh_out, float* out, cudaStream_t s) {
+#if defined(STRATA_USE_HIP)
+    MoeDev d = d_in;
+    d.skip = g_skip;
+    const int T = d.mt_T;
+    if (T < 1 || k > 8 || n_ff % GU_ROWS != 0 || n_embd % DOWN_ROWS != 0) return false;
+    const bool sh = sh_down != nullptr && sh_out != nullptr;
+    const int kk = sh ? k : k + 1;   // (as moe_gate_up: no shared expert, no block has ei == kk)
+    const auto* X = (const block_q8_1*) xq;
+    auto* H = (block_q8_1*) hq;
+    const auto* SD = (const uint8_t*) sh_down;
+    const auto* SH = (const block_q8_1*) sh_hq;
+    // gate/up: moe_gate_up's kernel for the type, the (expert, token) blocks of a chunk side by side
+    const dim3 ggu((unsigned) ((k + (sh ? 1 : 0)) * T), (unsigned) (n_ff / GU_ROWS));
+    if (gu_type == 16 && n_embd == 4096 && n_ff == 2048 && rdna3_expert_device()) {
+        moe_gate_up_kernel<16, 16, true, false, false, true, false, 0, true><<<ggu, 16 * 32, 0, s>>>(
+            d, kk, n_embd, n_ff, limit, X, H, SD, sh_type, SH, n_ff_sh, sh_out);
+    } else {
+        switch (gu_type) {
+#define GLMF_GUM(TT) \
+            case TT: moe_gate_up_kernel<TT, GU_WARPS, false, false, false, false, false, 0, true><<<ggu, GU_WARPS * 32, 0, s>>>( \
+                d, kk, n_embd, n_ff, limit, X, H, SD, sh_type, SH, n_ff_sh, sh_out); break;
+            GLMF_GUM(16) GLMF_GUM(18) GLMF_GUM(19) GLMF_GUM(23) GLMF_GUM(10) GLMF_GUM(11) GLMF_GUM(17) GLMF_GUM(22)
+            GLMF_GUM(21) GLMF_GUM(29) GLMF_GUM(12) GLMF_GUM(13) GLMF_GUM(14)
+#undef GLMF_GUM
+            default: return false;
+        }
+    }
+    // down: moe_down's kernel for the type, the (row block, token) blocks side by side
+    const auto* HC = (const block_q8_1*) hq;
+    if ((d_type == 22 || d_type == 18) && n_embd == 4096 && n_ff == 2048 && rdna3_expert_device(d_type == 22)) {
+        if (d_type == 22)
+            moe_down_kernel<22, 2, true, true, true, false, true><<<(unsigned) (n_embd / 2 * T), 256, 0, s>>>(
+                d, k, n_embd, n_ff, down_off, HC, sh_out, out);
+        else
+            moe_down_kernel<18, 2, true, false, true, false, true><<<(unsigned) (n_embd / 2 * T), 256, 0, s>>>(
+                d, k, n_embd, n_ff, down_off, HC, sh_out, out);
+    } else {
+        const unsigned blocks = (unsigned) (n_embd / DOWN_ROWS * T);
+        switch (d_type) {
+#define GLMF_DNM(TT) \
+            case TT: moe_down_kernel<TT, DOWN_ROWS, false, false, false, false, true><<<blocks, 256, 0, s>>>( \
+                d, k, n_embd, n_ff, down_off, HC, sh_out, out); break;
+            GLMF_DNM(16) GLMF_DNM(18) GLMF_DNM(19) GLMF_DNM(23) GLMF_DNM(10) GLMF_DNM(11) GLMF_DNM(17) GLMF_DNM(22)
+            GLMF_DNM(21) GLMF_DNM(29) GLMF_DNM(12) GLMF_DNM(13) GLMF_DNM(14)
+#undef GLMF_DNM
+            // (the gate/up launch already went: an unknown down type cannot happen with a known gate/up type -
+            // moe_gate_up_kernel's and moe_down_kernel's lists are the same)
+            default: return false;
+        }
+    }
+    launch_check("moe_experts_multi");
+    return true;
+#else
+    (void) gu_type, (void) d_type, (void) d_in, (void) k, (void) n_embd, (void) n_ff, (void) limit, (void) down_off;
+    (void) xq, (void) hq, (void) sh_down, (void) sh_type, (void) sh_hq, (void) n_ff_sh, (void) sh_out, (void) out;
+    (void) s;
+    return false;
+#endif
 }
 
 // ---------------------------------------------------------------- a verify window's experts, each once

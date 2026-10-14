@@ -540,7 +540,17 @@ bool Glm5Model::fast_moe_window(int il, int t0, int T, int part, int gid, std::s
     // 22.7 / 22.3 batched (and 17.2 / 16.5 batched and staggered, below), the same tokens
     static const bool batch_env = glmfast::off_by_default_on_amd("STRATA_GLM_WIN_BATCH");
     static const bool prof_b = getenv("STRATA_GLM_WIN_PROF") != nullptr;
-    if (batch_env && !W.per_token && W.mplan_ptr != nullptr && (T > 1 || part != 0)) {
+    // ... and with it off (AMD): the routes as the batched MoE takes them (each token its own plan), then every token's
+    // experts on the token path's kernels in one gate/up and one down launch (gf::moe_experts_multi) - each token's
+    // arithmetic its own, the blocks of all the tokens for a chunk of rows side by side, so an expert two of them route
+    // is read from DRAM once (a Radeon 8065S's window layer: ~19 distinct experts of ~24 routed).
+    // STRATA_GLM_WIN_MULTI=0: one token after another (A/B)
+    static const bool multi_env = [] {
+        const char* v = getenv("STRATA_GLM_WIN_MULTI");
+        return v == nullptr || std::atoi(v) != 0;
+    }();
+    const bool multi = !batch_env && multi_env && !Ly.exl3 && part == 0 && T > 1;
+    if ((batch_env || multi) && !W.per_token && W.mplan_ptr != nullptr && (T > 1 || part != 0)) {
         const auto tok_dev = [&](int t) {
             gf::MoeDev mt = md;
             mt.plan_ptr = W.mplan_ptr + 8 * t;
@@ -581,6 +591,41 @@ bool Glm5Model::fast_moe_window(int il, int t0, int T, int part, int gid, std::s
         if (prof_b) W.mark("moe_routes", s);
         }
         if (part == 1) return true;
+        if (multi) {
+            // (the shared expert's down rides the gate/up launch, from each token's h the route wrote - moe_gate_up's)
+            constexpr size_t q8 = 36;   // (a q8_1 block's bytes, as win_alloc's)
+            gf::MoeDev mm = tok_dev(t0);
+            mm.mt_T = T;
+            mm.mt_xq_s = (unsigned int) (W.xq_s / q8);
+            mm.mt_hq_s = (unsigned int) (8 * (g.n_ff_exp / 32));
+            mm.mt_sh_hq_s = (unsigned int) (W.sh_hq_s / q8);
+            mm.mt_out_s = (unsigned int) E;
+            mm.mt_cpu_s = (unsigned int) E;
+            const size_t hq_t = 8 * ((size_t) g.n_ff_exp / 32) * q8;
+            const bool sh = Ly.sh_down.q != nullptr;
+            if (!gf::moe_experts_multi(Ly.gu_type, Ly.d_type, mm, g.n_exp_used, E, g.n_ff_exp, g.swiglu_exp,
+                                       Ly.down_off, (const uint8_t*) W.xq + (size_t) t0 * W.xq_s,
+                                       (uint8_t*) W.whq + (size_t) t0 * hq_t, Ly.sh_down.q, Ly.sh_down.type,
+                                       sh ? (const uint8_t*) W.sh_hq + (size_t) t0 * W.sh_hq_s : nullptr, FFs,
+                                       sh ? W.sh_out + (size_t) t0 * E : nullptr, W.ffn + (size_t) t0 * E, s)) {
+                // (not here: each token's on its own launches, the same kernels)
+                for (int t = t0; t < t0 + T; ++t) {
+                    const gf::MoeDev mt = tok_dev(t);
+                    uint8_t* hq = (uint8_t*) W.whq + (size_t) t * hq_t;
+                    float* so = sh ? W.sh_out + (size_t) t * E : nullptr;
+                    gf::moe_gate_up(Ly.gu_type, mt, g.n_exp_used, E, g.n_ff_exp, g.swiglu_exp,
+                                    (const uint8_t*) W.xq + (size_t) t * W.xq_s, hq, Ly.sh_down.q, Ly.sh_down.type,
+                                    sh ? (const uint8_t*) W.sh_hq + (size_t) t * W.sh_hq_s : nullptr, FFs, so, s);
+                    gf::moe_down(Ly.d_type, mt, g.n_exp_used, E, g.n_ff_exp, Ly.down_off, hq, so,
+                                 W.ffn + (size_t) t * E, s);
+                }
+            }
+            if (prof_b) W.mark("moe_experts", s);
+            if (lane)
+                for (int t = t0; t < t0 + T; ++t) gf::moe_cpu_wait(tok_dev(t), E, W.ffn + (size_t) t * E, s);
+            if (prof_b) W.mark("moe_cpu_wait", s);
+            return true;
+        }
         const float* sh_out = nullptr;
         if (Ly.sh_down.q != nullptr) {
             gf::MvJob jd{Ly.sh_down.q, (const uint8_t*) W.sh_hq + (size_t) t0 * W.sh_hq_s, nullptr, W.sh_out + (size_t) t0 * E,
