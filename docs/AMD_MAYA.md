@@ -2,7 +2,8 @@
 
 This branch adds a Linux HIP build and installer path for Maya's GLM-5.3-Flash
 engine on `gfx1100`, `gfx1201` and `gfx1151` (Strix Halo, Gorgon Halo). It uses one GPU, or two discrete cards that split the
-layers (see [Two GPUs](#two-gpus)), and serves text. Images are not enabled by this installer.
+layers (see [Two GPUs](#two-gpus)), and serves text. Images are not enabled by this installer;
+Linux users can opt into the existing [CPU image encoder](#cpu-image-encoder-on-linux).
 Windows: see [Windows](#windows).
 
 Use a system ROCm 7 installation with its HIP compiler and hipBLAS, Python
@@ -40,6 +41,69 @@ cache at 60 GiB. Change those settings with `--env KEY=VALUE` during setup.
 Available RAM, rather than installed RAM, determines how much can be cached.
 The engine reduces its RAM-tier allocation if ROCm cannot pin the requested
 amount.
+
+## CPU image encoder on Linux
+
+HIP setup skips the image encoder, but the server can use the existing CPU-only
+`strata-vision` helper alongside the HIP text engine. This is an explicit manual
+setup; it does not enable an AMD GPU vision backend or change the installer's
+text-only default. Stop Maya before building or changing the config.
+
+After HIP setup has fetched its pinned `third_party/llama.cpp` checkout, run
+these commands from the Maya project root. If you used `--llama-dir`, use that
+same directory for both the patch and `LLAMA_DIR` below. Use a separate build
+directory to keep any existing CUDA image encoder intact.
+
+```sh
+.venv/bin/python tools/vision/glm5next_patch.py third_party/llama.cpp
+cmake -S tools/vision -B build-vision-cpu -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLAMA_DIR="$PWD/third_party/llama.cpp" -DSTRATA_VISION_CUDA=OFF
+cmake --build build-vision-cpu --target strata-vision -j 2
+```
+
+The idempotent patch above adds GLM-5.3-Flash support to the pinned llama.cpp
+image library. It is the same patch used by Maya's CUDA vision installer.
+Download the matching vision files into your model-data directory (about
+1.14 GB). This example uses the artifact revision tested with Maya v1.1.5:
+
+```sh
+mkdir -p data/vision
+vision_url=https://huggingface.co/peasantsmith/GLM-5.3-Flash-Maya-GGUF/resolve/f16ee4ba50d8fd2bb726ea1862ca6ca14ba188da/vision
+curl -fL --retry 5 -C - -o data/vision/mmproj-GLM-5.3-Flash-F16.gguf \
+  "$vision_url/mmproj-GLM-5.3-Flash-F16.gguf"
+curl -fL --retry 5 -C - -o data/vision/GLM-5.3-Flash-vocab.gguf \
+  "$vision_url/GLM-5.3-Flash-vocab.gguf"
+printf '%s\n' \
+  '3627575df16bd152db0f3fd7e488d270b33f3a9e6c7fa3b1b8ac381faafde882  data/vision/mmproj-GLM-5.3-Flash-F16.gguf' \
+  '8f53cb1bd2e631c14ef413e3284735d9e53f3c508d07a6f609e705b487105912  data/vision/GLM-5.3-Flash-vocab.gguf' \
+  | sha256sum -c -
+```
+
+Add this `vision` member to the HIP config, replacing `/absolute/path/to/maya`
+with your project path. If your model-data directory differs, use its paths:
+
+```json
+"vision": {
+  "exe": "/absolute/path/to/maya/build-vision-cpu/bin/strata-vision",
+  "mmproj": "/absolute/path/to/maya/data/vision/mmproj-GLM-5.3-Flash-F16.gguf",
+  "model": "/absolute/path/to/maya/data/vision/GLM-5.3-Flash-vocab.gguf",
+  "gpu": false
+}
+```
+
+Start with `./maya.sh --config /path/to/your-hip-config.json --port 8099`.
+Check that `/health` reports `images: true`, then send an actual image through
+`/v1/chat/completions`. Keep the manually edited config if running setup again;
+the HIP installer still writes a text-only config.
+
+Verified on Linux, Ryzen AI Max+ 395 / Radeon 8060S (`gfx1151`), 128 GB unified
+RAM, ROCm 7.14.1, stock Maya v1.1.5 (`5403c222`), Maya-S24, and pinned llama.cpp
+`3cf03257`: a real image request correctly identified a green circle on a white
+background. Two checks took 3.38 and 3.12 seconds, including generation.
+These are small functional checks, not broad vision-quality or performance
+claims. CPU image encoding uses system RAM and adds CPU work; other AMD devices,
+Windows, large-image limits, and multiple-image workloads were not tested here.
 
 ## Two GPUs
 
