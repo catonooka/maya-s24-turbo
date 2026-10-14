@@ -107,3 +107,16 @@ Watch: --parallel N (concurrent serving), KV-streaming at >262k, STRATA_GLM_Q3/q
   Zen2 AVX2 trellis that per-expert cost can't drop; 0xSero's win is THROUGHPUT overlap, which needs
   an async lane design. An overlap-capable EXL3 CPU lane (or PCIe fetch + CPU compute pipelined per
   layer) is the concrete upstream ask: at 50% overlap of ~87 fetch-experts' cost, decode 29 -> ~45.
+
+## DFlash2 drafter sweep + prefetch overlap on EXL3 — 2026-10-14, both measured NEGATIVE
+- DFlash2 drafters available (Anbeeld GGUF: Q2_K..Q8_0+bf16). Q2_K: engine rejects (selector tables
+  unreadable). bf16: known crash (#173). Tested Q6_K (most precise supported): boots, 98.5% window
+  acceptance, but 11.5 t/s — the window DOUBLES distinct-expert fetches per round (87→173/tok) and on
+  serial PCIe that is pure loss. Q4_K_M was 9.4 via calibration. Verdict: no DFlash2 variant pays on
+  a PCIe-bound 2-GPU EXL3 rig.
+- Engine DOES have an overlap lane: STRATA_GLM_PREFETCH_N (router-predicted next-layer prefetch).
+  pf1@fetch/rank2: 28.7 (vram hit 75→76.7, fetches 87→81 — helps residency, not bandwidth).
+  pf2@route/rank4: 28.2 (copies contend with fetches on the link). Net: noise-band neutral.
+- CONCLUSION: all three async/overlap surfaces (CPU lane, DFlash2 window dedup, prefetch) exist and
+  engage, but none creates PCIe bandwidth. 29 t/s is the measured architectural ceiling for
+  EXL3-3.05bpw on 2x3090; 45 t/s requires a 3rd card, AVX-512 host, or upstream pipelined fetch.
