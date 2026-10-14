@@ -4155,7 +4155,33 @@ bool mv(const MvJob* jobs, int n, cudaStream_t s) {
     // (one-column batches only: a verify window's several-column jobs go to the tiled kernels below)
     bool one_col = true;
     for (int i = 0; i < n; ++i) one_col = one_col && jobs[i].ncol == 1;
-    if (typed && one_col) mv_rdna(jobs, n, 1, done, s);
+    if (typed && one_col) {
+        mv_rdna(jobs, n, 1, done, s);
+    } else if (typed && mv_rdna_device()) {
+        // a verify window's several-column jobs whose columns sit one after another (mv_nt's layout): the RDNA3 kernel
+        // takes them as NT activations, each column bit for bit its one-column result - the token path's on the APUs
+        // (the MTP decode's window on the Strix / Gorgon Halo).  The rest go to the tiled kernels below.
+        MvJob sub[kMaxMvJobs];
+        int idx[kMaxMvJobs], m = 0, nc = 0;
+        for (int i = 0; i < n; ++i) {
+            const MvJob& J = jobs[i];
+            const bool packed = J.ncol >= 2 && J.ncol <= kMaxMvNt && (J.type == kTypeBF16 || J.type == 14) &&
+                                (J.xq == nullptr || J.xq_cstride == (int64_t) (J.n_in / 32) * (int64_t) sizeof(block_q8_1)) &&
+                                (J.xf == nullptr || J.xf_cstride == J.n_in) && J.y_cstride == J.n_out;
+            if (!done[i] && packed && (nc == 0 || J.ncol == nc)) {
+                nc = J.ncol;
+                sub[m] = J;
+                sub[m].ncol = 1;
+                idx[m++] = i;
+            }
+        }
+        if (m > 0) {
+            bool sub_done[kMaxMvJobs] = {};
+            mv_rdna(sub, m, nc, sub_done, s);
+            for (int k = 0; k < m; ++k)
+                if (sub_done[k]) done[idx[k]] = true;
+        }
+    }
 #endif
     // several columns: the tiled kernels (STRATA_GLM_MV_TILED=0: the column loops)
     static const bool tiled = [] {
