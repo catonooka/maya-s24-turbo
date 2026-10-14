@@ -4,6 +4,28 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.11 - 2026-10-15
+
+What fills each GPU, in the Monitor, and the expert pool's size as a setting in the config.
+
+- **The Monitor shows what fills each GPU** (#191 by @needmorevram). The GPUs table becomes a card with a bar for each
+  GPU: the model's weights, the KV cache, the activations, a drafter and its verify window, the expert pool, CUDA and
+  the rest, other programs and the free memory, with that GPU's load, power, temperature and PCIe link under its bar.
+  Pointing at a part picks it out in every bar; a click opens a GPU's row with a sentence for each part, and the advice
+  names the GPU (other programs holding memory that a restart would give to the expert pool, say). On two Tesla V100s
+  the parts add up to what the NVIDIA driver reports for each card; on AMD, where the driver does not list the memory a
+  process holds, the card shows the engine's own measurement at its start.
+- **The expert pool's size in the config** (#192 by @needmorevram). `--expert-cache auto`, the default the setup now
+  writes, sizes the pool from the free VRAM less a reserve as before, and then checks that budget once it is written:
+  under Windows the free figure read before an allocation can run about a gigabyte high, and a card filled past it
+  pages GPU memory to system RAM, where decode runs several times slower. Short of the reserve, the pool gives back the
+  difference. `--expert-cache N` caps the first GPU's pool at N experts; `--vram-reserve-mib N` (and
+  `--vram-reserve-later-mib N` for a split's later GPUs) sets the reserve. At start the log says how much VRAM each GPU
+  has free with everything loaded, and warns when it is low. The check is left out on the Ryzen AI Max APUs and where
+  the free VRAM is far beyond what the pool can take.
+
+NVIDIA GPUs give v1.1.10's tokens, and the Ryzen AI Max APUs keep v1.1.10's speed.
+
 ## v1.1.10 - 2026-10-14
 
 The Strix Halo and Gorgon Halo release: faster answers and faster prompts on the Ryzen AI Max APUs, a faster cold start
