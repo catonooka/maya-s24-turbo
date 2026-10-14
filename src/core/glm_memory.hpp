@@ -17,6 +17,15 @@ inline bool on_by_default_on_amd(const char* env) {
     return false;
 #endif
 }
+// ... and the other way round: on by default on NVIDIA, off on AMD unless the setting is 1
+inline bool off_by_default_on_amd(const char* env) {
+    if (const char* v = std::getenv(env)) return std::atoi(v) != 0;
+#if defined(STRATA_USE_HIP)
+    return false;
+#else
+    return true;
+#endif
+}
 
 // All inputs are bytes. On an APU the GPU pool and pinned host allocations spend
 // the same physical memory; the runtime's GTT/carve-out size is not free RAM.

@@ -534,11 +534,11 @@ bool Glm5Model::fast_moe_window(int il, int t0, int T, int part, int gid, std::s
     }
     // the batched MoE: every token's route, tiers and fetch first (each into its own plan, CPU answer slot and seq
     // word; the scratch slots once each), then each distinct expert once for all of them (gf::moe_win_experts), then
-    // the CPU lane's answers - which ran while the GPU computed.  STRATA_GLM_WIN_BATCH=0: token by token (A/B)
-    static const bool batch_env = [] {
-        const char* v = getenv("STRATA_GLM_WIN_BATCH");
-        return v == nullptr || std::atoi(v) != 0;
-    }();
+    // the CPU lane's answers - which ran while the GPU computed.  STRATA_GLM_WIN_BATCH=0: token by token (A/B).  Off by
+    // default on AMD: the batched experts' kernels are the generic ones, the token path's are RDNA3's (the Halo APUs'
+    // expert kernels) - a Radeon 8065S's MTP decode (Maya-S, 256-token answers) ran 26.7 / 25.7 tok/s token by token,
+    // 22.7 / 22.3 batched (and 17.2 / 16.5 batched and staggered, below), the same tokens
+    static const bool batch_env = glmfast::off_by_default_on_amd("STRATA_GLM_WIN_BATCH");
     static const bool prof_b = getenv("STRATA_GLM_WIN_PROF") != nullptr;
     if (batch_env && !W.per_token && W.mplan_ptr != nullptr && (T > 1 || part != 0)) {
         const auto tok_dev = [&](int t) {
@@ -853,10 +853,7 @@ bool Glm5Model::fast_window_layers(int64_t p0, int T, std::string& err) {
         const char* v = getenv("STRATA_GLM_WIN_STAGGER");
         return v == nullptr || std::atoi(v) != 0;
     }();
-    static const bool batch_env = [] {
-        const char* v = getenv("STRATA_GLM_WIN_BATCH");
-        return v == nullptr || std::atoi(v) != 0;
-    }();
+    static const bool batch_env = glmfast::off_by_default_on_amd("STRATA_GLM_WIN_BATCH");   // (fast_moe_window's)
     const bool stagger = stagger_env && batch_env && T >= 2 && !W.per_token && W.mplan_ptr != nullptr;
     if (stagger) {
         const int ka = (T + 1) / 2, kb = T - ka;
