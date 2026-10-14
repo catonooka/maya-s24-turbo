@@ -1840,14 +1840,12 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vi
                             "STRATA_GLM_PREFILL_MB": "6144" if total_ram >= 96 else "4096"})
         elif min(g.get("vram_gb", 0) for g in gpus) >= 20:
             hip_env.update({"STRATA_GLM_PREFILL_SUB": "1024", "STRATA_GLM_PREFILL_MB": "4096"})
-        # The prompt projections' hipBLASLt solutions measured per architecture (tools/hip), one table per card's
-        # architecture (':'-separated: each card takes its own). The engine refuses a table made for another
-        # hipBLASLt version and keeps plain hipBLAS.
+        # Pass every available version per architecture: the engine's existing header guard selects the
+        # table matching each card and its installed hipBLASLt, or keeps plain hipBLAS when none matches.
         tables = []
         for arch in dict.fromkeys(g.get("arch", "") for g in gpus):
             found = sorted((ROOT / "tools" / "hip").glob(f"{arch}-glm-hipblaslt-*.txt"))
-            if found:
-                tables.append(str(found[-1]))
+            tables.extend(str(path) for path in found)
         if tables:
             hip_env["STRATA_HIPBLASLT_TUNING"] = ":".join(tables)
         env = {**hip_env, **env}

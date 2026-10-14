@@ -98,6 +98,7 @@ class HipSetupTests(unittest.TestCase):
         tables.mkdir(parents=True)
         (tables / "gfx1100-glm-hipblaslt-100202.txt").write_text("STRATA_HIPBLASLT_TUNING_V1 gfx1100 100202\n")
         (tables / "gfx1201-glm-hipblaslt-100202.txt").write_text("STRATA_HIPBLASLT_TUNING_V1 gfx1201 100202\n")
+        (tables / "gfx1100-glm-hipblaslt-100401.txt").write_text("STRATA_HIPBLASLT_TUNING_V1 gfx1100 100401\n")
         pc = maya.check_pc(self.a)
         self.a.env = ["STRATA_GLM_PREFILL_SUB=512"]
         p = maya.write_config(self.a, pc, {"lib_dirs": [str(self.rocm / "lib")]},
@@ -108,7 +109,14 @@ class HipSetupTests(unittest.TestCase):
         self.assertEqual(env["STRATA_GLM_PREFILL_MB"], "4096")
         self.assertEqual(env["STRATA_GLM_RESERVE_MB"], "3072")
         self.assertEqual(env["STRATA_GLM_RAM_HEADROOM_GB"], "16")
-        self.assertEqual(env["STRATA_HIPBLASLT_TUNING"], str(tables / "gfx1100-glm-hipblaslt-100202.txt"))
+        self.assertEqual(env["STRATA_HIPBLASLT_TUNING"].split(":"),
+                         [str(tables / "gfx1100-glm-hipblaslt-100202.txt"),
+                          str(tables / "gfx1100-glm-hipblaslt-100401.txt")])
+        # Keep the runtime's exact-version choice; an explicit operator table still wins.
+        self.a.env.append("STRATA_HIPBLASLT_TUNING=/selected/table.txt")
+        p = maya.write_config(self.a, pc, {"lib_dirs": [str(self.rocm / "lib")]},
+                              self.root / "pack", "test", 8192, self.root / "data", None)
+        self.assertEqual(json.loads(p.read_text())["env"]["STRATA_HIPBLASLT_TUNING"], "/selected/table.txt")
 
     def test_gpus_with_an_apu_is_rejected(self):
         self.gpus.append({"index": 3, "arch": "gfx1151", "vendor": "amd", "name": "Radeon 8060S", "vram_gb": 4})
