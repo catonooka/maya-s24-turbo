@@ -24,6 +24,7 @@
 #define cudaDeviceEnablePeerAccess hipDeviceEnablePeerAccess
 #define cudaErrorPeerAccessAlreadyEnabled hipErrorPeerAccessAlreadyEnabled
 #define cudaMemcpyPeerAsync hipMemcpyPeerAsync
+#define cudaMemcpyPeer hipMemcpyPeer
 #define cudaOccupancyMaxActiveBlocksPerMultiprocessor hipOccupancyMaxActiveBlocksPerMultiprocessor
 #define cudaDeviceProp hipDeviceProp_t
 #define cudaDeviceSynchronize hipDeviceSynchronize
