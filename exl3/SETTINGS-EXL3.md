@@ -1,6 +1,18 @@
 # Maya GLM-5.3-Flash — current settings & findings (2026-10-14: EXL3-3.05bpw A/B added)
 
-## ACTIVE SERVE: EXL3-3.05bpw (quality tier) — first 2×3090 EXL3 deployment on record
+## EXL3 push to 45 — attempted 2026-10-14, measured verdict: NOT reachable lossless on this rig
+- DFlash2 on EXL3: engine's own speed calibration = 9.4 vs 25.9 t/s MTP → auto-rejected (config
+  stripped it). The batched window's expert-dedup doesn't rescue a 2-GPU PCIe-bound rig: drafter
+  head + window costs land on the same serial PCIe path. (Upstream's DFlash2+EXL3 wins are 9-GPU rigs
+  with CPU lanes / huge VRAM pools.)
+- PROMOTE_FILL=64: neutral (29.1). VRAM_EVICT=lru: WORSE (26.5). ctx 131k→64k: neutral (kv-streaming
+  keeps freed VRAM negligible). Spec acceptance is healthy (84-96%) — the wall is physics:
+  ~87 RAM fetches/tok x ~9.9MB/expert ≈ ~860MB/token over two PCIe4 x16 links ≈ 18-20ms + verify.
+  45 t/s lossless needs PCIe traffic halved → no config lever exists; needs CPU lane (AVX-512 host),
+  3rd/4th GPU, or a smaller pack (S24 IS that: 59 t/s at KL 0.19 class).
+- SETTLED EXL3 config: ctx 131072, env RAM_RESIDENT+KV_INT8 only, MTP drafting, 29.0-29.2 t/s.
+
+
 - Engine: main @ 4c9f1b1 (v1.1.9, tensor-core EXL3 decode). Launcher run-maya-exl3-tuned.sh, unit maya :8080.
 - Config maya-exl3-3.05bpw.json: ctx 131072, kv-streaming on, host 0.0.0.0.
 - env: **ONLY** RAM_RESIDENT=1 + KV_INT8=1 (both neutral). 131k ctx, vision on.
