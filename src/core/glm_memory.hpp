@@ -2,8 +2,21 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 
 namespace strata::core::glmfast {
+
+// The complete pool and the all-resident launch skip (STRATA_GLM_COMPLETE_POOL, STRATA_GLM_RESIDENT_SKIP): on by
+// default on AMD, where the Strix / Gorgon Halo APUs hold every expert (measured there); an NVIDIA build keeps the
+// capped pool and every route's launches unless the setting is 1.  The setting, when given, wins either way.
+inline bool on_by_default_on_amd(const char* env) {
+    if (const char* v = std::getenv(env)) return std::atoi(v) != 0;
+#if defined(STRATA_USE_HIP)
+    return true;
+#else
+    return false;
+#endif
+}
 
 // All inputs are bytes. On an APU the GPU pool and pinned host allocations spend
 // the same physical memory; the runtime's GTT/carve-out size is not free RAM.
@@ -22,8 +35,24 @@ inline bool full_unified_pool(bool unified, int slots, int experts) {
     return unified && slots >= experts;
 }
 
+// A COMPLETE pool: a layer's main slots (the lendable tail aside) hold every expert AND the spares - the Windows APU's
+// carve-out, a big card, a split over many GPUs.  Nothing is ever evicted there (a spare always finds a free slot), the
+// prompt path borrows only the tail beyond them, and the decode never misses.
+inline bool complete_pool(int main_slots, int experts, int spares) {
+    return main_slots >= experts + spares;
+}
+
+// The slots a layer gets where the budget (avail bytes; stride_sum: one slot in every MoE layer) holds a complete pool
+// plus the lendable tail - every expert, the spares and `tail` slots - else 0 (the pool is sized from the budget)
+inline int complete_pool_slots(size_t avail, size_t stride_sum, int experts, int spares, int tail) {
+    const size_t per = (size_t) std::max(0, experts + spares + std::max(0, tail));
+    return stride_sum > 0 && experts > 0 && avail / stride_sum >= per ? (int) per : 0;
+}
+
+// The slots the warm-up fills: every expert where a unified pool holds them all, else all but the spares - and never
+// more than there are experts (a complete pool has more slots than experts: the warm-up's order lists each once)
 inline int warm_pool_slots(bool unified, int slots, int experts, int spares) {
-    return full_unified_pool(unified, slots, experts) ? experts : std::max(0, slots - spares);
+    return full_unified_pool(unified, slots, experts) ? experts : std::min(experts, std::max(0, slots - spares));
 }
 
 }  // namespace strata::core::glmfast
