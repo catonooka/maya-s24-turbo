@@ -748,6 +748,7 @@ bool Glm5Model::decode_mtp(strata::kernels::SamplerParams& sp, int64_t max_new, 
             ok = false;
         }
     }
+    win_prof_report();   // (STRATA_GLM_WIN_PROF: the verify windows' phases)
     if (n_ph > 0)
         std::fprintf(stderr, "glm mtp: a drafting round's host time - drafts %.2f ms, verify %.2f ms, commit + cache "
                              "%.2f ms (%lld rounds)\n", ph[0] / n_ph, ph[1] / n_ph, ph[2] / n_ph, (long long) n_ph);
