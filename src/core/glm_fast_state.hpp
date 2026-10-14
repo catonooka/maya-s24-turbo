@@ -278,6 +278,29 @@ struct Glm5Model::FastState {
     int* mtp_tok_h = nullptr;    // pinned
     void* spec_q = nullptr;      // speculative sampling (STRATA_GLM_SPEC_SAMPLE): the draft's kept list, a device SpecList
     cudaEvent_t ev_mtp = nullptr;
+    // the one-GPU MTP decode (src/core/glm_mtp.cu) - the draft head over the draft vocabulary (Glm5Model::mtp_vocab_scan;
+    // mtp_dv == 0: the whole head): the head's first mtp_dv rows in place, then mtp_dx rows gathered from the rest
+    // (mtp_dx_w) whose tokens are mtp_dx_ids (device: the argmax writes a token id either way)
+    int mtp_dv = 0, mtp_dx = 0;
+    void* mtp_dx_w = nullptr;
+    int* mtp_dx_ids = nullptr;
+    // ... the chained drafts (STRATA_GLM_MTP_CHAIN): token_embd on the device as stored (Q6_K / Q8_0), the token of a
+    // step after the first read there; null: every draft step takes its embedding from the host.  The host's own rows
+    // for a draft step go through mtp_emb_h, its copy out ordered by ev_mtp_emb
+    void* mtp_emb = nullptr;
+    int mtp_emb_type = -1;
+    float* mtp_emb_h = nullptr;   // pinned
+    cudaEvent_t ev_mtp_emb = nullptr;
+    bool mtp_emb_pending = false;
+    // ... and its NextN cache fill (Glm5Model::mtp_cache_rows): up to cap rows at once - the next tokens' embeddings
+    // (emb_h pinned), eh_proj's input and output, the attention norm and the cache rows' projections
+    struct MtpCacheRows {
+        int cap = 0;
+        void* arena = nullptr;
+        float *emb = nullptr, *hid = nullptr, *x = nullptr, *kv_raw = nullptr, *ik_raw = nullptr, *ig_raw = nullptr;
+        void *catq = nullptr, *xq = nullptr;
+        float* emb_h = nullptr;
+    } mtpc;
     // routing
     gf::MoeDev md;
     unsigned long long* tab = nullptr;

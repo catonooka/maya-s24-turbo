@@ -791,6 +791,7 @@ void Glm5Model::reset() {
         cudaStreamSynchronize(0);
     }
     pos_ = 0;
+    mtp_hx_pos_ = -1;   // (head_x holds no position of the new sequence)
     dflash_reset();   // a new sequence: the drafter's cached positions belong to the old one
     if (split_next_) {
         split_next_->reset();
@@ -3040,11 +3041,14 @@ bool strata::core::Glm5Model::load_pack(const std::string& pack_dir, int64_t max
         std::fprintf(stderr, "glm mtp: CUDA%d the draft block from %s%s\n", dev_, mtp_gguf,
                      own ? " (instead of the model's own)" : "");
     }
-    // (the pipelined speculative decode is a two-part one: a longer split leaves the block unloaded)
+    // (the pipelined speculative decode is a two-part one: a longer split leaves the block unloaded; one GPU loads it
+    // for the one-GPU MTP decode - glm_mtp.cu: by default on the Strix / Gorgon Halo APUs)
+    const bool mtp_one = l0_ == 0 && mtp_decode_wanted(dev_, n_parts_);
     if (fast_mode_ && l1_ == g_.n_layers && (g_.nextn > 0 || mtp_extra) && getenv("STRATA_GLM_NO_MTP") == nullptr &&
-        (l0_ > 0 || getenv("STRATA_GLM_MTP") != nullptr)) {   // any split: the speculative decode runs on 2+ parts
+        (l0_ > 0 || getenv("STRATA_GLM_MTP") != nullptr || mtp_one)) {   // any split: the speculative decode, 2+ parts
         if (!load_mtp(gfs, err)) return false;
         if (mtp_il_ >= 0) lt_ = l1_ + 1;
+        if (mtp_il_ >= 0 && mtp_one) mtp_vocab_scan(gfs);   // the draft head's vocabulary
     }
 
     // 5. the router bias, host-side: the prefetch ranks the next-best experts per layer, and the

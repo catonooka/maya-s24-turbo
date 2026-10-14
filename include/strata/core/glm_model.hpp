@@ -521,7 +521,15 @@ public:
     int lt_ = 0;                                           // the tier layers: [l0_, lt_) = the trunk's + the draft's
     void* mtp_arena_ = nullptr;
     bool load_mtp(const std::vector<std::unique_ptr<strata::GgufFile>>& gfs, std::string& err);
-    bool fast_mtp(int64_t p, int32_t next_tok, std::string& err);   // the draft block at position p -> mtp_tok
+    // the draft block at position p -> mtp_tok[step] (see glm_fast_path.cu: the chained drafts and the draft head)
+    bool fast_mtp(int64_t p, int32_t next_tok, std::string& err, int step = 0, bool sub = false, bool read_back = true);
+    void mtp_draft_setup();                                // fast_setup: the draft head's rows, the chain's embeddings
+    // the draft vocabulary (load_pack, from the GGUF's tokenizer - see glm_mtp.cu): ids [0, mtp_vlead_) and
+    // mtp_vextra_; mtp_vin_[id] != 0 for each (empty: the whole head)
+    int mtp_vlead_ = 0;
+    std::vector<int32_t> mtp_vextra_;
+    std::vector<uint8_t> mtp_vin_;
+    void mtp_vocab_scan(const std::vector<std::unique_ptr<strata::GgufFile>>& gfs);
 public:
     /// The NextN draft for the token after next: after forward() of position p, given the token chosen for p + 1,
     /// returns the block's greedy proposal for p + 2 (-1: no draft block).  Fills the block's caches at p.
@@ -584,6 +592,43 @@ public:
     bool hop_to_next(Glm5Model* B, int64_t p, std::string& err);
     bool spec_head(int64_t p, int32_t token, std::string& err);
     bool spec_tail(Glm5Model* head, int64_t p, std::string& err);
+    /// The one-GPU MTP decode (src/core/glm_mtp.cu): each round the NextN block drafts up to n tokens in a chain (its
+    /// own hidden state feeding the next step), one verify window (window()) checks [last token, drafts...], the
+    /// target's samples accept the drafts while they match (window_commit keeps them), and the NextN block's cache takes
+    /// the kept rows with the trunk's hidden states.  The same tokens the token-at-a-time loop gives for the same
+    /// samples.  On by default on the Strix / Gorgon Halo APUs (gfx115x, mtp_decode_default); STRATA_GLM_MTP_DECODE=1
+    /// elsewhere, =0 off.  mtp_ready(): this model was set up for it.
+    static bool mtp_decode_wanted(int dev, int n_parts);
+    bool mtp_ready() const;
+    bool decode_mtp(strata::kernels::SamplerParams& sp, int64_t max_new, const std::function<bool(int)>& emit,
+                    int64_t& produced, std::string& err);
+    uint64_t mtp_rounds_ = 0;                              // verify passes (spec_steps_ / spec_hits_: drafts, accepted)
+    uint64_t mtp_round_n_[9] = {};                         // ... by the draft length the round used
+    bool mtp_fill_prev(int32_t token, int64_t p, std::string& err);   // the token path: entry p - 1 from head_x and token
+private:
+    bool mtp_dec_ = false;                                 // the one-GPU MTP decode is set up on this part
+    int64_t mtp_hx_pos_ = -1;                              // the position whose trunk hidden state head_x holds
+    // the adaptive draft length: per length n, the rounds' wall time (EMA, ms) and how many; per draft position, how
+    // often it was reached (its earlier drafts all accepted) and accepted - decayed counts, the recent text's
+    // (STRATA_GLM_MTP_ACC_WINDOW)
+    double mtp_ms_[9] = {};
+    uint64_t mtp_seen_[9] = {};
+    double mtp_reach_[9] = {}, mtp_hit_[9] = {};
+    uint64_t mtp_round_no_ = 0;
+    int mtp_best_ = -1;                                    // the length in use, the probe gap and the next probe
+    uint64_t mtp_gap_ = 32, mtp_next_probe_ = 0;
+    bool mtp_probe_up_ = false;
+    int mtp_stint_n_ = 0, mtp_stint_left_ = 0;             // a length's run of rounds (exploring, probing)
+    int mtp_prev_n_ = -1, mtp_same_ = 0;                   // the last round's length and the rounds of it in a row
+    double mtp_out_ = 0.0;                                 // the share of emitted tokens outside the draft vocabulary
+                                                           // (an EMA over ~64): above 2%, drafts take the whole head
+    int mtp_choose(int n_cap);
+    bool mtp_cache_setup(std::string& err);                // fast_setup: the cache fill's row buffers (kWinMax rows)
+    void mtp_cache_free();
+    // the NextN block's cache-writing half for n entries from p0: entry p0 + i from h + i * n_embd (device, this part)
+    // and the token next[i] - eh_proj, the attention norm, kv_a and the indexer's key/gate, no query, no FFN
+    bool mtp_cache_rows(int64_t p0, int n, const float* h, const int32_t* next, std::string& err, bool sync = true);
+public:
     // ---- several conversations at once (src/core/glm_multi.cu, STRATA_GLM_SEQS=<n>): each part keeps n sequence
     // states (the state arena: residual, KDA states, DSA caches; the position, the snapshot) and binds one at a time -
     // every path that reads `state_` (the token path, the prompt path, snapshots, slots) then works on the bound one.
