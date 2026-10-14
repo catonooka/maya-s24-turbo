@@ -569,8 +569,11 @@ bool Glm5Model::fast_moe_window(int il, int t0, int T, int part, int gid, std::s
                           nullptr, nullptr, 0, nullptr, ah_bias, 0, keep, lane ? win_plan : 0ull, promote_min, 0, 0, t,
                           scr, t0 + T);
             ++F->expected;
-            gf::moe_wait(mt, E, s);
-            gf::moe_fetch(mt, g.n_exp_used, Ly.blob, s);
+            // (every expert in VRAM: the wait and the fetch are no-ops - fast_moe's all_resident, 2 launches a token)
+            if (!F->all_resident) {
+                gf::moe_wait(mt, E, s);
+                gf::moe_fetch(mt, g.n_exp_used, Ly.blob, s);
+            }
             if (W.uid != nullptr)
                 cudaMemcpyAsync(W.uid + ((size_t) (il - l0_) * kWinMax + t) * 8, mt.plan_id, 8 * sizeof(int),
                                 cudaMemcpyDeviceToDevice, s);
@@ -686,8 +689,10 @@ bool Glm5Model::fast_moe_window(int il, int t0, int T, int part, int gid, std::s
                       g.swiglu_shexp, FFs, F->sh_hq, s, nullptr, nullptr, 0, nullptr, ah_bias, 0, keep,
                       lane ? F->cpu_plan : 0ull, promote_min);
         ++F->expected;
-        gf::moe_wait(md, E, s);
-        gf::moe_fetch(md, g.n_exp_used, Ly.blob, s);
+        if (!F->all_resident) {
+            gf::moe_wait(md, E, s);
+            gf::moe_fetch(md, g.n_exp_used, Ly.blob, s);
+        }
         if (Ly.exl3) {
             // (fast_moe_experts' EXL3 order: the shared expert's down first, then the routed experts over the F32 input)
             if (Ly.sh_down.q != nullptr) {
