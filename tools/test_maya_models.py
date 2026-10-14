@@ -301,7 +301,8 @@ class DraftChoice(unittest.TestCase):
 class Exl3Download(unittest.TestCase):
     """turboderp's EXL3 quant: offered with NVIDIA GPUs only, every file of its branch downloaded and checked by size
     and hash, its config checked instead of a GGUF header, and its pack built by tools/exl3_pack.py."""
-    Q = "EXL3-3.05bpw"
+    Q, GB, SHARDS, REV = "EXL3-3.05bpw", 125.3, 15, "332ab457b709b7ba30dd9a448be5de03b80a7ac9"
+    FILES = 27
 
     def offered(self, backend):
         args = SimpleNamespace(gguf_dir=None, model=None, yes=True, backend=backend)
@@ -315,7 +316,7 @@ class Exl3Download(unittest.TestCase):
         for win in (False, True):   # Linux and Windows alike
             with patch.object(maya, "WIN", win):
                 quant, text = self.offered("cuda")
-            self.assertIn(f"{self.Q}: download 125.3 GB from Hugging Face   (experimental)", text)
+            self.assertIn(f"{self.Q}: download {self.GB} GB from Hugging Face   (experimental)", text)
             self.assertNotEqual(quant, self.Q)
 
     def test_not_offered_with_amd(self):
@@ -329,12 +330,11 @@ class Exl3Download(unittest.TestCase):
         self.assertEqual(maya.shard_names(m), list(m["files"]))
         self.assertEqual(set(m["files"]), set(m["sha256"]))
         self.assertIn("mtp.safetensors", m["files"])                       # the MTP draft block
-        self.assertEqual(len([n for n in m["files"] if n.startswith("model-")]), 15)
+        self.assertEqual(len([n for n in m["files"] if n.startswith("model-")]), self.SHARDS)
         self.assertAlmostEqual(sum(m["files"].values()) / 1e9, m["download_gb"], delta=0.05)
-        self.assertEqual(len(m["revision"]), 40)                            # the branch's commit, pinned
+        self.assertEqual(m["revision"], self.REV)                           # the branch's commit, pinned
         self.assertEqual(maya.hf_url(m["repo"], m["revision"], m["folder"], "config.json"),
-                         "https://huggingface.co/turboderp/GLM-5.3-Flash-exl3/resolve/"
-                         "332ab457b709b7ba30dd9a448be5de03b80a7ac9/config.json")
+                         f"https://huggingface.co/turboderp/GLM-5.3-Flash-exl3/resolve/{self.REV}/config.json")
         self.assertEqual(m["vision"]["repo"], "peasantsmith/GLM-5.3-Flash-Maya-GGUF")   # the same pictures files
 
     def test_a_file_is_whole_at_its_published_size(self):
@@ -360,9 +360,9 @@ class Exl3Download(unittest.TestCase):
             self.assertFalse(maya.offer_download(args, self.Q, Path(d) / self.Q, shards))
         text = "\n".join(lines)
         ask.assert_called_once()
-        self.assertIn("https://huggingface.co/turboderp/GLM-5.3-Flash-exl3 (branch 3.05bpw)", text)
-        self.assertIn("27 still to download", text)
-        self.assertIn("/resolve/332ab457b709b7ba30dd9a448be5de03b80a7ac9/mtp.safetensors", text)
+        self.assertIn(f"https://huggingface.co/turboderp/GLM-5.3-Flash-exl3 (branch {self.Q[5:]})", text)
+        self.assertIn(f"{self.FILES} still to download", text)
+        self.assertIn(f"/resolve/{self.REV}/mtp.safetensors", text)
 
     def test_model_step_checks_the_config_not_a_gguf_header(self):
         with tempfile.TemporaryDirectory() as d:
@@ -376,7 +376,7 @@ class Exl3Download(unittest.TestCase):
                     (models / self.Q / n).write_bytes(b"")
                 conf.write_text('{"model_type": "glm5_next", "quantization_config": {"quant_method": "exl3"}}')
                 d_, shards, quant = maya.model_step(args, models, ("download", self.Q))
-                self.assertEqual((d_, quant, len(shards)), (models / self.Q, self.Q, 27))
+                self.assertEqual((d_, quant, len(shards)), (models / self.Q, self.Q, self.FILES))
                 conf.write_text('{"model_type": "llama", "quantization_config": {"quant_method": "exl3"}}')
                 with self.assertRaises(SystemExit):
                     maya.model_step(args, models, ("download", self.Q))
@@ -401,6 +401,21 @@ class Exl3Download(unittest.TestCase):
                 self.assertEqual(maya.pack_step(args, d, [], Path("llama"), self.Q), d / "pack")
                 self.assertEqual(maya.pack_step(args, d, [], Path("llama"), self.Q), d / "pack")
             run.assert_called_once()                                        # the second time: already built
+
+
+class Exl3Download405(Exl3Download):
+    """The same quant at 4.05 bits per weight: offered, downloaded, checked and packed as the 3.05bpw one."""
+    Q, GB, SHARDS, REV = "EXL3-4.05bpw", 165.2, 19, "2a30229e67012798ba9f0cd832bb78abf4c363d5"
+    FILES = 30                                                              # (no kpool_aux.safetensors in this branch)
+
+    def test_a_305bpw_download_is_not_taken_for_it(self):
+        # the two branches share file names (config.json, tokenizer.json, ...); their shard counts differ
+        with tempfile.TemporaryDirectory() as d:
+            models = Path(d)
+            for n in maya.shard_names(maya.MODELS["EXL3-3.05bpw"]):     # 3.05bpw straight in the models folder
+                (models / n).write_bytes(b"")
+            self.assertEqual(maya.download_dir(models, "EXL3-3.05bpw"), models)
+            self.assertEqual(maya.download_dir(models, self.Q), models / self.Q)
 
 
 if __name__ == "__main__":
