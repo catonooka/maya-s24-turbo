@@ -1238,7 +1238,8 @@ static double host_read_bps() {
 //     the reserve fast_setup keeps (pool_avail); the pool gives every layer the same number of slots;
 //   - the experts those slots hold: each layer's most routed, their share of its routes read off the usage file's
 //     counts (STRATA_GLM_USAGE, opt-in; the pack's expert_counts.txt without it; Strata's coverage curve 1 - (1 - f)^3,
-//     STRATA_SPLIT_COVER_B, without either - that is what Strata has to assume, its profile carries only a ranking);
+//     an EXL3 pack's ^1.4, STRATA_SPLIT_COVER_B, without either - that is what Strata has to assume, its profile
+//     carries only a ranking);
 //   - a layer's time on its card: the bytes it reads (its dense weights and its VRAM experts' share of the routed
 //     ones) over the card's memory bandwidth - Strata scales a fitted per-layer time by SMs x clock; and each miss:
 //     the expert's bytes over the parts' share of the host's RAM read speed, measured here - the CPU lane computes
@@ -1447,7 +1448,13 @@ static std::vector<int> glm_search_bounds(const std::string& pack_dir, int64_t m
         cover[(size_t) l].assign(c.size() + 1, 0.0);
         for (size_t i = 0; i < c.size(); ++i) cover[(size_t) l][i + 1] = cover[(size_t) l][i] + c[i] / tot;
     }
-    const double cover_b = getenv("STRATA_SPLIT_COVER_B") ? std::atof(getenv("STRATA_SPLIT_COVER_B")) : 3.0;
+    // (an EXL3 pack: 1.4 - its experts are bigger, a card holds fewer of a layer's, and there the routes are flatter
+    // than the curve at 3: EXL3-4.05bpw over 9 GPUs held 80% of a 5060 Ti layer's experts and hit VRAM on 89-96% of
+    // its routes, the curve's 1.4, not 99%.  At 3 the DFlash split kept the 3090 to 7 layers with 8 GB of it idle,
+    // the misses on the CPU lane: 63.8 / 32.6 / 64.4 tok/s; at 1.4 9 layers, 79.8 / 40.4 / 81.9)
+    const double cover_b = getenv("STRATA_SPLIT_COVER_B") ? std::atof(getenv("STRATA_SPLIT_COVER_B"))
+                           : !xtab.layers.empty()         ? 1.4
+                                                          : 3.0;
     const auto held_share = [&](int l, int64_t s) -> double {
         s = std::clamp<int64_t>(s, 0, g.n_expert);
         const auto& cv = cover[(size_t) l];

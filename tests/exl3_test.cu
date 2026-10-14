@@ -372,6 +372,67 @@ void test_recon(int k, int n, int K, int cb) {
     }
 }
 
+// the prompt path's rotated product: W' alone in the row layout (exact), the inputs rotated (rows_rot_f16, gathered
+// by index), the GEMM on the host, the outputs rotated (rows_rot_out) - against the reference's x W
+void test_rot_rows(int k, int n, int K, int cb) {
+    HostMat h = make_mat(k, n, K, cb);
+    ex::Mat m;
+    m.trellis = dev_copy(h.tr);
+    m.suh = dev_copy(h.suh);
+    m.svh = dev_copy(h.svh);
+    m.k = k;
+    m.n = n;
+    m.K = K;
+    m.cb = cb;
+    std::vector<float> w((size_t) k * n);
+    cpu::exl3_inner(h.tr.data(), n / 16, k, n, K, cb, w.data());
+    uint16_t* d_w = nullptr;
+    CK(cudaMalloc(&d_w, (size_t) k * n * 2));
+    ex::reconstruct_inner_rows(m, d_w, 0);
+    CK(cudaDeviceSynchronize());
+    const std::vector<uint16_t> wt = host_copy(d_w, (size_t) k * n);   // [n][k]
+    size_t bad = 0;
+    for (int c = 0; c < n; ++c)
+        for (int r = 0; r < k; ++r) bad += f32_from_f16(wt[(size_t) c * k + r]) != w[(size_t) r * n + c];
+    const std::string sh = " k" + std::to_string(k) + " n" + std::to_string(n) + " K" + std::to_string(K) + " cb" +
+                           std::to_string(cb);
+    std::printf("  %-44s %zu of %zu differ  %s\n", ("inner rows" + sh).c_str(), bad, wt.size(), bad ? "FAIL" : "ok");
+    if (bad) ++g_fail;
+    // 3 rows gathered from 5 by index
+    const int rows = 3;
+    const std::vector<int> idx = {4, 0, 2};
+    std::vector<float> x = rand_x(5 * k, 2.0f);
+    float* d_x = dev_copy(x);
+    int* d_idx = dev_copy(idx);
+    uint16_t* d_xr = nullptr;
+    CK(cudaMalloc(&d_xr, (size_t) rows * k * 2));
+    ex::rows_rot_f16(d_x, k, d_idx, rows, k, m.suh, d_xr, 0);
+    CK(cudaDeviceSynchronize());
+    const std::vector<uint16_t> xr = host_copy(d_xr, (size_t) rows * k);
+    std::vector<float> y((size_t) rows * n), ref((size_t) rows * n);
+    for (int i = 0; i < rows; ++i) {
+        for (int c = 0; c < n; ++c) {
+            double s = 0.0;
+            for (int r = 0; r < k; ++r) s += (double) f32_from_f16(xr[(size_t) i * k + r]) * f32_from_f16(wt[(size_t) c * k + r]);
+            y[(size_t) i * n + c] = (float) s;
+        }
+        cpu::exl3_mv(w.data(), h.suh.data(), h.svh.data(), k, n, x.data() + (size_t) idx[(size_t) i] * k,
+                     ref.data() + (size_t) i * n);
+    }
+    float* d_y = dev_copy(y);
+    ex::rows_rot_out(d_y, n, rows, n, m.svh, 0);
+    CK(cudaDeviceSynchronize());
+    close(("rotated product" + sh).c_str(), host_copy(d_y, (size_t) rows * n), ref, 2e-3);
+    cudaFree((void*) m.trellis);
+    cudaFree((void*) m.suh);
+    cudaFree((void*) m.svh);
+    cudaFree(d_w);
+    cudaFree(d_x);
+    cudaFree(d_idx);
+    cudaFree(d_xr);
+    cudaFree(d_y);
+}
+
 // the prompt path's tensor-core GEMM over FP16 rows against the reference, beta = 0 and 1
 void test_gemm_rows(int k, int n, int K, int cb, int rows) {
     if (!ex::mma_supported()) {
@@ -767,6 +828,8 @@ int main() {
     test_moe(3, 1);
     for (int K : {2, 5}) test_recon(256, 384, K, 2);
     test_recon(256, 256, 3, 0);
+    for (int K = 1; K <= 8; ++K) test_rot_rows(256, 384, K, 2);
+    test_rot_rows(512, 256, 4, 1);
     for (int K : {2, 3, 5, 8}) test_gemm_rows(512, 384, K, 2, 45);
     test_gemm_rows(4096, 256, 3, 1, 100);
     test_gemm_rows(1024, 128, 4, 0, 7);
