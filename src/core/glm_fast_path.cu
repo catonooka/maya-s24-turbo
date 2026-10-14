@@ -973,8 +973,11 @@ bool Glm5Model::fast_setup(std::string& err) {
                 stride_max = std::max(stride_max, slot_stride(il));
             }
         const size_t floor_b = (size_t) (g.n_exp_used + gf::kSpares + 2) * stride_sum;
+        // ... and all it can ever take: every expert with the spares and a prompt's room, ~15% more (Maya-S on a Radeon
+        // 8065S lends a prompt 25 slots a layer beside its 291) - a budget beyond that is not checked
+        const size_t all_b = (size_t) (g.n_expert + gf::kSpares) * stride_sum / 20 * 23;
         // --expert-cache auto: the budget checked once written, before the prompt path sizes its chunk from it
-        pool_check(floor_b, stride_max);
+        pool_check(floor_b, stride_max, all_b);
         // the batched prompt path: its sizes (it borrows the pool's tail, see below)
         if (!prefill_setup(err)) return false;
         size_t free_b = 0, total_b = 0;
@@ -5344,17 +5347,27 @@ Glm5Model::PoolBudget Glm5Model::part_budget(size_t free_b, size_t total_b, size
 // (Windows also charges VRAM to the commit, RAM + page file) ends the budget at what it gave.  What was found short
 // stays in pool_short_, so the prompt path's chunk and the pool are sized from the same figure.  A fixed
 // --expert-cache N and a unified-memory APU (its budget is RAM's) are not checked.  STRATA_GLM_POOL_CHECK=0: off.
-void Glm5Model::pool_check(size_t floor_b, size_t slot_b) {
+// Nor is a budget beyond all the pool can ever take (all_b: every expert of this part's layers with the spares and a
+// prompt's room): such a pool cannot fill the card, and writing the whole budget - a Windows APU's carve-out, a Radeon
+// 8065S's ~157 GB for Maya-S's ~106 - three times over took a start from ~60 to ~120 s.
+void Glm5Model::pool_check(size_t floor_b, size_t slot_b, size_t all_b) {
     if (fast_ == nullptr || fast_->unified_memory) return;
     if (const char* v = getenv("STRATA_GLM_POOL_CHECK"); v != nullptr && std::atoi(v) == 0) return;
     constexpr size_t kPiece = (size_t) 1 << 30;
     cudaSetDevice(dev_);
+    // An APU's GPU memory (Windows sizes its carve-out like a card's) is not checked either: there the frees of a
+    // whole-budget write land late, and a Radeon 8065S's third write under --parallel 2 got none of its 154 GB - the
+    // budget went with it and the start failed
+    int integrated = 0;
+    if (cudaDeviceGetAttribute(&integrated, cudaDevAttrIntegrated, dev_) != cudaSuccess) cudaGetLastError();
+    if (integrated != 0) return;
     size_t free_b = 0, total_b = 0;
     cudaMemGetInfo(&free_b, &total_b);
     int zero_reads = 0;
     for (int attempt = 0; attempt < 6; ++attempt) {
         const PoolBudget b = part_budget(free_b, total_b, floor_b, slot_b);
         if (b.fixed > 0 || b.avail == 0) return;
+        if (attempt == 0 && all_b > 0 && b.avail >= all_b) return;
         std::vector<void*> got;
         size_t have = 0;
         while (have < b.avail) {
@@ -5369,6 +5382,13 @@ void Glm5Model::pool_check(size_t floor_b, size_t slot_b) {
             have += sz;
         }
         cudaDeviceSynchronize();
+        if (have == 0) {
+            // nothing to write at all: not a card that is short, but frees of a write before that have not landed -
+            // the budget stays as it is (giving it all back left a start no pool)
+            std::fprintf(stderr, "glm fast: CUDA%d the expert pool's check got no memory to write: the budget stays "
+                                 "%.2f GB\n", dev_, (double) b.avail / 1073741824.0);
+            return;
+        }
         size_t fr = 0, tot = 0;
         cudaMemGetInfo(&fr, &tot);
         for (void* p : got) cudaFree(p);
