@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 import unittest
 import urllib.request
 from pathlib import Path
@@ -257,6 +258,66 @@ class JsonMode(unittest.TestCase):
         code, b = HttpToolCalls.post(self, "/v1/chat/completions", {
             "model": "m", "response_format": {"type": "json_object"}, "messages": [{"role": "user", "content": "json"}]})
         self.assertEqual(json.loads(b["choices"][0]["message"]["content"]), {"city": "Paris"})
+
+
+class ConditionalThinkingTools(unittest.TestCase):
+    """A RED-SNOW-style template must open the block the server's parser expects by default."""
+
+    TEMPLATE = ("{% if tools %}<tools>{% for tool in tools %}{{ tool.name }}{% endfor %}</tools>{% endif %}"
+                "<|assistant|>{% if enable_thinking is defined and enable_thinking %}<think>{% endif %}"
+                "{# <arg_key> #}")
+    TOOL = {"name": "add_numbers", "description": "Add two integers", "parameters": {"type": "object",
+            "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}}, "required": ["a", "b"]}}
+    CALL = ("<tool_call>add_numbers<arg_key>a</arg_key><arg_value>137</arg_value>"
+            "<arg_key>b</arg_key><arg_value>268</arg_value></tool_call>")
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        path = Path(self.temp.name) / "chat_template.jinja"
+        path.write_text(self.TEMPLATE, encoding="utf-8")
+        self.template = ChatTemplate(path)
+
+    def server(self, script):
+        tok = ByteTokenizer()
+        engine = MockEngine(tok, script, max_context=8192)
+        svc = Service(engine, tok, self.template, model_name="red-snow")
+        svc.default_effort = "max"
+        httpd = serve(svc, port=0)
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        self.base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        return engine, tok
+
+    def post(self, body):
+        req = urllib.request.Request(self.base + "/v1/chat/completions", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+
+    def test_auto_max_opens_thinking_and_parses_tool_call(self):
+        engine, tok = self.server("I should use the function.</think>\n\n" + self.CALL)
+        body = self.post({"model": "red-snow", "reasoning_effort": "max", "tools": [
+            {"type": "function", "function": self.TOOL}], "tool_choice": "auto",
+            "messages": [{"role": "user", "content": "Use add_numbers for 137+268."}]})
+        prompt = tok.decode(engine.last_prompt)
+        self.assertIn("<tools>add_numbers</tools>", prompt)
+        self.assertTrue(prompt.endswith("<|assistant|><think>"))
+        self.assertEqual(body["choices"][0]["finish_reason"], "tool_calls")
+        fn = body["choices"][0]["message"]["tool_calls"][0]["function"]
+        self.assertEqual((fn["name"], json.loads(fn["arguments"])), ("add_numbers", {"a": 137, "b": 268}))
+
+    def test_required_call_keeps_thinking_off(self):
+        engine, tok = self.server(self.CALL[len("<tool_call>"):])
+        body = self.post({"model": "red-snow", "reasoning_effort": "max", "tools": [
+            {"type": "function", "function": self.TOOL}], "tool_choice": "required",
+            "messages": [{"role": "user", "content": "Use add_numbers for 137+268."}]})
+        prompt = tok.decode(engine.last_prompt)
+        self.assertTrue(prompt.endswith("<|assistant|><tool_call>"))
+        self.assertNotIn("<think>", prompt[-40:])
+        self.assertEqual(body["choices"][0]["finish_reason"], "tool_calls")
+        fn = body["choices"][0]["message"]["tool_calls"][0]["function"]
+        self.assertEqual((fn["name"], json.loads(fn["arguments"])), ("add_numbers", {"a": 137, "b": 268}))
 
 
 class ForcedToolCalls(unittest.TestCase):
