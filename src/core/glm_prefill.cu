@@ -2292,11 +2292,18 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
                 i0 = j;
             }
         };
-        // one expert through reconstruct + cuBLAS
+        // one expert through reconstruct + cuBLAS.  By default the expert's rows are rotated instead of its weights
+        // (x W = H(H(x * suh) W') * svh): the decoded W' alone goes to FP16 - a plain decode, not two 128-point
+        // transforms of every weight - and the inputs and outputs of its few hundred rows take the rotations, as in
+        // decode.  STRATA_GLM_EXL3_ROT=0: the weights rotated (reconstruct_rows), as before
+        static const bool rot_rows = [] {
+            const char* v = getenv("STRATA_GLM_EXL3_ROT");
+            return v == nullptr || std::atoi(v) != 0;
+        }();
         const auto run_blas = [&](const uint8_t* blob, int a, int nrows, int r0) {
             namespace x3 = strata::kernels::exl3;
             const int64_t wgu = (int64_t) 2 * nff * E, wdn = (int64_t) E * nff;
-            const int gu_rows = (int) std::max<int64_t>(1, (S->w16_elems - wgu) / E);
+            const int gu_rows = (int) std::max<int64_t>(1, (S->w16_elems - wgu) / (rot_rows ? 2 * E : E));
             const int dn_rows = (int) std::max<int64_t>(1, (S->w16_elems - wdn) / nff);
             const auto mat = [&](int r) {
                 x3::Mat m;
@@ -2311,6 +2318,37 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
             };
             const int o = place(r0 + a, nrows);
             float* GU = M.OUTP + (size_t) o * E;   // 2 * n_ff == n_embd: the expert's own OUTP rows hold its gate/up
+            if (rot_rows) {
+                // gate and up: W' of each, the rows rotated by each one's suh, the outputs by its svh
+                for (int r = 0; r < 2; ++r) x3::reconstruct_inner_rows(mat(r), S->w16 + (size_t) r * nff * E, s);
+                uint16_t* X16 = S->w16 + wgu;
+                for (int c0 = 0; c0 < nrows; c0 += gu_rows) {
+                    const int n = std::min(gu_rows, nrows - c0);
+                    for (int r = 0; r < 2; ++r) {
+                        uint16_t* Xr = X16 + (size_t) r * gu_rows * E;
+                        x3::rows_rot_f16(S->x, E, M.row_tok + r0 + a + c0, n, E, mat(r).suh, Xr, s);
+                        blas_ck(cublasGemmEx(S->blas, CUBLAS_OP_T, CUBLAS_OP_N, nff, n, E, &one,
+                                             S->w16 + (size_t) r * nff * E, CUDA_R_16F, E, Xr, CUDA_R_16F, E, &zero,
+                                             GU + (size_t) c0 * E + (size_t) r * nff, CUDA_R_32F, E,
+                                             CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP),
+                                "gemm exl3 gate/up");
+                    }
+                }
+                for (int r = 0; r < 2; ++r) x3::rows_rot_out(GU + (size_t) r * nff, E, nrows, nff, mat(r).svh, s);
+                gb::swiglu_rows(GU, GU, nrows, nff, g.swiglu_exp, s, 2 * nff);
+                x3::reconstruct_inner_rows(mat(2), S->w16, s);
+                uint16_t* H16 = S->w16 + wdn;
+                for (int c0 = 0; c0 < nrows; c0 += dn_rows) {
+                    const int n = std::min(dn_rows, nrows - c0);
+                    x3::rows_rot_f16(GU + (size_t) c0 * E, E, nullptr, n, nff, mat(2).suh, H16, s);
+                    blas_ck(cublasGemmEx(S->blas, CUBLAS_OP_T, CUBLAS_OP_N, E, n, nff, &one, S->w16, CUDA_R_16F, nff,
+                                         H16, CUDA_R_16F, nff, &zero, GU + (size_t) c0 * E, CUDA_R_32F, E,
+                                         CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP),
+                            "gemm exl3 down");
+                }
+                x3::rows_rot_out(GU, E, nrows, E, mat(2).svh, s);
+                return;
+            }
             x3::reconstruct_rows(mat(0), S->w16, false, s);
             x3::reconstruct_rows(mat(1), S->w16 + (size_t) nff * E, false, s);
             uint16_t* X16 = S->w16 + wgu;

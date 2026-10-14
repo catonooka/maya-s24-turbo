@@ -47,7 +47,7 @@ bool supported(const Mat& m);
 
 /// y[r] = alpha * (x W)[r] + (bias ? bias[r] : 0).  x: xf (F32) when given, else xq (q8_1 blocks of k values).
 /// ncol > 1: as many activations (a verify window's tokens), activation c at xf + c xf_cs / xq + c xq_cs bytes, its
-/// y at y + c y_cs - the weights read and decoded once for up to 4 of them, and each y bit for bit its own job's.
+/// y at y + c y_cs - the weights read and decoded once for up to 8 of them, and each y bit for bit its own job's.
 struct MvJob {
     const Mat* m = nullptr;
     const float* xf = nullptr;
@@ -62,8 +62,8 @@ constexpr int kMaxMvJobs = 8;
 constexpr int kMaxMvCols = 16;   // a job's activations at most
 bool mv(const MvJob* jobs, int n, cudaStream_t s);
 
-/// Allocates the per-stream scratch of mv / moe_down on the current device, and lets the several-activation kernels
-/// use their shared memory there (call once per stream before a graph capture; mv does both on first use otherwise).
+/// Allocates the per-stream scratch of mv / moe / win_experts on the current device (call once per stream before a
+/// graph capture; the first use does it otherwise).
 bool prepare(cudaStream_t s);
 
 /// One routed expert's blob: three parts (gate, up, down) at byte offsets from the blob base, each holding the FP16
@@ -113,8 +113,8 @@ struct WinArgs {
     float limit = 0.0f;
 };
 bool win_experts(const WinArgs& a, cudaStream_t s);
-/// Whether the current device runs the several-activation kernels (win_experts; mv's ncol > 1 runs one activation at a
-/// time without them): they take ~58 KB of shared memory a block, which 48 KB GPUs lack.
+/// Whether the current device runs the several-activation kernels (win_experts; mv's ncol > 1): every device does
+/// (they take ~10 KB of shared memory a block).
 bool several_ok();
 
 /// The prompt path's tensor-core GEMMs (sm_80 and later; mma_supported() says whether this device runs them).
@@ -141,6 +141,16 @@ void gemm_rows(const Mat& m, const uint16_t* x16, int ldx, int rows, float* y, i
 
 /// The full weight in the engine's row layout: dst[r][c] = W[c][r] (n rows of k values), BF16 or F16 bits.
 void reconstruct_rows(const Mat& m, uint16_t* dst, bool bf16, cudaStream_t s);
+/// The decoded W' alone in that layout: dst[c][r] = W'[r][c], F16 bits (exactly the decoded values) - for a product
+/// that rotates its activations and outputs instead of the weight (x W = H(H(x * suh) W') * svh): rows_rot_f16 before
+/// the GEMM, rows_rot_out after it.  No Hadamard over the k x n weight: a plain decode, at the memory's speed.
+void reconstruct_inner_rows(const Mat& m, uint16_t* dst, cudaStream_t s);
+/// out[r][c] = FP16(H(x_r * suh)[c]) for r < nrows, c < ncols (ncols % 128 == 0), x_r = x[idx ? idx[r] : r] (F32, ldx
+/// floats a row): an EXL3 matrix's rotated input rows, as the decode kernels rotate theirs.
+void rows_rot_f16(const float* x, int ldx, const int* idx, int nrows, int ncols, const uint16_t* suh, uint16_t* out,
+                  cudaStream_t s);
+/// y[r][c] = H(y_r)[c] * svh[c] in place for r < nrows, c < ncols (each 128 values one block; ldy floats a row).
+void rows_rot_out(float* y, int ldy, int nrows, int ncols, const uint16_t* svh, cudaStream_t s);
 /// The decoded W' alone, row-major [k][n] F16 bits (tests).
 void reconstruct_inner(const Mat& m, uint16_t* dst, cudaStream_t s);
 
