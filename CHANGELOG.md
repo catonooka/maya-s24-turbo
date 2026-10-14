@@ -4,6 +4,27 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.9 - 2026-10-14
+
+EXL3 decodes on the tensor cores of RTX 30 and newer, EXL3 prompts are faster, and turboderp's 4.05-bit EXL3 quant is
+in the setup.
+
+- **EXL3 decode on the tensor cores** (#180 by @needmorevram). On RTX 30 and newer each 16 x 16 tile of an EXL3
+  weight is decoded straight into a tensor-core product, up to 8 tokens at once: the expert kernels run about 1.8x as
+  fast on an RTX 3090 and an RTX 5060 Ti, and decode is 14-30% faster on an RTX 3090 + eight RTX 5060 Ti
+  (EXL3-4.05bpw, with the MTP block and with DFlash2). The answers are not bit for bit v1.1.8's there: the sums run in
+  the tensor cores' order. NVIDIA GPUs before RTX 30 (V100, T4, RTX 20) keep v1.1.8's decode kernels, which are faster
+  there - the same speed and output as v1.1.8. `STRATA_GLM_EXL3_DECODE=legacy` or `new` picks one on any GPU.
+- **EXL3 prompts rotate the rows, not the weights** (#180). An expert that goes through cuBLAS has its rows of tokens
+  rotated instead of its whole weight, so the weight is only decoded: an 8K prompt +6% on the nine GPUs above, +3% on
+  a V100. `STRATA_GLM_EXL3_ROT=0` gives the old path.
+- **EXL3-4.05bpw in the setup** (#180). turboderp's quant at 4.05 bits per weight (`--model EXL3-4.05bpw`, 165.2 GB
+  with the MTP block): 4-bit routed experts and mostly 6-bit dense weights. Experimental and NVIDIA only, like the
+  3.05-bit one; every file is checked against its sha256.
+- **The layer split for EXL3 packs** (#180). `--layer-split auto` assumes flatter routes for an EXL3 pack (its experts
+  are bigger, so a card holds fewer of a layer's): over an RTX 3090 and eight RTX 5060 Ti with DFlash2, the 3090 takes
+  9 layers instead of 7 and decode is 24-27% faster. GGUF packs split as before.
+
 ## v1.1.8 - 2026-10-14
 
 Contributors' fixes and additions: speculative sampling on Turing cards, AMD's tuning table for the installed library,
