@@ -3053,16 +3053,20 @@ bool Glm5Model::fast_warm(std::string& err) {
             progress = true;
         }
     }
-    // EXL3 experts in file order: the warm-up reads whole experts (fast_read_expert_x3), and in the order the
-    // routes rank them the reads seek all over the model's files (a cold read from a disk at ~0.05 GB/s)
-    if (exl3_)
-        std::stable_sort(jobs.begin(), jobs.end(), [&](const Job& a, const Job& b) {
-            const auto& na = pack_layers_[(size_t) a.il];
-            const auto& nb2 = pack_layers_[(size_t) b.il];
-            if (na.x_cb < 0 || nb2.x_cb < 0) return false;
-            const size_t ia = (size_t) a.e * 9, ib = (size_t) b.e * 9;
-            return std::make_pair(na.x_shard[ia], na.x_off[ia]) < std::make_pair(nb2.x_shard[ib], nb2.x_off[ib]);
-        });
+    // Experts in file order: the warm-up reads whole experts, and in the order the routes rank
+    // them (layer round-robin), reads seek all over the model's files (a cold read from a disk at ~0.05-0.10 GB/s).
+    // Sorting jobs by physical (shard, offset) turns ~37,000 random seeks into sequential streaming.
+    std::stable_sort(jobs.begin(), jobs.end(), [&](const Job& a, const Job& b) {
+        const auto& na = pack_layers_[(size_t) a.il];
+        const auto& nb = pack_layers_[(size_t) b.il];
+        const int shard_a = na.x_cb >= 0 ? na.x_shard[(size_t) a.e * 9] : na.gate_shard;
+        const uint64_t off_a = na.x_cb >= 0 ? na.x_off[(size_t) a.e * 9]
+                                            : na.gate_off + (uint64_t) a.e * F->L[(size_t) a.il].gu_bytes;
+        const int shard_b = nb.x_cb >= 0 ? nb.x_shard[(size_t) b.e * 9] : nb.gate_shard;
+        const uint64_t off_b = nb.x_cb >= 0 ? nb.x_off[(size_t) b.e * 9]
+                                            : nb.gate_off + (uint64_t) b.e * F->L[(size_t) b.il].gu_bytes;
+        return std::make_pair(shard_a, off_a) < std::make_pair(shard_b, off_b);
+    });
     // stream them: 8 experts per batch, 3 slices each in parallel; VRAM ones through the pinned staging
     size_t done_bytes = 0, total_bytes = 0;
     for (const auto& j : jobs) total_bytes += F->L[(size_t) j.il].blob;
