@@ -116,3 +116,13 @@ share a loss. Rebased: v1.1.11 + #194 (02abe17) + our patches (95af329).
 - Prefill: 363 tok/s @2.7K prompt (#188's prompt CPU share now active for EXL3).
 - Concurrency: C2 27.1 / C4 28.1 aggregate — serial still wins.
 - functest 8/8. Kept (no regression, prefill + batching improvements, stays compatible with upstream).
+
+
+## 2026-10-15 evening: 37.3 -> 43.0 t/s (speed tier)
+- SPEC_CANCEL=1 (+1: abort head's doomed pass on wrong draft) + STRATA_GLM_SPLIT=22 (+5: rebalanced
+  layer split [0,22)/[22,45); auto-search mispriced post-lane) = 37.3-37.4 exact-lossless.
+- TRUNK_KEEP=6 (R1-adjacent, upstream's approximate trunk): route ranks 7-8 of RAM-tier experts
+  skipped = 43.0-43.6 t/s (+16%). NOT lossless (KL~0.02 class) but probe-suite byte-identical on
+  our gates (functest 8/8, thinking 9/10, 5-probe arithmetic identical). Quality tier = unset it.
+- Prefill measured properly: 822@8K / 908-911@20K / 1005-1016@33K / 995@65K — 8K chunks optimal
+  (32K chunks WORSE on 2x3090: 767-848; PREFILL_WINDOW neutral).
