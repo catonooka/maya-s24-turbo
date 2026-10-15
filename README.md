@@ -93,6 +93,38 @@ results/          full_results.json, functest 8/8, monitor samples, HTML report
 agent-session/    PLAN.md, the agent driver, session/stage logs
 ```
 
+## History log
+
+### 2026-10-15 — EXL3-3.05bpw era: 29.2 → 44 t/s decode, 1016 t/s prefill (2×3090)
+
+The quality tier moves to EXL3-3.05bpw (KL 0.068 vs FP; ~3× closer than S24's 2.3bpw class).
+Full campaign in [`exl3/`](exl3/): trace, patches, and every lever measured.
+
+- **29.2 → 31.7** — our engine patches: deep prefetch (`PREFETCH_N=8 @fetch/rank4/blocks8`) + wide-fetch
+  kernel (32 B loads, expert-parallel grid; `FETCH_WIDE=1`)
+- **31.7 → 35.9** — upstream [#194](https://github.com/mw00/project-maya/pull/194): the EXL3 CPU lane's
+  AVX2+FMA tier (Zen 2 ran scalar before — 7.05 → 0.51 ms/expert). CPU now computes ~24 experts/token
+  overlapped with PCIe fetches
+- **35.9 → 36.4** — upstream [#188](https://github.com/mw00/project-maya/pull/188) merged on top
+  (split-K CPU experts, prompt CPU share; needed an AVX2 graft — its rows path was AVX-512-only)
+- **36.4 → 37.3** — `SPEC_CANCEL=1` (abort the head GPU's doomed pass on a wrong draft) +
+  `SPLIT=22` (rebalanced layer split; the auto-search misprices the post-lane balance)
+- **37.3 → 43-45 t/s** — `TRUNK_KEEP=6` speed tier: route ranks 7-8 of RAM-tier experts skipped.
+  **Not lossless** (KL ~0.02 class) but gate-verified at parity: functest 8/8 ×4, thinking 9/10
+  (T3 trait pre-dates it), arithmetic probe suite byte-identical to baseline, and the one miss
+  (chain-math) reproduces identically with TK off — A/B-proven pre-existing, not a regression
+- **Prefill**: 822 t/s @8K → 908 @20K → **1016 @33K** → 995 @65K (auto/8192 chunks; 32K chunks
+  measured worse on 2×3090)
+- Sustained check: 5 runs 43.0-44.8 MEAN, no drift; expert pools 98.5% full, zero disk reads
+- Bottleneck trace + rejected levers: [`exl3/SETTINGS-EXL3.md`](exl3/SETTINGS-EXL3.md) and
+  [`exl3/CURRENT-FINDINGS.md`](exl3/CURRENT-FINDINGS.md); research base for the next jump
+  (multi-draft verify windows, AcceptMoE-class pruning): [`exl3/`](exl3/)
+
+### 2026-10-13/14 — Maya-S24 era: 49.2 → 59 t/s @ 262k
+
+The original campaign (table above): env stack + calibration + benchkit, 52.2 greedy / 59
+thinking-on, functest 8/8, thinking 10/10. S24 stays on disk as the speed rollback tier.
+
 ## Credits
 
 - **[mw00/project-maya](https://github.com/mw00/project-maya)** — the entire engine: Strata-style
