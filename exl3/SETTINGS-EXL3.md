@@ -96,3 +96,14 @@ Watch: --parallel N (concurrent serving), KV-streaming at >262k, STRATA_GLM_Q3/q
 - Calibration + engine loads MUST run under `sudo systemd-run` (user-slice oomd kills pinned-RAM loads).
 - functest.py vision probe now builds a valid PNG programmatically (old hand-hex PNG = false 400).
 - `git stash -u` then `stash drop` loses untracked files — recover via `<stash>^3` commit.
+
+## UPDATE 2026-10-15: the CPU lane landed — 35.9 t/s (+23% over the "ceiling")
+Upstream #194 (sociolog) added the AVX2+FMA EXL3 CPU tier that was missing: our Zen 2 had been
+running the trellis in SCALAR code (7.05 ms/expert); now 0.508 ms. The lane was overlap-capable all
+along (the planner splits routes CPU/PCIe so both finish together) — the scalar loop made every CPU
+share a loss. Rebased: v1.1.11 + #194 (02abe17) + our patches (95af329).
+- Numbers: 29.2 (stock) -> 31.7 (our 2 patches) -> 35.9 (+#194), twice confirmed.
+  Per token: lane computes 23.6 experts in 13.5 ms WHILE PCIe fetches halve (87 -> 44.7).
+- 16t/gpu worse than 8t (34.2; per-expert 0.719 ms, contention). Leave lane at default.
+- functest 8/8. Low-effort chain-math now correct (lane arithmetic shifts it; KL ~0.06 class per docs).
+- The 0xSero RAM-compute architecture is fully realized on this rig now.
