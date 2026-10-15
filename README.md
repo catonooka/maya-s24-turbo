@@ -44,8 +44,6 @@ The setup asks which one to download and recommends one for your PC. How they're
 | --- | ---: | --- | --- |
 | [EXL3 3.05 bpw](https://huggingface.co/turboderp/GLM-5.3-Flash-exl3/tree/3.05bpw) by turboderp | 125.3 GB | in the setup: `--model EXL3-3.05bpw` | NVIDIA only, experimental |
 | [EXL3 4.05 bpw](https://huggingface.co/turboderp/GLM-5.3-Flash-exl3/tree/4.05bpw) by turboderp | 165.2 GB | in the setup: `--model EXL3-4.05bpw` | NVIDIA only, experimental |
-| [AJ-IQ2_XXS](https://huggingface.co/aj9o9/GLM-5.3-Flash-GGUF/tree/main/AJ-IQ2_XXS) by aj9o9 | 87.4 GB | its files, then `--gguf-dir` | no MTP block |
-| [AJ-IQ3_XXS](https://huggingface.co/aj9o9/GLM-5.3-Flash-GGUF/tree/main/AJ-IQ3_XXS) by aj9o9 | 112.4 GB | its files, then `--gguf-dir` | no MTP block |
 
 </details>
 
