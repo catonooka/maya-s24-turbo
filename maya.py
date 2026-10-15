@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Project Maya - set up and start GLM-5.3-Flash on your own GPU(s).
-CUDA: Linux; Windows (experimental). HIP: experimental gfx1100/gfx1201/gfx1151, Linux and Windows, text only.
+CUDA: Linux; Windows (experimental). HIP: experimental gfx1100/gfx1201/gfx1151 (gfx1030: not validated), Linux and
+Windows, text only.
 
     ./maya.sh                 the first run sets everything up and starts the dashboard; later runs just start it
     ./maya.sh --setup         set up again (other GPUs, another context length, another model folder)
@@ -79,6 +80,9 @@ VSTAMP = VBUILD / "MAYA-BUILD.json"
 MIN_CC = 70                                        # Volta (V100) and newer (the GLM path; see arch_setting)
 MAX_GPUS = 16                                      # the layer split's parts at most (glm_model.hpp, kMaxParts)
 HIP_ARCHS = ("gfx1100", "gfx1201", "gfx1151")        # Maya also supports Strix Halo (unified memory)
+HIP_ARCHS_UNVALIDATED = ("gfx1030",)               # RDNA 2 (RX 6800 / 6900, Radeon PRO V620 / W6800), experimental: not
+                                                   # validated on a card; no matrix cores, the portable kernels; compiled
+                                                   # only when such a GPU is chosen
 PY_PACKAGES = list(S.PY_PACKAGES)                  # (pillow: pictures in formats other than JPEG/PNG/BMP/GIF)
 CONTEXTS = [8192, 32768, 65536, 131072]
 DEFAULT_CONTEXT = 32768
@@ -638,12 +642,13 @@ def check_hip_pc(a, installed=False) -> dict:
     root, bindir = windows_rocm() if WIN else (None, None)
     hipinfo = hip_info(bindir) if WIN else None
     found = S.amd_gpus(hipinfo) if WIN else S.amd_gpus()
-    usable = [g for g in found if g["arch"] in HIP_ARCHS]
+    usable = [g for g in found if g["arch"] in HIP_ARCHS + HIP_ARCHS_UNVALIDATED]
     for g in found:
         say(f"    {gpu_label(g)} - " + ("can be used" if g in usable else "not supported by Maya's HIP build"))
     if not usable:
         fail("no supported AMD GPU found", "this port targets RX 7900 XT / XTX (gfx1100), RX 9070 / AI PRO R9700 "
-             "(gfx1201), and Strix Halo / Gorgon Halo, Radeon 8050S / 8060S / 8065S (gfx1151)")
+             "(gfx1201), and Strix Halo / Gorgon Halo, Radeon 8050S / 8060S / 8065S (gfx1151); experimental, not "
+             "validated: RX 6800 / 6900, Radeon PRO V620 / W6800 (gfx1030)")
     if WIN and hipinfo and all(g.get("source") == "registry" for g in found):
         warn(f"ROCm's hipInfo sees no AMD GPU (the list above is Windows'): the engine cannot start until it does - "
              f"update AMD's driver (AMD Software: Adrenalin Edition, https://www.amd.com/en/support), restart, and "
@@ -728,8 +733,13 @@ def check_hip_pc(a, installed=False) -> dict:
                  "and restart - the experts on the GPU are the fastest")
     elif any(hip_unified_memory(g) for g in chosen):
         ok("APU / unified memory: the engine sizes the GPU expert pool from available system RAM")
+    unvalidated = sorted({g["arch"] for g in chosen if g["arch"] in HIP_ARCHS_UNVALIDATED})
+    if unvalidated:
+        warn(f"{', '.join(unvalidated)} (RDNA 2) is experimental: it builds and has the portable kernels, but Maya has "
+             "not been validated on such a card yet - please report how it goes in an issue "
+             "(https://github.com/mw00/project-maya/issues)")
     select_build_backend("hip")
-    return {"backend": "hip", "gpus": chosen, "archs": list(HIP_ARCHS), "rocm": str(root),
+    return {"backend": "hip", "gpus": chosen, "archs": list(HIP_ARCHS) + unvalidated, "rocm": str(root),
             **({"rocm_bin": str(bindir)} if WIN else {})}
 
 
