@@ -4,14 +4,30 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
-## Unreleased
+## v1.1.12 - 2026-10-15
 
-- **Batched decode across layer-split GPUs.** Opt-in `STRATA_GLM_SPLIT_ROWS=1..8` batches up to k requests on each
-  part, sharing dense weight reads while keeping sequence-specific attention and routed experts separate. On four RTX
-  4000 Ada GPUs with Maya-M, k=2 reached 94.50 tok/s aggregate for eight requests versus 74.42 tok/s for the legacy
-  pipeline (+27%, below the 30% target). Single-request timings stayed within 5%, and the long-context needle check
-  passed 8/8. At four requests, k=1 was within run-to-run noise of legacy, while larger groups reduced throughput;
-  k=2 is not a universal optimum. See [several requests at once](docs/SETTINGS.md#several-requests-at-once).
+EXL3 on one GPU with the CPU's help, batched answers across a layer split (opt-in), the VRAM tier following the
+conversation while DFlash2 drafts, and AMD RDNA 2 cards as experimental.
+
+- **EXL3 on one GPU: the CPU takes more of the experts, faster** (#188 by @needmorevram). On one GPU most of an EXL3
+  model's experts run on the CPU. The CPU now reads each expert in memory order (split-K pieces) and runs a route's
+  experts as one batch of jobs, and CPUs without AVX-512 (Intel desktop chips, Zen 2 and 3) get an AVX2 tier of their
+  own. Prompts give their least-used experts to the CPU too, as GGUF prompts already did. On an RTX 3090 alone:
+  EXL3-3.05bpw decode 14.3-16.8 -> 20.9-22.1 tokens/s, 22.4 -> 29.2 with DFlash2; EXL3-4.05bpw 14.4-15.1 -> 18.9-19.6;
+  an 8K prompt 384-396 -> 422-489 tokens/s. The answers are the same tokens as before.
+- **Batched answers across a layer split, opt-in** (#204 by @zetlaw). With `STRATA_GLM_SPLIT_ROWS=k` (1-8) and several
+  requests at once, each GPU of a split takes up to k requests in one step, reading the shared weights once for all of
+  them. On four RTX 4000 Ada GPUs with Maya-M and eight requests, `k=2` gave 94.5 tokens/s in all against 74.4 (+27%);
+  larger groups were slower there, so it stays off by default. See
+  [several requests at once](docs/SETTINGS.md#several-requests-at-once).
+- **The VRAM tier keeps following the conversation while DFlash2 drafts** (#198 by @merbanan). With the drafter's
+  verify window on two CPU lanes, the background swaps that move the experts you use into VRAM had stopped. They run
+  again: on a V100 with a Ryzen 9 7950X, the share of experts found in VRAM went from 49-62% to 54-67%.
+- **AMD RDNA 2, experimental** (#205). The setup accepts the RX 6800 / 6900 series and the Radeon PRO V620 / W6800
+  (`gfx1030`), and compiles for them only when one is chosen. Maya has not been validated on such a card yet: please
+  tell us how it goes in an issue.
+
+NVIDIA GPUs give v1.1.11's tokens.
 
 ## v1.1.11 - 2026-10-15
 
