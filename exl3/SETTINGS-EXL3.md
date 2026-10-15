@@ -107,3 +107,12 @@ share a loss. Rebased: v1.1.11 + #194 (02abe17) + our patches (95af329).
 - 16t/gpu worse than 8t (34.2; per-expert 0.719 ms, contention). Leave lane at default.
 - functest 8/8. Low-effort chain-math now correct (lane arithmetic shifts it; KL ~0.06 class per docs).
 - The 0xSero RAM-compute architecture is fully realized on this rig now.
+
+## STACK TEST 2026-10-15: #188 (split-K CPU experts) on top of #194 + ours
+- Merged #188 onto our stack; its AVX-512-only rows path needed a graft: AVX2 tier fallback via
+  band_avx2 over the ks slice + 4 stale exl3_cpu_vector() gates fixed to tier==2 (SIGILL on Zen 2).
+- Decode: 35.5 / 35.9 (tie with pure-#194 — the lane on a 2-GPU PCIe rig is link-limited, not
+  DRAM-limited, so #188's split-K read pattern doesn't add; their win is on CPU-heavy 1-GPU rigs).
+- Prefill: 363 tok/s @2.7K prompt (#188's prompt CPU share now active for EXL3).
+- Concurrency: C2 27.1 / C4 28.1 aggregate — serial still wins.
+- functest 8/8. Kept (no regression, prefill + batching improvements, stays compatible with upstream).
