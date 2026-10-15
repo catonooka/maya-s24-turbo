@@ -134,3 +134,5 @@ share a loss. Rebased: v1.1.11 + #194 (02abe17) + our patches (95af329).
 - Extended battery: knowledge x2 / code / translation PASS; age-logic PASS (36, probe's expected value was wrong);
   the one arithmetic miss (35 vs 51) reproduces IDENTICALLY on the quality tier (baseline) = pre-existing
   3.05bpw chain-math trait, NOT a TK6 regression. A/B-verified.
+
+- **Context widened 131k -> 262k** (2026-10-15): decode statistically unchanged (43.1 t/s), 194K-token needle test passed (codeword at ~95K position retrieved exactly), functest 8/8. Both tiers now serve 262k like S24 did.
