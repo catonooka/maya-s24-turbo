@@ -126,3 +126,11 @@ share a loss. Rebased: v1.1.11 + #194 (02abe17) + our patches (95af329).
   our gates (functest 8/8, thinking 9/10, 5-probe arithmetic identical). Quality tier = unset it.
 - Prefill measured properly: 822@8K / 908-911@20K / 1005-1016@33K / 995@65K — 8K chunks optimal
   (32K chunks WORSE on 2x3090: 767-848; PREFILL_WINDOW neutral).
+
+
+## 2026-10-15 (final): sustained-bench + gate battery on the 43-44 t/s speed tier
+- 5 bench runs: 44.8 / 44.8 / 44.6 / 43.0 / 44.2 MEAN (prose 40-42, facts 48-52, code 42-43) — sustained, no drift
+- functest 8/8 (x4 runs today), thinking suite 9/10 (T3 marbles trait — present on stock too)
+- Extended battery: knowledge x2 / code / translation PASS; age-logic PASS (36, probe's expected value was wrong);
+  the one arithmetic miss (35 vs 51) reproduces IDENTICALLY on the quality tier (baseline) = pre-existing
+  3.05bpw chain-math trait, NOT a TK6 regression. A/B-verified.
