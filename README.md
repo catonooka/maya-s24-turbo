@@ -189,11 +189,11 @@ Speed reports, bug reports and pull requests are welcome: [CONTRIBUTING.md](CONT
 
 ## Credits and license
 
-- **People:** Project Maya is created and led by Peasant Smith ([@mw00](https://github.com/mw00)), who owns the
-  project, its name and the Maya models. [@needmorevram](https://github.com/needmorevram)
-  ([X](https://x.com/needmorevram)) is a co-maintainer and contributed major features: DFlash2 drafting, EXL3
-  support, KV streaming, conversation checkpoints, the layer-split search, the expert profile and the CPU expert
-  kernels. Thanks also to everyone who sent code and speed reports
+- **People:** Project Maya is created and led by Peasant Smith ([@mw00](https://github.com/mw00),
+  [X](https://x.com/PeasantSmith)), who owns the project, its name and the Maya models.
+  [@needmorevram](https://github.com/needmorevram) ([X](https://x.com/needmorevram)) is a co-maintainer and
+  contributed major features: DFlash2 drafting, EXL3 support, KV streaming, conversation checkpoints, the layer-split
+  search, the expert profile and the CPU expert kernels. Thanks also to everyone who sent code and speed reports
   ([contributors](https://github.com/mw00/project-maya/graphs/contributors)).
 - **Built on [Strata](https://github.com/Niko1221/Strata)** (MIT License, Copyright (c) 2026 Niko1221 and the Strata
   contributors): Maya's engine started from Strata's and was rewritten for GLM-5.3-Flash (the expert tiers across VRAM,
