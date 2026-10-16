@@ -1065,13 +1065,9 @@ def choose_model(a, models: Path, inst: dict) -> tuple:
         if first is None:
             fail(why, "--gguf-dir takes the folder that holds the GLM-5.3-Flash .gguf files, or the (first) .gguf file")
         return "local", first
-    hip = getattr(a, "backend", None) == "hip"
     if a.model:
-        if hip and is_exl3(a.model):
-            fail(f"{a.model} runs on NVIDIA GPUs only (the HIP port has no EXL3 kernels)",
-                 f"pick another model: {ME} --setup")
         return "download", a.model
-    opts = [q for q in MODELS if not (hip and is_exl3(q))]   # (EXL3: NVIDIA only)
+    opts = [q for q in MODELS]
     # cards of 24 GB or less: Maya-S24 (its 4-bit attention leaves ~1.5 GB more of the card for experts - decode about
     # 14% faster there), else Maya-S
     try:

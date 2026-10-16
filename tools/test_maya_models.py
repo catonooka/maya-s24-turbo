@@ -299,7 +299,7 @@ class DraftChoice(unittest.TestCase):
 
 
 class Exl3Download(unittest.TestCase):
-    """turboderp's EXL3 quant: offered with NVIDIA GPUs only, every file of its branch downloaded and checked by size
+    """turboderp's EXL3 quant: every file of its branch downloaded and checked by size
     and hash, its config checked instead of a GGUF header, and its pack built by tools/exl3_pack.py."""
     Q, GB, SHARDS, REV = "EXL3-3.05bpw", 125.3, 15, "332ab457b709b7ba30dd9a448be5de03b80a7ac9"
     FILES = 27
@@ -318,12 +318,6 @@ class Exl3Download(unittest.TestCase):
                 quant, text = self.offered("cuda")
             self.assertIn(f"{self.Q}: download {self.GB} GB from Hugging Face   (experimental)", text)
             self.assertNotEqual(quant, self.Q)
-
-    def test_not_offered_with_amd(self):
-        self.assertNotIn(self.Q, self.offered("hip")[1])
-        args = SimpleNamespace(gguf_dir=None, model=self.Q, yes=True, backend="hip")
-        with patch.object(maya.S, "say"), self.assertRaises(SystemExit):
-            maya.choose_model(args, Path("."), {})
 
     def test_every_file_of_the_branch_with_size_and_hash(self):
         m = maya.MODELS[self.Q]
