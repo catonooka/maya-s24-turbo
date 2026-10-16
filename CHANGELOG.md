@@ -4,6 +4,37 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.15 - 2026-10-16
+
+Faster EXL3 drafting across many GPUs, faster long prompts on V100s, a faster CPU lane on Zen 5, and EXL3 on AMD
+(experimental).
+
+- **EXL3 with DFlash2 on many GPUs, faster** (#225 by @needmorevram). Pipelined verify rounds, decode's attention on
+  the tensor cores (RTX 30 series and newer) and a shorter drafter chain. On an RTX 3090 + 8x RTX 5060 Ti with
+  EXL3-4.05bpw and DFlash2: decode 71 -> 81 tokens/s greedy, 69 -> 79 sampled, 46 -> 59 on 32K-token documents - the
+  same tokens with drafts as without. Every part has a setting to turn it off (docs/SETTINGS.md).
+- **Long prompts faster on Tesla V100 and RTX 20** (#196 by @merbanan). Their prompt attention runs in two passes with
+  32 heads a block: on one V100, a 27K-token prompt's attention went from 22.5 to 11.8 s and the whole prompt from 78.4
+  to 67.9 s. `STRATA_GLM_PREFILL_ATTN=tc` keeps the previous kernel.
+- **A faster CPU lane on CPUs with AVX-512 VBMI** (#227 by @cryptedy). Where the CPU computes Maya-S / Maya-S24's
+  experts, CPUs with AVX-512 VBMI (Zen 4, Zen 5, Xeons from Ice Lake on) use new rows that give exactly the same
+  results: decode +6-8% on a Zen 5. Other CPUs are unchanged.
+- **EXL3 on AMD GPUs, experimental** (#186 by @izabera). The setup offers turboderp's EXL3 quants with AMD GPUs too;
+  the EXL3 kernels pass their tests on an RX 7900 XTX and a Radeon 8065S. Their speed on AMD is not tuned yet.
+- **DFlash2 on a V100 with little free VRAM** (#195 by @merbanan). The drafting windows failed with "out of memory"
+  once the expert pool had taken the VRAM down to a few hundred MB; they run now.
+- **Skipping light experts, opt-in** (#228 by @cryptedy). `STRATA_GLM_MISS_SKIP_W` / `_FROM` leave out a routed expert
+  that is not in VRAM and carries little of the route's weight - faster on RAM-bound PCs, but it changes the answers,
+  so it is off by default.
+- **Smaller changes:** the setup picks AMD on a first run on a PC with only supported AMD GPUs (#190 by @thomas9120);
+  the image encoder skips its warm-up when it runs on the CPU (#184 by @izabera); docs/SETTINGS.md explains how to get
+  the same answers after a restart with the CPU lane on (#224 by @hiroki-abe-58).
+
+NVIDIA GPUs give v1.1.14's tokens with `STRATA_GLM_PREFILL_ATTN=tc`, `STRATA_GLM_DSA_ALL=0` and `STRATA_GLM_MLA_MMA=0`.
+As shipped, three faster paths add the same numbers up in another order, so an answer can differ from v1.1.14's in
+places: prompts on V100 and RTX 20 (#196), decode on RTX 30 and newer (#225), and conversations under 2048 tokens on
+any GPU (#225; `STRATA_GLM_DSA_ALL=0` on AMD too). Otherwise AMD GPUs give v1.1.14's tokens.
+
 ## v1.1.14 - 2026-10-16
 
 NVIDIA Pascal cards as experimental, and unsloth's Q6_K_XL / Q8_0 GGUFs of GLM-5.3-Flash.
