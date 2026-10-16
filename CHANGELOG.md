@@ -4,6 +4,41 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.13 - 2026-10-16
+
+Faster decode where experts are fetched, a fix for long prompts on a Windows Strix Halo, a new chat with the same system
+prompt reusing it, two kinds of AMD GPU together, AMD RDNA 2 builds and the current GLM-5.3-Flash chat template.
+
+- **The expert spares keep what you used last** (#210 by @saatvik-viniak). With one conversation, when the GPU makes
+  room for a fetched expert it now evicts the one used least recently, instead of the least used by the aged counts -
+  those keep experts that were busy earlier in the chat. On 3x Tesla V100 16 GB with Maya-S at 128K: decode 24.8 ->
+  26.5 tokens/s. With several conversations at once (`--parallel`) the old rule stays: there the recency let the latest
+  conversation's experts push out what all of them use. `STRATA_GLM_VRAM_EVICT=lru` / `least` chooses either.
+- **Long prompts on a Windows Strix Halo with a smaller GPU share** (#206). Under Windows, HIP counts a Ryzen AI Max's
+  GPU memory as its dedicated share plus ~12 GB of shared system memory, and since v1.1.10 the expert pool could fill
+  past the dedicated share into the shared part, which Windows pages - on a 96 GB share, 8K-token prompts were read at
+  62 tokens/s instead of v1.1.9's 159. The pool now stays within the dedicated memory Windows reports for the GPU, and
+  the engine's log says so at start. A share the model fits in (160 GB on a Radeon 8065S) is unchanged.
+- **A new chat with the same system prompt reuses it** (#179). With the conversation slots on (the default), the end of
+  a long system prompt is also set aside on disk, so another chat that starts with it - even after an unrelated
+  conversation in between - reads only its own part instead of the whole system prompt again.
+- **Two AMD GPUs of different kinds, and an experimental expert helper** (#201 by @zhedang). The setup accepts a
+  discrete AMD GPU together with a Ryzen AI Max APU (the discrete one first). `STRATA_GLM_EXPERT_HELPER=1` makes the
+  second GPU a helper that holds a share of the experts and computes them, instead of splitting the layers - see
+  [the AMD guide](docs/AMD_MAYA.md#experimental-expert-helper).
+- **Faster prompts on Strix Halo with ROCm 10** (#203 by @boxwrench). A tuning table for hipBLASLt 100500 (TheRock /
+  ROCm 10): on a Radeon 8060S under Linux, prefill 204 -> 341 tokens/s at 2K tokens, 217 -> 373 at 8K.
+- **AMD RDNA 2 builds** (#205). v1.1.12's experimental RX 6800 / 6900 and Radeon PRO V620 / W6800 (`gfx1030`) support
+  now compiles: AMD's rocWMMA library, which knows only newer GPUs, is left out there.
+- **The current GLM-5.3-Flash chat template.** zai-org updated it on 15 October: tool results are matched to their
+  calls far faster. The server now renders with it instead of the older copy inside the model files - the same prompts
+  (288 test conversations, byte for byte), and a chat with many tool calls is prepared up to ~15x faster. Nothing is
+  downloaded again.
+
+NVIDIA GPUs give v1.1.12's tokens with `STRATA_GLM_VRAM_EVICT=least` and with several conversations at once.
+With one, the new rule keeps other experts in VRAM, and where the CPU computes the rest an answer can differ
+from v1.1.12's in places.
+
 ## v1.1.12 - 2026-10-15
 
 EXL3 on one GPU with the CPU's help, batched answers across a layer split (opt-in), the VRAM tier following the
