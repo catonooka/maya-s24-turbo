@@ -1,7 +1,7 @@
 # Experimental Maya on RX 7900 XT / XTX, R9700 / RX 9070 and Strix Halo / Gorgon Halo
 
 This branch adds a Linux HIP build and installer path for Maya's GLM-5.3-Flash
-engine on `gfx1100`, `gfx1201` and `gfx1151` (Strix Halo, Gorgon Halo). It uses one GPU, or two discrete cards that split the
+engine on `gfx1100`, `gfx1201` and `gfx1151` (Strix Halo, Gorgon Halo). It uses one GPU, or two supported GPUs that split the
 layers (see [Two GPUs](#two-gpus)), and serves text. Images are not enabled by this installer;
 Linux users can opt into the existing [CPU image encoder](#cpu-image-encoder-on-linux).
 Windows: see [Windows](#windows).
@@ -117,7 +117,9 @@ Windows, large-image limits, and multiple-image workloads were not tested here.
 half, and the second half also runs the model's MTP block, which drafts the next token so both cards stay busy. Setup
 puts the card with more VRAM first (it takes the bigger first half), leaves the split point to the engine, and writes
 one hipBLASLt table per architecture (`STRATA_HIPBLASLT_TUNING` takes a `:`-separated list; each card uses the table
-for its own architecture). The two cards may be different architectures. The split passes one small host-memory hop
+for its own architecture). A discrete GPU paired with a unified-memory APU puts the discrete GPU first and loads the
+parts sequentially (`STRATA_GLM_PARALLEL_LOAD=0`), so the APU sizes its pool after the first part pins its RAM tier.
+The two cards may be different architectures. The split passes one small host-memory hop
 per token, so no peer-to-peer access between the cards is needed.
 
 Measured on an AI PRO R9700 (32 GB, first) + RX 7900 XT (20 GB), 192 GB RAM, Maya-S, 8K context, 90 GB RAM tier,
@@ -131,6 +133,26 @@ v1.0.11, greedy, 256-token answers (median of 10 requests):
 39 back-to-back requests (1.8-4K-token prompts) ran without an error. The default split (the midpoint + 2) measured
 best: moving two or four more layers to the first card did not speed up answers.
 
+### Experimental expert helper
+
+`STRATA_GLM_EXPERT_HELPER=1` is an opt-in alternative to a layer split: visible GPU 0 keeps every trunk layer,
+attention, state and MTP; visible GPU 1 owns a complementary expert cache. A unified-memory helper reserves slots
+in the existing portable pinned RAM tier (no second weight copy); a discrete helper uses its own VRAM, automatically
+sized by aligned expert bytes with 512 MiB left free. Primary admissions, prefetch and background promotions exclude
+helper-owned experts. At idle boundaries, colder helper experts can be replaced by hotter unowned experts of the same
+layer.
+The helper quantizes activations and reduces weighted expert outputs on its GPU before returning one vector per token.
+CPU quantization runs only for actual CPU fallback; uncovered experts retain the existing CPU/PCIe/disk paths.
+Batched prefill retains its primary-GPU staging and CPU pool, and may read helper-owned UMA slots without evicting them.
+All of this is part of the single helper switch; there is no separate optimization flag.
+Native GGUF experts only; EXL3 is not supported.
+
+For physical device 0 = 8060S and 1 = R9700, run the engine with `HIP_VISIBLE_DEVICES=1,0`,
+`STRATA_GLM_EXPERT_HELPER=1` and `STRATA_GLM_SPLIT=0`. The indices are process-local; the system order is unchanged.
+Keep the normal pack, context, headroom and MTP settings. Do not combine the helper with `--layer-split` or a
+nonzero `STRATA_GLM_SPLIT`. Unset `STRATA_GLM_EXPERT_HELPER` to restore the existing behavior. This experimental
+path does not claim general multi-GPU support or a speedup; measure it on the target hardware.
+
 ## Strix Halo
 
 Ryzen AI Max+ 395 / Radeon 8060S (`gfx1151`) uses unified memory. Use the same
@@ -139,8 +161,8 @@ HIP setup command above, selecting its GPU number and omitting the
 reports only a small VRAM carve-out. It writes a 1 GiB reserve, 16 GiB of
 system headroom, `STRATA_GLM_PREFILL_SUB=1024`, and a 6144 MiB prompt budget
 when system RAM is at least 96 GiB (4096 MiB otherwise), plus the existing
-`gfx1151` hipBLASLt table. An APU stays single-GPU: `--gpus` with it is
-rejected (use `--gpu N`). It leaves `POOL_GB` and `RAM_GB` unset.
+`gfx1151` hipBLASLt table. Use `--gpu N` for the APU alone, or `--gpus D,N` to pair it with a supported discrete GPU
+(see [Two GPUs](#two-gpus)). It leaves `POOL_GB` and `RAM_GB` unset.
 
 For integrated HIP devices the engine sizes the pool from `/proc/meminfo`'s
 `MemAvailable` **after** dense weights, KV and prompt staging are allocated:

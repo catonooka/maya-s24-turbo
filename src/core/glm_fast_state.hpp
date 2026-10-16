@@ -4,6 +4,7 @@
 #pragma once
 
 #include "strata/core/glm_model.hpp"
+#include "strata/core/remote_experts.hpp"
 #include "strata/kernels/glm_fast.hpp"
 #include "strata/kernels/glm_kv_stream.hpp"
 #include "strata/kernels/cpu/native_expert.hpp"
@@ -452,7 +453,8 @@ struct Glm5Model::FastState {
     // ---- the RAM tier: pinned host slots per blob size class, holding experts that are NOT in VRAM
     //      (exclusive tiers).  rtab (on the device) points at HOLDING slots only.
     // kRPin: still the expert's live copy, being promoted (never a victim until the copy landed)
-    enum : char { kRFree = 0, kRHold = 1, kRRelease = 2, kRDemote = 3, kRNew = 4, kRLoad = 5, kRPin = 6 };
+    enum : char { kRFree = 0, kRHold = 1, kRRelease = 2, kRDemote = 3, kRNew = 4, kRLoad = 5, kRPin = 6,
+                  kRHelper = 7 };   // helper-owned UMA weights: readable by prefill, never a RAM-tier victim
     struct RamClass {
         size_t stride = 0;
         uint8_t* base = nullptr;
@@ -513,6 +515,12 @@ struct Glm5Model::FastState {
     //      weighted sum (cpu_ans_h) before its down combine.  cpu_plan: how many of f RAM-tier experts go to the host.
     //      A split of 3+ GPUs shares one pool across its parts (fast_cpu_lane_setup).
     std::shared_ptr<glmfast::Workers> cpu_pool;
+    GlmExpertHelper helper;   // opt-in, independent expert ownership on the secondary GPU
+    uint8_t* helper_owned_d = nullptr;   // primary router excludes these experts from PCIe admission/prefetch
+    uint64_t helper_swaps = 0;
+    std::atomic<bool> helper_failed{false};
+    std::string helper_error;
+    std::atomic<uint64_t> helper_experts{0}, helper_routes{0}, helper_us{0};
     // one GPU with a DFlash drafter, on a host of two NUMA nodes or more (STRATA_GLM_WIN_LANES, on): a batched verify
     // window's tokens' CPU-lane experts go to two lane threads, token t to lane t % 2 - lane 0 drives cpu_pool (then
     // pinned to the GPU's node), lane 1 a pool of its own on another node - so the window's tokens run on both
@@ -721,6 +729,7 @@ struct Glm5Model::FastState {
         return e;
     }
     bool route_ok(std::string& err) const {
+        if (helper_failed.load(std::memory_order_acquire)) { err = helper_error; return false; }
         const int e = route_error_h ? *route_error_h : 0;
         if (e == 0) return true;
         const char* kind = (e % 4 == 1) ? "decode" : (e % 4 == 2) ? "predicted" : "lookahead";
