@@ -4,6 +4,7 @@
 #include "strata/kernels/cpu/native_expert.hpp"
 #include "strata/kernels/cpu/expert.hpp"
 #include "strata/kernels/cpu/iq_avx512.hpp"
+#include "strata/kernels/cpu/iq_avx512_one.hpp"
 #include "strata/kernels/cpu/iq_avx2.hpp"
 #include "strata/kernels/cpu/expert_layout.hpp"
 
@@ -123,14 +124,23 @@ RowsFn exact_rows(int type) {
 // lookups: IQ3_XXS's four keven_signs loads per 32 values, IQ3_S's 9-bit indices built in vectors and read back from
 // memory.  iq256_rows1 is ggml's dot with two changes - IQ3_XXS's signs built in registers, IQ3_S's
 // indices in scalar registers - so it is bit-identical to ggml's dot (checked here once, 306 results).  On every AVX-2
-// CPU, like ggml-cpu's own dot (it has no AVX-512 form for these).  STRATA_GLM_CPU_1T=0 keeps ggml's dot.
+// CPU, like ggml-cpu's own dot (it has no AVX-512 form for these).  IQ2_XXS (Maya-S's gate/up) first tries the
+// AVX-512 rows of iq_avx512_one.cpp (VBMI + BMI2: the grid as 2-bit codes in registers, the signs by pdep), checked
+// the same way.  STRATA_GLM_CPU_1T=0 keeps ggml's dot, STRATA_NO_IQ512 the AVX-2 rows.
 RowsFn pick_rows1(int type) {
     static const bool on = [] {
         const char* mt = std::getenv("STRATA_GLM_CPU_MT");
         const char* v = std::getenv("STRATA_GLM_CPU_1T");
         return (mt == nullptr || std::atoi(mt) != 0) && (v == nullptr || std::atoi(v) != 0);
     }();
-    if (!on || !iq256_rows1_supported(type)) return nullptr;
+    if (!on) return nullptr;
+    if (std::getenv("STRATA_NO_IQ512") == nullptr && iq512_one_supported(type)) {
+        init_once();
+        if (rows_match_ggml(iq512_one_rows, type, {1}, 306)) return iq512_one_rows;
+        std::fprintf(stderr, "native experts: the AVX-512 one-token %s rows differ from ggml-cpu's dot in this build - "
+                             "not used\n", ggml_type_name((ggml_type) type));
+    }
+    if (!iq256_rows1_supported(type)) return nullptr;
     init_once();
     if (!cpu_avx2_ok() || std::getenv("STRATA_NO_IQ256") != nullptr) return nullptr;
     if (rows_match_ggml(iq256_rows1, type, {1}, 306)) return iq256_rows1;

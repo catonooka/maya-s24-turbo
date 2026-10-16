@@ -1,10 +1,12 @@
-// src/kernels/cpu/native_rows_exact_test.cpp - the multi-token expert rows (iq_avx512 / iq_avx2) against ggml-cpu's
-// own single-token dot, BIT FOR BIT, for every format they take and 1-11 tokens; then GLM's split-base rows with
+// src/kernels/cpu/native_rows_exact_test.cpp - the multi-token expert rows (iq_avx512 / iq_avx2) and the one-token
+// rows (iq_avx2's rows1, iq_avx512_one) against ggml-cpu's own single-token dot, BIT FOR BIT, for every format they
+// take and 1-11 tokens; then GLM's split-base rows with
 // several tokens against the same rows one token at a time (what a verify window computes vs the token path).
 // Synthetic rows (random codes, small normal block scales), Q8_K activations from ggml's quantizer.  CPU only.
 #include "strata/kernels/cpu/expert_layout.hpp"
 #include "strata/kernels/cpu/iq_avx2.hpp"
 #include "strata/kernels/cpu/iq_avx512.hpp"
+#include "strata/kernels/cpu/iq_avx512_one.hpp"
 #include "strata/kernels/cpu/native_expert.hpp"
 
 #include "ggml.h"
@@ -159,6 +161,7 @@ int main() {
         if (avx512) check_kernel("avx512", cpu::iq512_rows, cpu::iq512_set_q5k_fused, t, rng);
         if (avx2) check_kernel("avx2", cpu::iq256_rows, cpu::iq256_set_q5k_fused, t, rng);
         if (avx2 && cpu::iq256_rows1_supported(t)) check_kernel("avx2-1t", cpu::iq256_rows1, cpu::iq256_set_q5k_fused, t, rng);
+        if (cpu::iq512_one_supported(t)) check_kernel("avx512-1t", cpu::iq512_one_rows, cpu::iq512_set_q5k_fused, t, rng);
     }
     for (int t : types) check_split(t, rng);
     if (failures != 0) {
