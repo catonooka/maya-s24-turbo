@@ -785,6 +785,12 @@ struct Glm5Model::FastState {
     std::atomic<uint64_t> disk_skips{0};   // STRATA_GLM_DISK_SKIP_W / _FROM: disk-only experts left out
     int disk_skip_from = 8;                // ... at route rank >= this (8: none)
     float disk_skip_w = 0.0f;              // ... or of a smaller weight share than this (0: none)
+    // STRATA_GLM_MISS_SKIP_W / _FROM: a routed expert not in VRAM whose weight share is below miss_w is left out, on layers
+    // from miss_from on (0: none); a request's strata_tune miss_skip_w / miss_skip_from override them (< 0: these)
+    float miss_w = 0.0f;
+    int miss_from = 0;
+    float miss_w_req = -1.0f;
+    int miss_from_req = -1;
     std::atomic<uint64_t> scratch_uses{0}, demotions{0}, drops{0};
     std::atomic<uint64_t> miss_us{0}, disk_us{0};
     uint64_t tokens = 0;

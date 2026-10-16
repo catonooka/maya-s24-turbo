@@ -3123,6 +3123,8 @@ static int glm_pack_generate(const Options& o) {
             double req_pcie = -1.0;   // setup's calibration: this request's CPU lane (as the engine started: -1 / 0)
             int req_threads = 0;
             int req_chunks = 0;   // ... and its disk reads' pieces (0: as the engine started)
+            double req_msw = -1.0;   // ... and its light-miss bar / first layer (STRATA_GLM_MISS_SKIP_W / _FROM; < 0: the engine's)
+            int req_msf = -1;
             int req_rid = -1;
             req_spec = 0;
             req_spec_min_p = -1.0;
@@ -3153,6 +3155,8 @@ static int glm_pack_generate(const Options& o) {
                 else if (k == "pcie_frac") { req_pcie = std::atof(v.c_str()); }
                 else if (k == "cpu_threads") { req_threads = std::atoi(v.c_str()); }
                 else if (k == "read_chunks") { req_chunks = std::atoi(v.c_str()); }
+                else if (k == "miss_skip_w") { req_msw = std::atof(v.c_str()); }
+                else if (k == "miss_skip_from") { req_msf = std::atoi(v.c_str()); }
                 else if (k == "rid") { req_rid = std::atoi(v.c_str()); }
                 else if (k == "spec") { req_spec = std::atoi(v.c_str()); }
                 else if (k == "spec_min_p") { req_spec_min_p = std::atof(v.c_str()); }
@@ -3200,6 +3204,7 @@ static int glm_pack_generate(const Options& o) {
             model.set_pcie_share(req_pcie >= 0.0 && req_pcie <= 1.0 ? req_pcie : -1.0);
             model.set_cpu_lane_threads(req_threads > 0 ? req_threads : 0);
             model.set_read_chunks(req_chunks > 0 ? req_chunks : 0);
+            model.set_miss_skip(req_msw, req_msf);
             std::vector<int64_t> toks;
             std::string e;
             if (max_new <= 0 || ids.empty() || !parse_i64_list(ids.c_str(), toks, e)) {

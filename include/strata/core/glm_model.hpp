@@ -179,6 +179,10 @@ public:
     /// set_read_chunks(n): n (1-16) from the next read on, n <= 0 the engine's own - for setup's calibration (per
     /// request, no restart): the best size depends on the drive, its driver and the CPU
     void set_read_chunks(int n);
+    /// The decode's light misses (STRATA_GLM_MISS_SKIP_W / _FROM, changes the answers): a routed expert that is not in
+    /// VRAM and carries less than w of the route's weights is left out on layers from `from` on.  set_miss_skip(w, from):
+    /// this request's bar and first layer (w < 0 / from < 0: the engine's own) - for sweeps without a restart.
+    void set_miss_skip(double w, int from);
     /// Conversation reuse (the fast path): save the sequence state at the current position - the recurrent KDA
     /// states and conv histories (the DSA caches are append-only, so the position alone restores them) - and
     /// restore it later to continue a prompt that extends the saved one.  false when unsupported.

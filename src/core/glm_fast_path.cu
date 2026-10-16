@@ -1640,6 +1640,16 @@ bool Glm5Model::fast_setup(std::string& err) {
         // STRATA_GLM_DISK_SKIP_W=<share>: also, at any rank, a disk-only expert whose share of the route's weights is
         // below this (the route's rank follows score + bias, the weight the score alone)
         if (const char* v = getenv("STRATA_GLM_DISK_SKIP_W")) F->disk_skip_w = (float) std::max(0.0, std::atof(v));
+        // STRATA_GLM_MISS_SKIP_W=<share> (changes the answers): a routed expert NOT IN VRAM whose share of the route's
+        // weights is below this is left out (no PCIe fetch, no CPU work), on layers from STRATA_GLM_MISS_SKIP_FROM
+        // (default 0) on; a request's strata_tune miss_skip_w / miss_skip_from override both for it - TRUNK_KEEP's
+        // idea by weight instead of rank.  GLM-5.3's late layers take it far better than its early ones (Maya-S24 on an
+        // RTX 3090, layers 23+: 0.12 / 0.14 / 0.16 -> KL 0.037 / 0.052 / 0.075 against the full model, decode +7-13%)
+        if (const char* v = getenv("STRATA_GLM_MISS_SKIP_W")) F->miss_w = (float) std::max(0.0, std::min(1.0, std::atof(v)));
+        if (const char* v = getenv("STRATA_GLM_MISS_SKIP_FROM")) F->miss_from = std::max(0, std::atoi(v));
+        if (F->miss_w > 0.0f)
+            std::fprintf(stderr, "glm fast: CUDA%d light misses left out: weight share < %.3f on layers %d+ (changes the "
+                                 "answers)\n", dev_, F->miss_w, F->miss_from);
         // LOOKAHEAD: the predictions per layer, a load state per RAM slot, and the reader threads
         if (const char* ah = getenv("STRATA_GLM_AHEAD")) F->n_ahead = std::max(0, std::min(gf::kAhead, std::atoi(ah)));
         if (g.n_expert > 512) F->n_ahead = 0;
@@ -3737,6 +3747,14 @@ bool Glm5Model::set_cpu_lane_threads(int n) {
     return any;
 }
 
+void Glm5Model::set_miss_skip(double w, int from) {
+    for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get())
+        if (m->fast_ != nullptr) {
+            m->fast_->miss_w_req = w >= 0.0 ? (float) std::min(1.0, w) : -1.0f;
+            m->fast_->miss_from_req = from >= 0 ? from : -1;
+        }
+}
+
 void Glm5Model::set_read_chunks(int n) {
     for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get())
         if (m->fast_ != nullptr) m->fast_->read_chunks = n > 0 ? std::min(16, n) : 0;
@@ -5118,7 +5136,11 @@ bool Glm5Model::fast_moe_experts(int il, const MoeIo& io, bool pred, int n_ah, c
                   pred ? F->max_pf : 0, n_ah > 0 ? F->alog : nullptr, ah_bias, n_ah,
                   il == mtp_il_ ? mtp_skip_from() : glmfast::trunk_skip_from(il), lane ? F->cpu_plan : 0ull, promote_min,
                   pf_rank, near_n, 0, nullptr, 0, il == mtp_il_ ? 8 : F->disk_skip_from,
-                  il == mtp_il_ ? 0.0f : F->disk_skip_w);
+                  il == mtp_il_ ? 0.0f : F->disk_skip_w, il == mtp_il_ ? 0.0f : [&] {
+                      const float w = F->miss_w_req >= 0.0f ? F->miss_w_req : F->miss_w;
+                      const int from = F->miss_from_req >= 0 ? F->miss_from_req : F->miss_from;
+                      return il >= from ? w : 0.0f;
+                  }());
     if (F->prof_on) F->mark("moe_route");
     ++F->expected;
     // the side stream copies the next layer's predicted experts while this layer computes.  STRATA_GLM_PREFETCH_AT:

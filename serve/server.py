@@ -674,6 +674,12 @@ class StrataEngine:
             rc = tune.get("read_chunks")   # ... and the pieces it reads an expert from the SSD in (x3)
             if isinstance(rc, int) and not isinstance(rc, bool) and 1 <= rc <= 16:
                 tune_keys += f" read_chunks={rc}"
+            mw = tune.get("miss_skip_w")   # the GLM engine's light-miss bar (STRATA_GLM_MISS_SKIP_W) for this request
+            if isinstance(mw, (int, float)) and not isinstance(mw, bool) and 0.0 <= float(mw) <= 1.0:
+                tune_keys += f" miss_skip_w={float(mw)!r}"
+            mf = tune.get("miss_skip_from")   # ... and its first layer (STRATA_GLM_MISS_SKIP_FROM)
+            if isinstance(mf, int) and not isinstance(mf, bool) and 0 <= mf <= 1000:
+                tune_keys += f" miss_skip_from={mf}"
             sw = tune.get("spec")   # the GLM engine's DFlash decode: its verify window (the anchor and drafts), 2..16;
             if isinstance(sw, int) and not isinstance(sw, bool) and 1 <= sw <= 16:   # 1: no drafting (the token loop)
                 tune_keys += f" spec={sw}"

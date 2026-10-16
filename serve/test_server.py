@@ -502,6 +502,19 @@ class SamplingKeys(unittest.TestCase):
             self.assertFalse([k for k in self.keys(temperature=0, strata_tune={"read_chunks": bad})
                               if k.startswith("read_chunks=")], bad)
 
+    def test_miss_skip_tune_keys(self):
+        # the GLM engine's light-miss bar and first layer for one request (STRATA_GLM_MISS_SKIP_W / _FROM)
+        k = self.keys(temperature=0, strata_tune={"miss_skip_w": 0.14, "miss_skip_from": 23})
+        self.assertIn("miss_skip_w=0.14", k)
+        self.assertIn("miss_skip_from=23", k)
+        self.assertIn("miss_skip_w=0.0", self.keys(temperature=0, strata_tune={"miss_skip_w": 0}))   # 0: off for it
+        for bad in (-0.1, 1.5, True, "0.1"):
+            self.assertFalse([x for x in self.keys(temperature=0, strata_tune={"miss_skip_w": bad})
+                              if x.startswith("miss_skip_w=")], bad)
+        for bad in (-1, 1001, True, 2.5, "23"):
+            self.assertFalse([x for x in self.keys(temperature=0, strata_tune={"miss_skip_from": bad})
+                              if x.startswith("miss_skip_from=")], bad)
+
     def test_penalty_window(self):
         self.assertIn("penalty_last_n=64", self.keys(presence_penalty=1.5))
         self.assertIn("penalty_last_n=4096", self.keys(repetition_penalty=1.1, penalty_last_n=4096))

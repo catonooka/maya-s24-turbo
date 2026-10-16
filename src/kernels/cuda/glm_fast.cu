@@ -3248,6 +3248,8 @@ struct RouteArgs {
                                 // >= this are left out (no disk read); >= k: none
     float disk_skip_w;          // STRATA_GLM_DISK_SKIP_W: ... and, at any rank, those whose share of the route's
                                 // weights is below this (0: none)
+    float miss_skip_w;          // STRATA_GLM_MISS_SKIP_W (prototype): experts not in VRAM whose share of the route's
+                                // weights is below this are left out like skip_from's, at any rank (0: none)
 };
 
 __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_constant__ RouteArgs a) {
@@ -3416,6 +3418,10 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
         unsigned long long* rtab = a.d.tab + a.d.n_keys;
         unsigned long long* spares = a.d.tab + 2 * (size_t) a.d.n_keys + (size_t) a.layer * kSpares;
         int next_spare = 0;
+        // STRATA_GLM_MISS_SKIP_W: a light expert (its share of the route's weights below the bar) that is not in VRAM
+        // is left out instead of fetched or computed on the CPU - the weight it carries is what the token loses
+        const float msw = skipped ? 0.0f : a.miss_skip_w;
+        const auto light_miss = [&](int i) { return msw > 0.0f && (float) ((double) s_p[s_ids[i]] * inv) < msw; };
         // the CPU LANE: of this route's f RAM-tier experts, cpu_take(f) (the plan's split table) are computed by the
         // host from their RAM-tier blobs while the device pulls the others over PCIe - the COLDEST by the route counts
         // (ties: the later in route order), so the hot ones are still promoted into VRAM
@@ -3426,7 +3432,7 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
             for (int i = 0; i < a.k; ++i) {
                 const size_t key = (size_t) a.layer * E + s_ids[i];
                 const unsigned int c = s_cnt[i];
-                if (i < skip_from && s_tab[i] == 0ull && s_rtab[i] != 0ull &&
+                if (i < skip_from && !light_miss(i) && s_tab[i] == 0ull && s_rtab[i] != 0ull &&
                     !(a.d.helper_owned && a.d.helper_owned[key])) {
                     ri[f_ram] = i;
                     rcnt[f_ram++] = c;
@@ -3448,7 +3454,7 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
             unsigned long long src = 0ull;
             s_pp[i] = 0ull;
             s_cs[i] = 0ull;
-            if (ptr == 0ull && i >= skip_from) {
+            if (ptr == 0ull && (i >= skip_from || light_miss(i))) {
                 // left out: the expert kernels skip a null plan entry (a draft only has to be a good guess)
             } else if (ptr == 0ull && a.d.helper_owned && a.d.helper_owned[key]) {
                 // A helper resident is claimed BEFORE PCIe quotas, promotion or disk skipping.
@@ -5086,12 +5092,12 @@ void moe_route(const float* logits, const float* bias, int n_expert, int k, floa
                int n_ff_sh, void* sh_hq, cudaStream_t s, const float* pred_logits, const float* pred_bias,
                int max_prefetch, const float* ahead_logits, const float* const* ahead_bias, int n_ahead,
                int skip_from, unsigned long long cpu_plan, int promote_min, int pf_rank, int near_n, int win,
-               unsigned int* scr_used, int win_n, int disk_skip_from, float disk_skip_w) {
+               unsigned int* scr_used, int win_n, int disk_skip_from, float disk_skip_w, float miss_skip_w) {
     RouteArgs a{logits, bias, n_expert, k, w_scale, norm_w ? 1 : 0, layer, x, n_embd, d,
                 sh_gate, sh_up, sh_limit, n_ff_sh, (block_q8_1*) sh_hq, pred_logits, pred_bias, max_prefetch,
                 ahead_logits, {}, 0, skip_from, d.cpu_seq != nullptr ? cpu_plan : 0ull, promote_min,
                 pf_rank > 0 ? pf_rank : k, std::max(0, std::min(near_n, std::min(16, n_expert - k))), win, scr_used,
-                g_skip, win_n, disk_skip_from, disk_skip_w};
+                g_skip, win_n, disk_skip_from, disk_skip_w, miss_skip_w};
     if (ahead_logits != nullptr && ahead_bias != nullptr && n_expert <= 512) {
         a.n_ahead = std::min(n_ahead, kAhead);
         for (int i = 0; i < a.n_ahead; ++i) a.ahead_bias[i] = ahead_bias[i];
