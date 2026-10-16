@@ -58,6 +58,9 @@
 #endif
 #include <windows.h>
 #include <psapi.h>
+#if defined(STRATA_USE_HIP)
+#include <dxgi.h>
+#endif
 #endif
 #ifdef __linux__
 #include <sched.h>
@@ -5573,6 +5576,44 @@ Glm5Model::PoolBudget Glm5Model::part_budget(size_t free_b, size_t total_b, size
 // Nor is a budget beyond all the pool can ever take (all_b: every expert of this part's layers with the spares and a
 // prompt's room): such a pool cannot fill the card, and writing the whole budget - a Windows APU's carve-out, a Radeon
 // 8065S's ~157 GB for Maya-S's ~106 - three times over took a start from ~60 to ~120 s.
+#if defined(STRATA_USE_HIP) && defined(_WIN32)
+// The dedicated video memory DXGI reports for the adapter with this HIP device's LUID (an APU: its carve-out), 0 when
+// unknown.  STRATA_GLM_APU_DEDICATED_GB=<n> sets it (a test: a smaller carve-out), =0 turns the cap below off.
+static size_t win_dedicated_bytes(int dev) {
+    if (const char* v = getenv("STRATA_GLM_APU_DEDICATED_GB")) return (size_t) (std::atof(v) * 1073741824.0);
+    cudaDeviceProp prop{};
+    if (cudaGetDeviceProperties(&prop, dev) != cudaSuccess) {
+        cudaGetLastError();
+        return 0;
+    }
+    HMODULE m = LoadLibraryA("dxgi.dll");
+    if (m == nullptr) return 0;
+    using Create = HRESULT(WINAPI*)(REFIID, void**);
+    const auto create = reinterpret_cast<Create>(reinterpret_cast<void*>(GetProcAddress(m, "CreateDXGIFactory1")));
+    static const GUID kFactory1 = {0x770aae78, 0xf26f, 0x4dba, {0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87}};
+    IDXGIFactory1* f = nullptr;
+    size_t ded = 0, amd = 0;
+    int n_amd = 0;
+    if (create != nullptr && SUCCEEDED(create(kFactory1, (void**) &f)) && f != nullptr) {
+        IDXGIAdapter1* a = nullptr;
+        for (UINT i = 0; f->EnumAdapters1(i, &a) == S_OK; ++i) {
+            DXGI_ADAPTER_DESC1 d{};
+            if (SUCCEEDED(a->GetDesc1(&d)) && !(d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+                if (std::memcmp(&d.AdapterLuid, prop.luid, sizeof(d.AdapterLuid)) == 0) ded = d.DedicatedVideoMemory;
+                if (d.VendorId == 0x1002) {
+                    amd = d.DedicatedVideoMemory;
+                    ++n_amd;
+                }
+            }
+            a->Release();
+        }
+        f->Release();
+    }
+    FreeLibrary(m);
+    return ded > 0 ? ded : n_amd == 1 ? amd : 0;   // (no LUID match: the one AMD adapter)
+}
+#endif
+
 void Glm5Model::pool_check(size_t floor_b, size_t slot_b, size_t all_b) {
     if (fast_ == nullptr || fast_->unified_memory) return;
     if (const char* v = getenv("STRATA_GLM_POOL_CHECK"); v != nullptr && std::atoi(v) == 0) return;
@@ -5583,7 +5624,31 @@ void Glm5Model::pool_check(size_t floor_b, size_t slot_b, size_t all_b) {
     // budget went with it and the start failed
     int integrated = 0;
     if (cudaDeviceGetAttribute(&integrated, cudaDevAttrIntegrated, dev_) != cudaSuccess) cudaGetLastError();
+#if defined(STRATA_USE_HIP) && defined(_WIN32)
+    // ... but it is kept within its DEDICATED memory: HIP's total there is the carve-out plus ~12 GB of shared system
+    // memory, and a pool that fills into the shared part pages under Windows - a 96 GB carve-out with v1.1.10's
+    // complete pool held 13.1 + 89.5 GB, and 8K-token prompts ran at 62 instead of 159 tok/s (#206).  What is in use
+    // now (the dense weights, the state, the prompt path's room) and the pool's budget stay under the dedicated memory
+    // less the reserve; the rest is short, as a written check's finding is.
+    if (integrated != 0) {
+        const size_t ded = win_dedicated_bytes(dev_);
+        size_t free_b = 0, total_b = 0;
+        cudaMemGetInfo(&free_b, &total_b);
+        const PoolBudget b = part_budget(free_b, total_b, floor_b, slot_b);
+        const size_t used = total_b - free_b, limit = ded > b.reserve ? ded - b.reserve : 0;
+        if (ded > 0 && ded < total_b && b.fixed == 0 && used + b.avail > limit) {
+            const size_t give = std::min(b.avail, used + b.avail - limit);
+            pool_short_ += give;
+            std::fprintf(stderr, "glm fast: CUDA%d Windows gives this APU's GPU %.2f GB of dedicated memory (HIP counts "
+                                 "%.2f GB with shared memory): the expert pool stays within it, %.2f GB less\n",
+                         dev_, (double) ded / 1073741824.0, (double) total_b / 1073741824.0,
+                         (double) give / 1073741824.0);
+        }
+        return;
+    }
+#else
     if (integrated != 0) return;
+#endif
     size_t free_b = 0, total_b = 0;
     cudaMemGetInfo(&free_b, &total_b);
     int zero_reads = 0;
