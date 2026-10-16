@@ -3441,9 +3441,19 @@ def main() -> int:
     else:
         engine, vision, sampling_defaults = MockEngine(tok, a.script or [
             "Thinking about it.</think>\n\nHello from the mock engine."]), None, {}
-    # the model's own chat template (exported with its tokenizer), else the original model's
+    # the model's own chat template (exported with its tokenizer), else the original model's.  A GLM-5.3-Flash pack's
+    # copy is the one its GGUF carried (August's): the template zai-org publishes now renders the same prompts and
+    # matches tool results to their calls without nested loops (zai-org/GLM-5.3-Flash PR #63: 100 parallel calls
+    # 137 -> 6 ms a render), so the server uses the copy shipped here (serve/glm5_chat_template.jinja) for a GLM-5
+    # pack.  MAYA_PACK_TEMPLATE=1 keeps the pack's own.
     tpl = tpath / "chat_template.jinja"
-    svc = Service(engine, tok, ChatTemplate(tpl if tpl.exists() else ROOT / "serve/chat_template.jinja"),
+    tpl = tpl if tpl.exists() else ROOT / "serve/chat_template.jinja"
+    glm5 = ROOT / "serve/glm5_chat_template.jinja"
+    if glm5.exists() and os.environ.get("MAYA_PACK_TEMPLATE") != "1" and tpl != glm5:
+        head = tpl.read_text(encoding="utf-8", errors="replace")
+        if head.startswith("[gMASK]<sop>") and "reasoning_effort in ['low', 'high']" in head:
+            tpl = glm5
+    svc = Service(engine, tok, ChatTemplate(tpl),
                   model_name=cfg.get("model_name", "qwen3.8-flash-next"), vision=vision,
                   sampling_defaults=sampling_defaults,
                   fit_max_tokens=a.fit_max_tokens or cfg.get("fit_max_tokens") is True)
