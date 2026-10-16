@@ -26,6 +26,7 @@
 #include "strata/kernels/sampler.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <condition_variable>
@@ -285,6 +286,33 @@ public:
     int dev_ = 0;
     int n_parts_ = 1;                                      // the devices the layers are split across (the CPU lane's share)
     int part_ = 0;                                         // ... and which of them this one is (0 = the first layers)
+    // THE HEAD SPLIT (an EXL3 pack on 3+ parts; STRATA_GLM_HEAD_SPLIT=0: off): a pipelined window's pick on the last
+    // part reads the head's columns [0, head_c0_) there and [head_c0_, n_vocab) on a helper part at once (its own
+    // copy), the two argmaxes (or the helper's logits, sampling) joined on the last part - the same pick as the whole
+    // row's.  The helper: the part of the fewest layers between the first and the last (their head GEMV ~1.2 ms of
+    // a token on an RTX 5060 Ti)
+    bool head_half_ = false;          // this part (the helper) loads the head's columns [head_c0_, n_vocab)
+    int head_c0_ = 0;
+    Glm5Model* head_helper_ = nullptr;   // (the last part) the helper
+    float* hh_x_ = nullptr;            // (the helper) kPipeSlots head inputs (n_embd), their logits (n_vocab - c0)
+    float* hh_lg_ = nullptr;
+    int* hh_pair_ = nullptr;           // ... and their argmax pairs (argmax_pair)
+    cudaStream_t hh_s_ = nullptr;      // ... the stream they run on (the highest priority)
+    cudaEvent_t hh_ev_[64] = {};       // ... a slot's result out (pair or logits copied to the host)
+    float* hd_x_ = nullptr;            // (the helper) a draft's head rows (kWinMax x n_embd), their logits (n_vocab - c0)
+    float* hd_lg_ = nullptr;
+    void* hd_cand_ = nullptr;          // ... and their slices' top-k candidates (kHdCandBytes)
+    cudaStream_t hd_s_ = nullptr;      // ... the stream they run on (not hh_s_: behind a window's late picks there)
+    int* hh_skip_d_ = nullptr;         // (the helper) its skip flag for a pick's half (a token past a wrong draft)
+    static constexpr size_t kHdCandBytes = (size_t) 1 << 20;
+    float* ht_x_h_ = nullptr;          // (the last part) pinned: the slots' head inputs, the helper's logits, pairs
+    float* ht_lg_h_ = nullptr;
+    int* ht_pair_h_ = nullptr;
+    int* ht_pair_d_ = nullptr;         // ... on the device: [slot][2] own pair, [slot][2] the helper's
+    cudaEvent_t ht_ev_[64] = {};       // ... a slot's head input out to the host
+    bool head_split_ready() const { return head_helper_ != nullptr && ht_x_h_ != nullptr && ht_pair_d_ != nullptr; }
+    bool head_split_link(Glm5Model* helper, std::string& err);   // (the last part, after the load) the helper's buffers
+    bool win_head_split(int t, int sl, const float* hx, float* lg, std::string& err);
     std::vector<int> split_devs_;                          // ... and the CUDA devices of all of them, part by part
     std::unique_ptr<Glm5Model> split_next_;
     // parallel split load: parts take the RAM budget in part order, then pin their RAM tiers in part order too
@@ -610,6 +638,8 @@ public:
     double spec_dev_ms_ = 0, spec_gap_ms_ = 0;
     int64_t spec_dev_n_ = 0;
     float* kda_bak_ = nullptr;                             // the head's saved recurrent states
+    bool kda_bak_cur_ = false;   // win_commit_part left kda_bak_ equal to the live states (the next pipelined begin's
+                                 // backup is not needed)
     float* spec_hop_h_[2] = {nullptr, nullptr};            // pinned hop slots by position parity
     cudaEvent_t spec_ev_hop_[2] = {nullptr, nullptr};
     bool spec_kda_copy(bool restore);
@@ -754,9 +784,17 @@ public:
     /// `fresh`: it follows the previous window's late tokens without waiting for the devices), win_pipe_push each
     /// further token's (kPipeMax in all), win_pipe_pick(t) waits for the pick after token t; then win_pipe_settle
     /// (every part's share enqueued) before window_commit, or win_pipe_end (every pick, the devices drained)
-    static constexpr int kPipeMax = kWinMax / 2;
+    // (its tokens at most: the anchor and a DFlash block's 15 drafts; the rows a token crosses with alternate between two
+    // banks of kPipeMax, kPipeSlots in all - a window's token index stays below kWinMax, its KDA input rows')
+    static constexpr int kPipeMax = 16;
+    static constexpr int kPipeSlots = 2 * kPipeMax;
+    static_assert(kPipeSlots <= 64, "the head split's events (hh_ev_, ht_ev_)");
+    static_assert(kPipeMax <= kWinMax, "a pipelined token's KDA input rows are the window's");
     bool win_pipe_begin(int32_t first, std::string& err, const strata::kernels::SamplerParams* sp = nullptr,
                         bool fresh = true);
+    bool win_pipe_begin_part(bool fresh, std::string& err);   // a part's own share of win_pipe_begin
+    void win_commit_part(int n_keep);                          // ... and of window_commit
+    std::chrono::steady_clock::time_point win_pipe_begun_at(int k) const;
     bool win_pipe_push(int32_t token, std::string& err);
     bool win_pipe_pick(int t, int32_t& pick, std::string& err);
     bool win_pipe_settle(std::string& err);
@@ -771,7 +809,10 @@ public:
     void win_crew_stop();
     /// window_pipe's token t: KDA layer il's projections go to its window input rows (window_commit replays from them)
     void win_kda_rows(int il, int t, float** proj, float** fa, float** ga, float** beta);
-    bool window_commit(int n_keep, std::string& err);
+    // (wait = false, a pipelined window: the parts' commit enqueues are not waited for - the next window's begin is
+    //  queued behind each on its crew thread; win_commit_wait before anything else reads the state)
+    bool window_commit(int n_keep, std::string& err, bool wait = true);
+    void win_commit_wait();
     bool win_reserve(std::string& err);                    // the window's buffers and state backup, before the pool
     void win_prof_report();                                // STRATA_GLM_WIN_PROF: each part's window time, then reset
     // ---- the DFlash drafter (src/core/glm_dflash.cu): the part with the head holds it, on its device

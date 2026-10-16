@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -392,8 +393,11 @@ constexpr int kHeadSamples = 6;   // the head's timed drafts a variant (draft_st
 __device__ __forceinline__ bool tk_before(float v, int i, float bv, int bi) { return v > bv || (v == bv && i < bi); }
 __device__ __forceinline__ bool tk_after(float v, int i, float lv, int li) { return v < lv || (v == lv && i > li); }
 
+// (row_slices: the slices a row's candidates hold, this launch's at the first of them; id_off: added to the ids - the
+//  head split's helper takes the row's later slices of its own columns)
 __global__ void __launch_bounds__(256) topk_part_kernel(const float* __restrict__ x, int n, int k, int slice,
-                                                        int* __restrict__ part_i, float* __restrict__ part_v) {
+                                                        int* __restrict__ part_i, float* __restrict__ part_v,
+                                                        int row_slices, int id_off) {
     extern __shared__ float xs[];
     __shared__ float bv[8];
     __shared__ int bi[8];
@@ -408,7 +412,8 @@ __global__ void __launch_bounds__(256) topk_part_kernel(const float* __restrict_
         last_i = -1;
     }
     __syncthreads();
-    const size_t o = ((size_t) blockIdx.y * gridDim.x + blockIdx.x) * k;
+    const size_t o = ((size_t) blockIdx.y * row_slices + blockIdx.x) * k;
+    const int id0 = lo + id_off;
     for (int r = 0; r < k; ++r) {
         const float lv = last_v;
         const int li = last_i;
@@ -416,9 +421,9 @@ __global__ void __launch_bounds__(256) topk_part_kernel(const float* __restrict_
         int vi = 0x7fffffff;
         for (int i = threadIdx.x; i < len; i += blockDim.x) {
             const float y = xs[i];
-            if (tk_after(y, lo + i, lv, li) && tk_before(y, lo + i, v, vi)) {
+            if (tk_after(y, id0 + i, lv, li) && tk_before(y, id0 + i, v, vi)) {
                 v = y;
-                vi = lo + i;
+                vi = id0 + i;
             }
         }
 #pragma unroll
@@ -648,6 +653,10 @@ struct GlmDflash::Impl {
     void *xq = nullptr, *aq = nullptr, *actq = nullptr;
     float* attn_part = nullptr;        // the split attention's partials: kAttnSplits x n_kv x kAttnQ x kAttnPart
     cudaStream_t ds = nullptr;         // its own stream (stream()): it drafts while the target's parts run
+    cudaStream_t is = nullptr;         // the context injection's stream (inject: beside the next draft's first layer)
+    cudaEvent_t ev_s = nullptr;        // ... ordered after the drafter's stream
+    std::vector<cudaEvent_t> ev_kv;    // ... each layer's context rows in the ring (the draft's attention waits)
+    bool inj_pending = false;          // an injection the next draft waits for, layer by layer
     cudaStream_t pend_s = nullptr;     // draft_start's stream, its drafts (0: none pending) and cut
     int pend_n = 0;
     float pend_p_min = 0.0f;
@@ -671,6 +680,17 @@ struct GlmDflash::Impl {
     bool head_timed = false;
     int cdyn = 0;                      // the conv projection's width: 2 x taps x E / group
     int V = 0;                         // the target's vocabulary (bind)
+    struct HeadSplit {                 // split_head: the head's columns [c0, V) on the helper (lo == nullptr: none)
+        const WSlot *lo = nullptr, *hi = nullptr;
+        int c0 = 0, dev = -1, rows = 0;
+        cudaStream_t s = nullptr;
+        float *x = nullptr, *lg = nullptr;   // on the helper: the rows in, their logits
+        void* cand = nullptr;                // ... their slices' candidates: ids, then values
+        size_t cand_bytes = 0;
+        float* x_h = nullptr;                // pinned: the rows out, the candidates back
+        void* cand_h = nullptr;
+        cudaEvent_t ev_x = nullptr, ev_c = nullptr;
+    } hs;
 
     size_t q8(int n) const { return (size_t) n / 32 * 36; }
 };
@@ -700,12 +720,25 @@ GlmDflash::~GlmDflash() {
 
 int GlmDflash::dev() const { return d_->dev; }
 
+// The drafter's stream at the device's highest priority: a round's drafts gate every draft token's entry into the
+// pipelined window, and at the round's start the head's card is still running the layer a cancelled token was in
+// (the skip takes effect at the next layer) - ~1.7 ms of such work shared the GPU with each draft and stretched it
+// from ~3.4 to 4-6 ms (EXL3-4.05bpw over 9 GPUs, nsys).  STRATA_GLM_DFLASH_PRIO=0: an ordinary stream (A/B)
 cudaStream_t GlmDflash::stream() {
     if (d_->ds == nullptr) {
         int cur = 0;
         cudaGetDevice(&cur);
         cudaSetDevice(d_->dev);
-        if (cudaStreamCreateWithFlags(&d_->ds, cudaStreamNonBlocking) != cudaSuccess) {
+        static const bool prio = [] {
+            const char* v = getenv("STRATA_GLM_DFLASH_PRIO");
+            return v == nullptr || std::atoi(v) != 0;
+        }();
+        int least = 0, greatest = 0;
+        if (!prio || cudaDeviceGetStreamPriorityRange(&least, &greatest) != cudaSuccess) {
+            cudaGetLastError();
+            greatest = least = 0;
+        }
+        if (cudaStreamCreateWithPriority(&d_->ds, cudaStreamNonBlocking, greatest) != cudaSuccess) {
             cudaGetLastError();
             d_->ds = nullptr;
         }
@@ -1078,6 +1111,30 @@ bool GlmDflash::inject(int64_t lo, int64_t hi, cudaStream_t s, std::string& err)
     const uint32_t full = m.K >= 32 ? 0xffffffffu : (1u << m.K) - 1u;
     const int KE = m.K * m.E, kvd = m.n_kv * kHeadDim;
     cudaSetDevice(m.dev);
+    // on a stream of its own, after the drafter's: the next draft's first layer runs beside it, each layer's attention
+    // waiting for that layer's context rows (ev_kv).  STRATA_GLM_DFLASH_INJ_OVERLAP=0: on `s` (A/B)
+    static const bool ovl = [] {
+        const char* v = getenv("STRATA_GLM_DFLASH_INJ_OVERLAP");
+        return v == nullptr || std::atoi(v) != 0;
+    }();
+    if (ovl && m.is == nullptr) {
+        int least = 0, greatest = 0;
+        if (cudaDeviceGetStreamPriorityRange(&least, &greatest) != cudaSuccess) greatest = 0;
+        bool ok = cudaStreamCreateWithPriority(&m.is, cudaStreamNonBlocking, greatest) == cudaSuccess &&
+                  cudaEventCreateWithFlags(&m.ev_s, cudaEventDisableTiming) == cudaSuccess;
+        m.ev_kv.assign((size_t) m.n_layer, nullptr);
+        for (auto& e : m.ev_kv) ok = ok && cudaEventCreateWithFlags(&e, cudaEventDisableTiming) == cudaSuccess;
+        if (!ok) {
+            cudaGetLastError();
+            m.is = nullptr;
+        }
+    }
+    const cudaStream_t ws = s;
+    if (ovl && m.is != nullptr) {
+        cudaEventRecord(m.ev_s, ws);
+        cudaStreamWaitEvent(m.is, m.ev_s, 0);
+        s = m.is;
+    }
     // the runs of consecutive positions to take: staged in full, not in the ring yet
     std::vector<std::pair<int64_t, int64_t>> runs;
     {
@@ -1105,6 +1162,8 @@ bool GlmDflash::inject(int64_t lo, int64_t hi, cudaStream_t s, std::string& err)
                 return false;
             i += len;
         }
+        // (the positions first: a draft's attention of a layer reads them once that layer's rows are in)
+        kv_pos_kernel<<<(n + 127) / 128, 128, 0, s>>>(p0, n, m.ring, m.kv_pos);
         gf::quantize_q8_1(m.feat, m.fq, n * KE, s);
         if (!mv_cols({m.fc.w, m.fq, nullptr, m.g, nullptr, 1.0f, m.fc.type, KE, m.E}, n, m.q8(KE), 0, m.E, s)) {
             err = "glm dflash: fc";
@@ -1123,10 +1182,11 @@ bool GlmDflash::inject(int64_t lo, int64_t hi, cudaStream_t s, std::string& err)
                                                                            m.rope_base);
             const size_t lay = (size_t) il * m.ring * kvd;
             kv_store_kernel<<<n, 256, 0, s>>>(m.kc, m.vc, kvd, p0, m.ring, m.Kr + lay, m.Vr + lay);
+            if (s != ws) cudaEventRecord(m.ev_kv[(size_t) il], s);
         }
-        kv_pos_kernel<<<(n + 127) / 128, 128, 0, s>>>(p0, n, m.ring, m.kv_pos);
         for (int i = 0; i < n; ++i) m.kv_pos_h[(size_t) ((p0 + i) % m.ring)] = p0 + i;
     }
+    if (s != ws && !runs.empty()) m.inj_pending = true;
     if (!ck(cudaGetLastError(), "inject", err)) return false;
     return true;
 }
@@ -1213,6 +1273,7 @@ bool GlmDflash::draft_start(int32_t anchor, int64_t n_past, int n_max, float p_m
                                                                         m.rope_base);
         if (il == 0) dump("q0", m.q, (size_t) B * qd, s), dump("k0", m.kb, (size_t) B * kvd, s), dump("v0", m.vb, (size_t) B * kvd, s);
         const size_t lay = (size_t) il * m.ring * kvd;
+        if (m.inj_pending) cudaStreamWaitEvent(s, m.ev_kv[(size_t) il], 0);   // (this layer's context rows: inject)
         if (split) {
             attn_split_kernel<<<dim3(m.n_kv, splits), 256, 0, s>>>(m.q, m.Kr + lay, m.Vr + lay, m.kv_pos, m.kb, m.vb,
                                                                   B, m.n_head, m.n_kv, n_past, m.ring, m.window, scale,
@@ -1248,11 +1309,19 @@ bool GlmDflash::draft_start(int32_t anchor, int64_t n_past, int n_max, float p_m
         add_kernel<<<(B * E + 255) / 256, 256, 0, s>>>(m.h, m.xc, B * E);
         if (il == 0) dump("l0", m.h, (size_t) B * E, s);
     }
+    m.inj_pending = false;
     // the mask rows' final norm, the target's head, the selector's gate, the candidates and the walk
     const int n = B - 1;
     rms_rows_kernel<<<n, 256, 0, s>>>(m.h + E, E, m.out_norm, m.eps, E, m.x, E);
     gf::quantize_q8_1(m.x, m.xq, n * E, s);
-    gf::MvJob jh{head.q, m.xq, m.x, m.logits, nullptr, 1.0f, head.type, E, m.V};
+    // the head split (split_head): the helper's columns there while this half runs here, each side its slices' top k
+    Impl::HeadSplit& hs = m.hs;
+    const int slice = (m.V + kTopKSlices - 1) / kTopKSlices;
+    const int s_lo = hs.lo != nullptr ? hs.c0 / slice : 0, s_hi = kTopKSlices - s_lo;
+    const size_t cand_n = (size_t) n * s_hi * m.top_k;
+    const bool hsplit = hs.lo != nullptr && n <= hs.rows && hs.c0 % slice == 0 && s_lo > 0 && s_lo < kTopKSlices &&
+                       cand_n * (sizeof(int) + sizeof(float)) <= hs.cand_bytes;
+    gf::MvJob jh{hsplit ? hs.lo->q : head.q, m.xq, m.x, m.logits, nullptr, 1.0f, head.type, E, hsplit ? hs.c0 : m.V};
     if (head.type == 0) jh.w = head.f32;
     jh.ncol = n;
     m.head_type = head.type;
@@ -1286,8 +1355,30 @@ bool GlmDflash::draft_start(int32_t anchor, int64_t n_past, int n_max, float p_m
             jh.approx = m.head_mma == 1;
         }
     }
+    bool hi_ok = true;
+    if (hsplit) {
+        const int nc = m.V - hs.c0;
+        cudaMemcpyAsync(hs.x_h, m.x, (size_t) n * E * sizeof(float), cudaMemcpyDeviceToHost, s);
+        cudaEventRecord(hs.ev_x, s);
+        cudaSetDevice(hs.dev);
+        cudaStreamWaitEvent(hs.s, hs.ev_x, 0);
+        cudaMemcpyAsync(hs.x, hs.x_h, (size_t) n * E * sizeof(float), cudaMemcpyHostToDevice, hs.s);
+        gf::MvJob jx{hs.hi->q, nullptr, hs.x, hs.lg, nullptr, 1.0f, hs.hi->type, E, nc};
+        jx.ncol = n;
+        jx.approx = jh.approx;
+        jx.xf_cstride = E;
+        jx.y_cstride = nc;
+        hi_ok = gf::mv(&jx, 1, hs.s);
+        int* cid = (int*) hs.cand;
+        float* cv = (float*) (cid + cand_n);
+        topk_part_kernel<<<dim3(s_hi, n), 256, (size_t) slice * sizeof(float), hs.s>>>(hs.lg, nc, m.top_k, slice, cid, cv,
+                                                                                       s_hi, hs.c0);
+        cudaMemcpyAsync(hs.cand_h, hs.cand, cand_n * (sizeof(int) + sizeof(float)), cudaMemcpyDeviceToHost, hs.s);
+        cudaEventRecord(hs.ev_c, hs.s);
+        cudaSetDevice(m.dev);
+    }
     if (timed) cudaEventRecord(m.head_ev[0], s);
-    const bool head_ok = gf::mv(&jh, 1, s);
+    const bool head_ok = gf::mv(&jh, 1, s) && hi_ok;
     if (timed) cudaEventRecord(m.head_ev[1], s);
     m.head_timed = timed;
     gf::MvJob jg = cols(job(m.sel_hidden, m.xq, m.sg), n, m.q8(E), m.rank);
@@ -1295,9 +1386,18 @@ bool GlmDflash::draft_start(int32_t anchor, int64_t n_past, int n_max, float p_m
         err = "glm dflash: the head / the selector gate (head type " + std::to_string(head.type) + ")";
         return false;
     }
-    const int slice = (m.V + kTopKSlices - 1) / kTopKSlices;
-    topk_part_kernel<<<dim3(kTopKSlices, n), 256, (size_t) slice * sizeof(float), s>>>(m.logits, m.V, m.top_k, slice,
-                                                                                       m.part_id, m.part_lg);
+    topk_part_kernel<<<dim3(hsplit ? s_lo : kTopKSlices, n), 256, (size_t) slice * sizeof(float), s>>>(
+        m.logits, m.V, m.top_k, slice, m.part_id, m.part_lg, kTopKSlices, 0);
+    if (hsplit) {   // the helper's slices' candidates beside this half's (rows kTopKSlices x top_k apart)
+        const int* cid = (const int*) hs.cand_h;
+        const float* cv = (const float*) (cid + cand_n);
+        const size_t w = (size_t) s_hi * m.top_k, pitch = (size_t) kTopKSlices * m.top_k, off = (size_t) s_lo * m.top_k;
+        cudaStreamWaitEvent(s, hs.ev_c, 0);
+        cudaMemcpy2DAsync(m.part_id + off, pitch * sizeof(int), cid, w * sizeof(int), w * sizeof(int), (size_t) n,
+                          cudaMemcpyHostToDevice, s);
+        cudaMemcpy2DAsync(m.part_lg + off, pitch * sizeof(float), cv, w * sizeof(float), w * sizeof(float), (size_t) n,
+                          cudaMemcpyHostToDevice, s);
+    }
     topk_merge_kernel<<<n, 32, (size_t) kTopKSlices * m.top_k * (sizeof(float) + sizeof(int)), s>>>(
         m.part_id, m.part_lg, m.top_k, m.sel_id, m.sel_lg);
     walk_kernel<<<1, m.rank, 0, s>>>(m.sel_id, m.sel_lg, m.sg, m.top_k, m.rank, m.sel_prev, m.sel_next, m.sel_type,
@@ -1344,6 +1444,45 @@ bool GlmDflash::draft_finish(std::vector<int32_t>& out, std::string& err, std::v
     return true;
 }
 
+bool GlmDflash::split_head(const WSlot* lo, const WSlot* hi, int c0, int hdev, cudaStream_t hs, float* hx, float* hlg,
+                           void* hcand, size_t cand_bytes, int rows, std::string& err) {
+    Impl& m = *d_;
+    const char* v = getenv("STRATA_GLM_DFLASH_HEAD_SPLIT");
+    if (lo == nullptr || hi == nullptr || hs == nullptr || hx == nullptr || hlg == nullptr || hcand == nullptr ||
+        (v != nullptr && std::atoi(v) == 0))
+        return true;
+    Impl::HeadSplit& h = m.hs;
+    cudaSetDevice(m.dev);
+    if (cudaHostAlloc((void**) &h.x_h, (size_t) rows * m.E * sizeof(float), cudaHostAllocPortable) != cudaSuccess ||
+        cudaHostAlloc(&h.cand_h, cand_bytes, cudaHostAllocPortable) != cudaSuccess ||
+        cudaEventCreateWithFlags(&h.ev_x, cudaEventDisableTiming) != cudaSuccess) {
+        cudaGetLastError();
+        err = "glm dflash: the head split's pinned rows did not allocate";
+        return false;
+    }
+    cudaSetDevice(hdev);
+    const bool ok = cudaEventCreateWithFlags(&h.ev_c, cudaEventDisableTiming) == cudaSuccess;
+    cudaSetDevice(m.dev);
+    if (!ok) {
+        cudaGetLastError();
+        err = "glm dflash: the head split's event";
+        return false;
+    }
+    h.lo = lo;
+    h.hi = hi;
+    h.c0 = c0;
+    h.dev = hdev;
+    h.s = hs;
+    h.x = hx;
+    h.lg = hlg;
+    h.cand = hcand;
+    h.cand_bytes = cand_bytes;
+    h.rows = rows;
+    std::fprintf(stderr, "glm dflash: a draft's head reads columns [0, %d) on CUDA%d and the rest on CUDA%d at once\n", c0,
+                 m.dev, hdev);
+    return true;
+}
+
 bool GlmDflash::draft(int32_t anchor, int64_t n_past, int n_max, float p_min, const WSlot& head, const uint8_t* emb,
                       int emb_type, cudaStream_t s, std::vector<int32_t>& out, std::string& err,
                       std::vector<float>* conf) {
@@ -1368,6 +1507,59 @@ bool GlmDflash::last_rows(int n, std::vector<float>& hidden, std::vector<int>& c
            cudaMemcpy(pick.data(), m.tok, pick.size() * sizeof(int), cudaMemcpyDeviceToHost) == cudaSuccess &&
            cudaMemcpy(conf.data(), m.conf, conf.size() * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess;
 }
+
+namespace {
+// decode_dflash's next-round draft queued from a thread of its own (kick), waited for at the top of the round (wait)
+struct DraftAhead {
+    std::thread th;
+    std::mutex mu;
+    std::condition_variable cv;
+    std::function<bool(std::string&)> job;
+    bool has = false, quit = false, done = true, ok = true;
+    std::string err;
+    void kick(std::function<bool(std::string&)> f) {
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            if (!th.joinable()) th = std::thread([this] { loop(); });
+            job = std::move(f);
+            has = true;
+            done = false;
+        }
+        cv.notify_all();
+    }
+    bool wait(std::string& e) {
+        std::unique_lock<std::mutex> lk(mu);
+        cv.wait(lk, [&] { return done; });
+        if (!ok) e = err;
+        return ok;
+    }
+    void loop() {
+        std::unique_lock<std::mutex> lk(mu);
+        for (;;) {
+            cv.wait(lk, [&] { return quit || has; });
+            if (!has) return;
+            auto f = std::move(job);
+            has = false;
+            lk.unlock();
+            std::string e;
+            const bool r = f(e);
+            lk.lock();
+            ok = r;
+            err = e;
+            done = true;
+            cv.notify_all();
+        }
+    }
+    ~DraftAhead() {
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            quit = true;
+        }
+        cv.notify_all();
+        if (th.joinable()) th.join();
+    }
+};
+}  // namespace
 
 // ---------------------------------------------------------------- the trunk's side (Glm5Model members)
 bool Glm5Model::dflash_load(const std::string& path, int dev, std::string& err) {
@@ -1423,6 +1615,18 @@ bool Glm5Model::dflash_bind(std::string& err) {
                 return false;
             }
         }
+    }
+    // the drafts' head on the head split too: its helper idles while the drafter runs (the round's anchor is on the
+    // first parts then)
+    if (tail->head_split_ready()) {
+        Glm5Model* h = tail->head_helper_;
+        const auto lo = tail->ws_map_.find("output.weight.lo");
+        const auto hi = h->ws_map_.find("output.weight.hi");
+        if (lo != tail->ws_map_.end() && hi != h->ws_map_.end() &&
+            !D->split_head(&lo->second, &hi->second, tail->head_c0_, h->dev_, h->hd_s_, h->hd_x_, h->hd_lg_,
+                           h->hd_cand_, kHdCandBytes, kWinMax, err))
+            return false;
+        cudaSetDevice(dev_);
     }
     // a two-GPU split's batched window (dflash_pipelined): each part's window layer on both parts' CPU pools - the
     // other part's pool idles while the window is on this one (STRATA_GLM_WIN_LANES=0: its own only)
@@ -1498,6 +1702,18 @@ bool Glm5Model::decode_dflash(strata::kernels::SamplerParams& sp, int64_t max_ne
     n_max = std::max(1, std::min({n_max, D.block() - 1, kWinMax - 1}));
     const WSlot& head = tail->ws_map_.at("output.weight");
     static const bool prof = getenv("STRATA_GLM_DFLASH_PROF") != nullptr;
+    // STRATA_GLM_DFLASH_TL=<file>: a line a pipelined round - ms from its anchor's start: drafts ready, drafts pushed,
+    // each pick (the tokens out of the last part), the commit done
+    static FILE* tl = [] {
+        const char* f = getenv("STRATA_GLM_DFLASH_TL");
+        return f != nullptr && f[0] ? std::fopen(f, "a") : nullptr;
+    }();
+    auto t_anchor = std::chrono::steady_clock::now();
+    std::vector<double> tl_pick;
+    double tl_begun = 0, tl_inj = 0, tl_ds = 0;   // the anchor's begin returned, inject queued, draft queued
+    const auto ms_since = [](std::chrono::steady_clock::time_point a) {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a).count();
+    };
     double t_draft = 0, t_win = 0, t_rest = 0;
     double ph_begin = 0, ph_dwait = 0, ph_push = 0, ph_end = 0;   // the pipelined rounds' host phases
     bool begun = false;              // the pipelined window's anchor already queued (at the end of the last round)
@@ -1570,6 +1786,7 @@ bool Glm5Model::decode_dflash(strata::kernels::SamplerParams& sp, int64_t max_ne
     // way out, an error's too
     const auto drain = [&] {
         if (!pipe) return;
+        win_commit_wait();
         for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) {
             cudaSetDevice(m->dev_);
             cudaStreamSynchronize(m->fast_->cs);
@@ -1582,6 +1799,16 @@ bool Glm5Model::decode_dflash(strata::kernels::SamplerParams& sp, int64_t max_ne
         const std::function<void()> f;
         ~Drain() { f(); }
     } drain_on_exit{drain};
+    // the pipelined window: the next round's injection and draft queued from a thread of their own as soon as the
+    // round's last pick is in, beside the commit and the next anchor's begin here (their ~1.3 ms of launches were
+    // behind those, the drafter's GPU idle meanwhile).  STRATA_GLM_DFLASH_AHEAD=0: at the top of the round (A/B).
+    // (Declared after drain_on_exit: its job is done before the streams are drained.)
+    static const bool ahead_on = [] {
+        const char* v = getenv("STRATA_GLM_DFLASH_AHEAD");
+        return v == nullptr || std::atoi(v) != 0;
+    }();
+    DraftAhead ahead;
+    bool ahead_queued = false;
     uint64_t rng = 0x9e3779b97f4a7c15ull ^ (uint64_t) pos_;
     for (;;) {
         const int64_t N = pos_;
@@ -1601,16 +1828,27 @@ bool Glm5Model::decode_dflash(strata::kernels::SamplerParams& sp, int64_t max_ne
         // previous one's late tokens without waiting for the devices; every 8th waits, so the tiers' boundary runs
         // even when no window finds the devices idle
         const auto hp0 = std::chrono::steady_clock::now();
-        if (pipe && !begun && !win_pipe_begin(y, err, &sp, rounds % 8 == 0)) return false;
-        begun = false;
-        if (inj_hi > inj_lo) {
-            cudaSetDevice(tail->dev_);
-            if (!D.inject(inj_lo, inj_hi, ts, err)) return false;
-            inj_lo = inj_hi = 0;
+        if (pipe && !begun) {
+            t_anchor = std::chrono::steady_clock::now();
+            if (!win_pipe_begin(y, err, &sp, rounds % 8 == 0)) return false;
         }
-        if (room > 0 && !D.draft_start(y, N, explore ? D.block() - 1 : room, explore ? 0.0f : p_min, head,
-                                       pack_emb_src_, pack_emb_type_, ts, err))
-            return false;
+        begun = false;
+        if (ahead_queued) {   // (queued at the end of the last round)
+            ahead_queued = false;
+            if (!ahead.wait(err)) return false;
+            if (tl != nullptr) tl_inj = tl_ds = ms_since(t_anchor);
+        } else {
+            if (inj_hi > inj_lo) {
+                cudaSetDevice(tail->dev_);
+                if (!D.inject(inj_lo, inj_hi, ts, err)) return false;
+                inj_lo = inj_hi = 0;
+            }
+            if (tl != nullptr) tl_inj = ms_since(t_anchor);
+            if (room > 0 && !D.draft_start(y, N, explore ? D.block() - 1 : room, explore ? 0.0f : p_min, head,
+                                           pack_emb_src_, pack_emb_type_, ts, err))
+                return false;
+            if (tl != nullptr) tl_ds = ms_since(t_anchor);
+        }
         const auto hp1 = std::chrono::steady_clock::now();
         if (!D.draft_finish(d, err, stats != nullptr ? &conf : nullptr, explore ? 0 : n_min, explore ? 0.0f : p_cum))
             return false;
@@ -1663,10 +1901,14 @@ bool Glm5Model::decode_dflash(strata::kernels::SamplerParams& sp, int64_t max_ne
             for (int i = 1; i < T; ++i)
                 if (!win_pipe_push(tok[(size_t) i], err)) return false;
             const auto hq1 = std::chrono::steady_clock::now();
+            const double tl_ready = std::chrono::duration<double, std::milli>(hq0 - t_anchor).count();
+            const double tl_pushed = std::chrono::duration<double, std::milli>(hq1 - t_anchor).count();
+            tl_pick.clear();
             // the picks as their tokens come out of the last part, up to the first that is not the next draft: the
             // tokens after it are still in flight, and the commit and the next window queue behind them
             for (int t = 0; t < T; ++t) {
                 if (!win_pipe_pick(t, out[(size_t) t], err)) return false;
+                if (tl != nullptr) tl_pick.push_back(ms_since(t_anchor));
                 if (t + 1 >= T) break;
                 if (tok[(size_t) t + 1] != out[(size_t) t]) {
                     win_pipe_cancel_from(t + 1);   // the drafts after it: their work still queued is skipped
@@ -1674,6 +1916,14 @@ bool Glm5Model::decode_dflash(strata::kernels::SamplerParams& sp, int64_t max_ne
                 }
             }
             if (!win_pipe_settle(err)) return false;
+            if (tl != nullptr) {
+                const auto b0 = win_pipe_begun_at(0), bl = win_pipe_begun_at(n_parts_ - 1);
+                std::fprintf(tl, "%d %.3f %.3f %.3f %.3f %.3f %.3f %.3f |", T - 1, tl_ready, tl_pushed, tl_begun, tl_inj,
+                             tl_ds, std::chrono::duration<double, std::milli>(b0 - t_anchor).count(),
+                             std::chrono::duration<double, std::milli>(bl - t_anchor).count());
+                for (const double v : tl_pick) std::fprintf(tl, " %.3f", v);
+                std::fprintf(tl, "\n");
+            }
             if (prof) {
                 ph_push += std::chrono::duration<double, std::milli>(hq1 - hq0).count();
                 ph_pushed += T - 1;
@@ -1715,7 +1965,28 @@ bool Glm5Model::decode_dflash(strata::kernels::SamplerParams& sp, int64_t max_ne
         }
         const int keep = 1 + kept;
         const int y2 = forced(out[(size_t) keep - 1]);
-        if (!window_commit(keep, err)) return false;
+        if (pipe && more && ahead_on) {   // the next round's injection and draft (see ahead)
+            const int64_t N2 = N + keep;
+            const int room2 = (int) std::min<int64_t>(n_max, max_ctx_ - N2 - 1);
+            const int nd2 = explore ? D.block() - 1 : room2;
+            const float pm2 = explore ? 0.0f : p_min;
+            const int dev_t = tail->dev_;
+            const uint8_t* emb = pack_emb_src_;
+            const int emb_type = pack_emb_type_;
+            ahead.kick([&D, &head, ts, dev_t, N, N2, room2, nd2, pm2, y2, emb, emb_type](std::string& e) {
+                cudaSetDevice(dev_t);
+                if (!D.inject(N, N2, ts, e)) return false;
+                return room2 <= 0 || D.draft_start(y2, N2, nd2, pm2, head, emb, emb_type, ts, e);
+            });
+            ahead_queued = true;
+        }
+        // (the pipelined window: the parts' commit enqueues not waited for - the next anchor's begin queues behind each
+        //  on its crew thread; STRATA_GLM_WIN_COMMIT_WAIT=1: waited for, A/B)
+        static const bool commit_wait = [] {
+            const char* v = getenv("STRATA_GLM_WIN_COMMIT_WAIT");
+            return v != nullptr && std::atoi(v) != 0;
+        }();
+        if (!window_commit(keep, err, !pipe || commit_wait || !more)) return false;
         if (!pipe) {
             cudaSetDevice(tail->dev_);
             if (!D.inject(N, N + keep, ts, err)) return false;
@@ -1729,14 +2000,18 @@ bool Glm5Model::decode_dflash(strata::kernels::SamplerParams& sp, int64_t max_ne
         y = y2;
         if (pipe) {
             // the next window's anchor now, behind the commit; the drafter's catch-up at the top of the round
+            if (tl != nullptr) std::fprintf(tl, "c %.3f\n", ms_since(t_anchor));
+            t_anchor = std::chrono::steady_clock::now();
             if (!win_pipe_begin(y, err, &sp, (rounds % 8) == 0)) return false;
+            if (tl != nullptr) tl_begun = ms_since(t_anchor);
             begun = true;
-            inj_lo = N;
-            inj_hi = N + keep;
+            inj_lo = ahead_queued ? 0 : N;   // (the thread took them)
+            inj_hi = ahead_queued ? 0 : N + keep;
         }
     }
     cudaSetDevice(dev_);
     if (stats != nullptr) std::fflush(stats);
+    if (tl != nullptr) std::fflush(tl);
     win_prof_report();
     if (prof && rounds > 0)
         std::fprintf(stderr, "glm dflash prof (%lld rounds, %lld of them no draft: %.2f drafts, %.2f accepted a round): "
