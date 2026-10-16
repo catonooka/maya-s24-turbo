@@ -4,6 +4,19 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.14 - 2026-10-16
+
+NVIDIA Pascal cards as experimental, and unsloth's Q6_K_XL / Q8_0 GGUFs of GLM-5.3-Flash.
+
+- **NVIDIA Pascal, experimental** (#214 by @Jw88888, #212). The engine builds for compute capability 6.x - Tesla P40
+  / P100, GTX 10 - and the setup accepts these cards, with a note that Maya has not been validated on them yet. On
+  Pascal the engine caches global loads in L1 (`-Xptxas -dlcm=ca`), which its decode needs there: two Tesla P40s
+  decode Maya-S24 at 28 tokens/s, with the same answers. Like the V100, Pascal needs CUDA 12.x.
+- **unsloth's Q6_K_XL and Q8_0 GGUFs** (#216 by @Xar1c). unsloth's UD-Q6_K_XL and Q8_0 quants of GLM-5.3-Flash keep
+  some layers' routed experts at Q8_0, and the engine stopped at start with `unresolved weights`. They run now.
+
+NVIDIA GPUs of compute capability 7.0 and newer give v1.1.13's tokens.
+
 ## v1.1.13 - 2026-10-16
 
 Faster decode where experts are fetched, a fix for long prompts on a Windows Strix Halo, a new chat with the same system
