@@ -81,6 +81,24 @@ if(STRATA_ENABLE_CUDA)
     endif()
   endforeach()
   message(STATUS "Strata: CUDA enabled, arch ${CMAKE_CUDA_ARCHITECTURES}")
+  # Pascal (sm_6x - a "native" build on a Tesla P40, as maya.py's arch_setting() asks for below sm_75): GP102 / GP104
+  # cache global loads in L2 only unless the code is compiled to cache them in L1 as well, and the decode's GEMVs - many
+  # small loads of weights, scales and the q8_1 activations every warp of a block reads - starve there (Maya-L's Q6_K
+  # dense GEMV ran at a quarter of a P40's bandwidth or less).  -dlcm=ca caches them in L1, as Volta and newer do by
+  # default: two P40s, decode 9.7 -> 16.9 tok/s with Maya-L and 9.4 -> 28.0 with Maya-S24, the same answers (#212).
+  # A build for sm_70 and newer only is unchanged.
+  set(_strata_archs "${CMAKE_CUDA_ARCHITECTURES}")
+  if(_strata_archs MATCHES "native")
+    set(_strata_archs "${CMAKE_CUDA_ARCHITECTURES_NATIVE}")
+  endif()
+  foreach(_a IN LISTS _strata_archs)
+    string(REGEX REPLACE "-.*$" "" _base "${_a}")
+    if(_base MATCHES "^6[0-9]$")
+      string(APPEND CMAKE_CUDA_FLAGS " -Xptxas -dlcm=ca")
+      message(STATUS "Strata: Pascal (sm_${_base}): global loads cached in L1 (-Xptxas -dlcm=ca)")
+      break()
+    endif()
+  endforeach()
   # CMake links CUDA code with the static runtime (CMAKE_CUDA_RUNTIME_LIBRARY's default); on Windows the same runtime
   # must be named here too - MSVC's linker refuses cudart_static.lib and cudart.lib (the DLL's) in one program,
   # where Linux's takes the first of the duplicates
