@@ -3545,7 +3545,9 @@ __global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_c
                         ++navail;
                         if (first < 0) first = j;
                     }
-                if (navail < 2) break;
+                // deep prefetch (local): with N>2, use the reserved spare too - a rank-1..4 wrong
+                // guess costs one copy, and depth is the point of the mode
+                if (navail < (a.max_pf > 2 ? 1 : 2)) break;
                 const unsigned long long dst = sp1[first];
                 sp1[first] = 0ull;
                 a.d.tab[key] = dst;
@@ -3694,6 +3696,21 @@ __global__ void __launch_bounds__(256) moe_fetch_kernel(MoeDev d, int k, size_t 
         for (size_t j = blockIdx.x * (size_t) blockDim.x + threadIdx.x; j < n16; j += (size_t) gridDim.x * blockDim.x)
             t[j] = s[j];
     }
+}
+
+// wide-fetch variant (local): 32-byte vector loads + #pragma unroll 4, one expert per block group.
+// Same link, same bytes - wider transactions and unrolled stride can push closer to the 12.5 GB/s
+// per-link ceiling than the scalar grid-stride loop when several experts stream back to back.
+__global__ void __launch_bounds__(256) moe_fetch_kernel_wide(MoeDev d, int k, size_t n16) {
+    const int expert = blockIdx.y;
+    if (expert >= k) return;
+    const unsigned long long src = d.fetch_src[expert];
+    if (src == 0ull) return;
+    const ulonglong4* s = (const ulonglong4*) src;   // 32 B a load
+    ulonglong4* t = (ulonglong4*) d.plan_ptr[expert];
+    const size_t n32 = n16 / 2 + (n16 & 1);
+    for (size_t j = blockIdx.x * (size_t) blockDim.x + threadIdx.x; j < n32; j += (size_t) gridDim.x * blockDim.x)
+        t[j] = s[j];
 }
 
 constexpr int GU_ROWS = 32;   // h values (gate rows = up rows) per block: one q8_1 block of h
@@ -5143,6 +5160,17 @@ void moe_fetch(const MoeDev& d, int k, size_t blob_bytes, cudaStream_t s) {
         cudaGetDevice(&dev);
         cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev);
         if (sms <= 0) sms = 80;
+    }
+    // wide-fetch (local): STRATA_GLM_FETCH_WIDE=1 - 32 B loads, expert-parallel block groups
+    static const bool wide = [] {
+        const char* v = getenv("STRATA_GLM_FETCH_WIDE");
+        return v != nullptr && std::atoi(v) != 0;
+    }();
+    if (wide) {
+        dim3 grid(sms, k);
+        moe_fetch_kernel_wide<<<grid, 256, 0, s>>>(d, k, (blob_bytes + 15) / 16);
+        launch_check("moe_fetch_wide");
+        return;
     }
     moe_fetch_kernel<<<sms, 256, 0, s>>>(d, k, (blob_bytes + 15) / 16);
     launch_check("moe_fetch");
