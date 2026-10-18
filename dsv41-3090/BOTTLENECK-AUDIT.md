@@ -1,5 +1,22 @@
 # DSV41 Flash EXL3-2.9bpw — bottleneck audit & 50 t/s roadmap (2026-10-18)
 
+## EP2 FINAL RESULT (2026-10-18 late)
+**EP2 BOOTS AND IS CORRECT** (17*19=323, both selftests 0.0037) after 3 patches
+(see patches/exl3-ep2.py + patches/engram_disk-ep2.py):
+1. engram_disk.py: allow TP2 (assert ws in (1,2))
+2. exl3.py: clamp host-plan cold list to local expert count under EP (fixes OOM: 197G→~100G/rank)
+3. exl3.py: ReplicatedLinear (engram.wkv) loads full width; expert weights skip width-narrowing under EP
+
+BUT: aggregate throughput plateaus ~11 t/s (7.1 single-stream, 10.9-10.8 at N=8/16) —
+the per-layer all-to-all dispatch (NCCL over NVLink) serializes; bandwidth win is canceled
+by latency at decode batch sizes. Same ceiling as single-GPU, worse per-stream latency.
+
+## Verdict on both-cards paths (all measured, none reach 50 t/s aggregate)
+- Single GPU0 (best): 11.75 t/s single-stream, aggregate ~11 at any N
+- EP2 (both cards): ~11 t/s aggregate ceiling, 7.1 single-stream
+- TP2: impossible (svh pack-layout mismatch, hard error)
+- Dual instances: impossible (2x197G > 247G RAM)
+
 ## Measured bottlenecks (single GPU0, best config)
 | # | Component | Measurement | Verdict |
 |---|-----------|-------------|---------|
