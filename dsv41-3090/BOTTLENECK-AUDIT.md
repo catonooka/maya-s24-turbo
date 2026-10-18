@@ -17,7 +17,26 @@ by latency at decode batch sizes. Same ceiling as single-GPU, worse per-stream l
 - TP2: impossible (svh pack-layout mismatch, hard error)
 - Dual instances: impossible (2x197G > 247G RAM)
 
-## Measured bottlenecks (single GPU0, best config)
+## PP2 (pipeline split) — BLOCKED BY ARCHITECTURE (2026-10-18 final attempt)
+vLLM multiproc PP2 boots model weights fine (5-6.8G/rank, both ranks load) but dies in
+`initialize_kv_cache` with StopIteration: DSV41 uses cross-layer KV sharing
+(kv_source_layer_ids [2,8,14,20], index_source [2,8,14,20,24,28,32,36], candidate 20,
+engram layers [1,14]). Sharing groups span any 20/20 pipeline cut, so no clean boundary
+exists. This is exactly what maya's strata engine solved with its custom layer-split +
+boundary hop for GLM; vllm_exl3 has no equivalent.
+
+## Both-cards campaign FINAL STATE
+| Topology | Result |
+|---|---|
+| TP2 | impossible: svh pack-layout width-shard error |
+| EP2 | WORKS (3 patches, quality verified) but ~11 t/s aggregate ceiling — all-to-all latency |
+| PP2 | impossible: cross-layer KV sharing spans any cut |
+| Dual instances | impossible: 2x197G pinned > 247G RAM |
+| Single GPU0 | BEST: 11.75 t/s single-stream, ~11 aggregate, 375 t/s prefill |
+
+The only remaining path to >2x: expert-union dedup across batched tokens in the fused MoE
+gather (kernel work in vllm_exl3), or a maya-strata-style custom engine for DSV41.
+
 | # | Component | Measurement | Verdict |
 |---|-----------|-------------|---------|
 | 1 | PCIe link (host→GPU) | 17.5 GB/s burst, ~12.5 GB/s step-avg; ~9.8 GiB/token streamed | THE wall: ~1.45 GB/token → 85 ms step |
