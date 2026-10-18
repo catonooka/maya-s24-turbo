@@ -29,8 +29,14 @@ aria2 16-conn at 23 MB/s + verify + docker load; single docker pull crawled 0.7 
 | first boot | 5.4 | CPU tier silent: only 35/40 layers registered (K2 layers bail) but DSV41_CT_LAYERS=40 default never reached `start()` |
 | `--cpus 30` | 5.4 | docker CPU quota was NOT the bottleneck |
 | `DSV41_CT_LAYERS=35` | 8.5 | CPU tier + EC live |
-| after EC warm | 11.0 | best so far |
+| after EC warm | 11.0 | EC 506 slots x 12.7 MiB (margin 1500) |
+| EC margin 300 warm | 11.0-11.75 | EC 600 slots; hit rate 38.7% and rising; cpu tier: 3.1 cpu_experts/call, gpu_wait 0.77ms |
 | + DSpark k=3 spec | 5.3 | NET LOSS: MoE draft streams its own experts over PCIe; acceptance 1.8/step doesn't cover it. Reverted. |
+
+Prefill: ~375 tok/s (4k-token prompt, 8192 chunk, DMA staged + hybrid CPU tail).
+
+Live tier stats (step 700): calls 24360, hits 60339 (38.7%), misses 95591,
+cpu_experts 75178 (3.09/call), host_jobs 23680, gpu_wait_ms/call 0.765, timeouts 0.
 
 ## Root causes found
 - `ct/ct_vllm.py register()` skips layers with `_exl3_cold_k != 3`; our 5 K2 layers

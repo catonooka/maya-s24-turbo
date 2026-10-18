@@ -10,5 +10,5 @@ exec docker run -d --name dsv41 \
   -v /home/aisever/dsv41-cache:/root/.cache \
   -e DSV41_PACK=/models/DSV41-EXL3-3090-local \
   -e DSV41_CT_LAYERS=35 \
-  -e DSV41_CT_LOG_EVERY=100 \
+  -e DSV41_CT_LOG_EVERY=100 -e DSV41_EC_MARGIN_MB=300 \
   ghcr.io/0xsero/dsv41-flash-offload:d141-main "$@"
