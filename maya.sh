@@ -1,8 +1,7 @@
 #!/bin/sh
 # Project Maya for Linux: the first run checks the PC, compiles the engine, asks before it downloads the model, builds
 # the pack and starts the dashboard; later runs just start it.  ./maya.sh --help lists the options.
-# The Python bootstrap is Strata's setup.sh, except that nothing is installed system-wide: a missing Python is
-# reported with the command that installs it.
+# Nothing is installed system-wide: a missing Python is reported with the command that installs it.
 cd "$(dirname "$0")" || exit 1
 # Python 3.10+ that can make a venv WITH pip: Debian/Ubuntu ship `venv` without `ensurepip` (that is the separate
 # python3-venv package), and a venv made without it has no pip

@@ -213,6 +213,9 @@ button.gpurow__line:focus-visible { outline: 2px solid var(--st-accent); outline
 /* ---------------------------------------------------------------- monitor: metric grids */
 .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--st-s-4); }
 .metrics.metrics--tiers { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--st-s-3); }
+/* DeepSeek's four tiles: one row of four, two rows of two on narrow screens - never one left alone */
+.metrics.metrics--tiers.metrics--four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 820px) { .metrics.metrics--tiers.metrics--four { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .metrics--tiers .metric-card { background: var(--st-surface-2); box-shadow: none; border-color: var(--st-line-soft); padding: var(--st-s-3) var(--st-s-4); }
 .metrics--tiers .st-metric__value { font-size: var(--st-fs-xl); }
 .metric-card { padding: var(--st-s-4) var(--st-s-5); }

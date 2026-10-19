@@ -40,7 +40,7 @@ class PrefillConfigTests(unittest.TestCase):
                           ["token_embd.weight"] + [f"blk.{i}.ffn_norm.weight" for i in range(250)])
         for ctx in (
             patch.object(maya, "ROOT", self.root),
-            patch.object(maya, "EXE", self.root / "build/strata"),
+            patch.object(maya, "EXE", self.root / "build/maya"),
             patch.object(maya, "CAL_STORE", self.root / "calibration.json"),
             patch.object(maya, "WIN", False),
             patch.object(maya, "say"),
@@ -58,16 +58,16 @@ class PrefillConfigTests(unittest.TestCase):
         pc = {"gpus": [{"index": i, "name": "GPU", "vram_gb": 24} for i in gpus]}
         p = maya.write_config(self.a, pc, {}, self.model / "pack", "test", ctx, self.root / "models", None,
                               ("local", self.first))
-        return p, json.loads(p.read_text())["args"]
+        return p, maya.read_json(p)["args"]
 
     def test_tuned_settings_follow_a_new_context(self):
         # #57: tuned at 32K, a setup for 128K wrote the engine's own settings (half the speed there)
         p, _ = self.write([0])
-        store = {maya.hardware_key(json.loads(p.read_text())): {"settings": {"STRATA_GLM_PCIE_SHARE": "0.25"},
+        store = {maya.hardware_key(maya.read_json(p)): {"settings": {"STRATA_GLM_PCIE_SHARE": "0.25"},
                                                                   "date": "2026-10-09"}}
         maya.CAL_STORE.write_text(json.dumps(store))
         p, _ = self.write([0], 131072)
-        c = json.loads(p.read_text())
+        c = maya.read_json(p)
         self.assertEqual(c["env"]["STRATA_GLM_PCIE_SHARE"], "0.25")
         self.assertIsNone(maya.saved_calibration(c))                        # this context is not tuned itself
         self.assertEqual(maya.saved_calibration(c, any_context=True)["context"], 32768)
@@ -88,7 +88,7 @@ class PrefillConfigTests(unittest.TestCase):
             self.assertEqual(args[args.index("--prefill") + 1], "auto")
             p.unlink()
         p, args = self.write([0])
-        c = json.loads(p.read_text())
+        c = maya.read_json(p)
         c["args"][c["args"].index("--prefill") + 1] = "32768"  # a bigger chunk, set by hand
         p.write_text(json.dumps(c))
         _, again = self.write([0])
@@ -118,7 +118,7 @@ class PrefillConfigTests(unittest.TestCase):
             self.assertNotIn("--vram-reserve-mib", args)      # the engine's default unless asked for
             p.unlink()
         p, _ = self.write([0])
-        c = json.loads(p.read_text())
+        c = maya.read_json(p)
         c["args"][c["args"].index("--expert-cache") + 1] = "1200"
         c["args"] += ["--vram-reserve-later-mib", "300"]
         p.write_text(json.dumps(c))
@@ -144,14 +144,14 @@ class PrefillConfigTests(unittest.TestCase):
         drafter = self.root / "models" / "GLM-5.3-Flash-DFlash2" / maya.DFLASH["file"]
         p = maya.write_config(self.a, pc, {}, self.model / "pack", "test", 32768, self.root / "models", None,
                               ("local", self.first), drafter)
-        c = json.loads(p.read_text())
+        c = maya.read_json(p)
         self.assertEqual(c["args"][c["args"].index("--dflash") + 1], str(drafter))
         self.assertEqual(c["installer"]["draft"], "dflash2")
         key = maya.hardware_key(c)
         # the MTP block (the default): no --dflash, not even one kept from the config before
         p = maya.write_config(self.a, pc, {}, self.model / "pack", "test", 32768, self.root / "models", None,
                               ("local", self.first))
-        c = json.loads(p.read_text())
+        c = maya.read_json(p)
         self.assertNotIn("--dflash", c["args"])
         self.assertEqual(c["installer"]["draft"], "mtp")
         self.assertNotEqual(maya.hardware_key(c), key)
@@ -175,7 +175,7 @@ class PrefillConfigTests(unittest.TestCase):
             p.unlink()
         # what was set by hand (off, or a window of its own) is kept by a setup again
         p, _ = self.write([0], 131072)
-        c = json.loads(p.read_text())
+        c = maya.read_json(p)
         c["args"][c["args"].index("--kv-streaming") + 1] = "off"
         c["args"] += ["--kv-resident", "65536"]
         p.write_text(json.dumps(c))

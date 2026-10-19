@@ -8,18 +8,24 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstring>
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <thread>
 #include <vector>
 
-#include <pthread.h>
-#include <sched.h>
+#include "ds4_os.hpp"
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 
 namespace strata::ds4 {
 
 inline void cpu_relax() {
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(_MSC_VER)
+    _mm_pause();
+#elif defined(__x86_64__) || defined(_M_X64)
     __builtin_ia32_pause();
 #endif
 }
@@ -29,12 +35,7 @@ public:
     explicit Pool(int n, const std::vector<int>& cpus = {}, int spin_us = 200) : spin_us_(spin_us) {
         for (int i = 0; i < n; ++i) {
             th_.emplace_back([this] { loop(); });
-            if (!cpus.empty()) {
-                cpu_set_t set;
-                CPU_ZERO(&set);
-                CPU_SET(cpus[(size_t) i % cpus.size()], &set);
-                pthread_setaffinity_np(th_.back().native_handle(), sizeof(set), &set);
-            }
+            if (!cpus.empty()) os::pin_thread(th_.back(), cpus[(size_t) i % cpus.size()]);
         }
     }
     ~Pool() {
@@ -124,6 +125,96 @@ private:
     std::atomic<bool> quit_{false};
     std::mutex mu_;
     std::condition_variable cv_;
+};
+
+/// File reads on threads of their own, in the order they were pushed, the pusher never waiting: the prompt path's
+/// streamed experts (each part of an expert a job), unbuffered where the job has a direct descriptor and its range is
+/// not all in the page cache already (the disk straight into dst, the cache neither used nor disturbed), buffered
+/// otherwise or when the unbuffered read fails - the bytes land at dst + off % os::kDirectAlign either way.  A job's `left` is
+/// counted down when it is done (`bad` set if it failed); wait_any() sleeps until some job finished or the timeout.
+class IoQueue {
+public:
+    struct Job {
+        os::fd_t fd = os::kBadFd, dfd = os::kBadFd;
+        uint64_t off = 0, len = 0;
+        uint8_t* dst = nullptr;
+        std::atomic<int>* left = nullptr;
+        std::atomic<bool>* bad = nullptr;
+        const uint8_t* mem = nullptr;   // non-null: a copy of len bytes from memory to dst instead of a read
+        const void* map = nullptr;      // the range in the file's mapping: all in the page cache, it is read buffered
+    };
+    explicit IoQueue(int n) {
+        for (int i = 0; i < n; ++i) th_.emplace_back([this] { loop(); });
+    }
+    ~IoQueue() {
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            quit_ = true;
+        }
+        cv_.notify_all();
+        for (auto& t : th_) t.join();
+    }
+    void push(const Job* jobs, int n) {
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            for (int i = 0; i < n; ++i) q_.push_back(jobs[i]);
+        }
+        if (n == 1) cv_.notify_one();
+        else cv_.notify_all();
+    }
+    void wait_any(int us) {
+        std::unique_lock<std::mutex> lk(done_mu_);
+        const uint64_t seen = done_;
+        done_cv_.wait_for(lk, std::chrono::microseconds(us), [&] { return done_ != seen; });
+    }
+    double busy_ms() const { return busy_us_.load(std::memory_order_relaxed) / 1000.0; }
+    uint64_t direct_bytes() const { return direct_.load(std::memory_order_relaxed); }
+    uint64_t buffered_bytes() const { return buffered_.load(std::memory_order_relaxed); }
+
+private:
+    void loop() {
+        for (;;) {
+            Job j;
+            {
+                std::unique_lock<std::mutex> lk(mu_);
+                cv_.wait(lk, [&] { return quit_ || !q_.empty(); });
+                if (quit_ && q_.empty()) return;
+                j = q_.front();
+                q_.pop_front();
+            }
+            const auto t0 = std::chrono::steady_clock::now();
+            const uint64_t lead = j.off % os::kDirectAlign;
+            bool ok = false;
+            if (j.mem != nullptr) {
+                std::memcpy(j.dst, j.mem, (size_t) j.len);
+                ok = true;
+            } else if (j.dfd != os::kBadFd && !(j.map != nullptr && os::resident(j.map, (size_t) j.len)) &&
+                       os::pread_direct(j.dfd, j.dst, j.len, j.off)) {   // (the page cache's ones: buffered, below)
+                ok = true;
+                direct_.fetch_add(j.len, std::memory_order_relaxed);
+            } else if (os::pread_par(j.fd, j.dst + lead, j.len, j.off)) {
+                ok = true;
+                buffered_.fetch_add(j.len, std::memory_order_relaxed);
+            }
+            busy_us_.fetch_add((uint64_t) std::chrono::duration_cast<std::chrono::microseconds>(
+                                   std::chrono::steady_clock::now() - t0).count(),
+                               std::memory_order_relaxed);
+            if (!ok && j.bad != nullptr) j.bad->store(true, std::memory_order_release);
+            if (j.left != nullptr) j.left->fetch_sub(1, std::memory_order_acq_rel);
+            {
+                std::lock_guard<std::mutex> lk(done_mu_);
+                ++done_;
+            }
+            done_cv_.notify_all();
+        }
+    }
+    std::vector<std::thread> th_;
+    std::mutex mu_, done_mu_;
+    std::condition_variable cv_, done_cv_;
+    std::deque<Job> q_;
+    uint64_t done_ = 0;
+    bool quit_ = false;
+    std::atomic<uint64_t> busy_us_{0}, direct_{0}, buffered_{0};
 };
 
 }  // namespace strata::ds4

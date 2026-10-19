@@ -8,9 +8,9 @@ non-stream), GET /v1/models, GET /models, GET /props, GET /slots, GET /health, G
 Tools from MCP servers (serve/mcp.py, `"mcp_servers"` in the config or --mcp-config) are offered only to requests that
 ask for them with `"strata_mcp": true` - the web app does; other clients see exactly the API they always saw.
 Images (optional, when the config has a "vision" entry): OpenAI image_url parts and Anthropic image blocks (base64
-data, http(s) URLs or local file paths) go through `strata-vision` (the model's mmproj file) and reach the engine as
+data, http(s) URLs or local file paths) go through `maya-vision` (the model's mmproj file) and reach the engine as
 embeddings (`GENI`).  JPEG/PNG/BMP/GIF go straight in; WebP, TIFF, AVIF, ... (agents like omp send WebP) are
-converted to PNG first with Pillow.  DeepSeek-V4.1 (strata-ds4, `INFO vision=ds4`) runs its vision tower in the engine:
+converted to PNG first with Pillow.  DeepSeek-V4.1 (maya-ds4, `INFO vision=ds4`) runs its vision tower in the engine:
 the server only resizes the pictures (serve/ds4_vision.py) and sends their pixels with `GENI`.
 Requests whose prompt plus max tokens exceed the engine's context are REJECTED with 400, never truncated.
 An unset (or 0, or -1) max tokens means "unlimited": whatever the prompt leaves of the context.
@@ -55,6 +55,7 @@ from serve.frontend import (CALL_START, ChatTemplate, Event, OutputParser, anthr
                             openai_to_messages, unmark_literals)
 from serve.mcp import McpCancelled, hub_from_config  # noqa: E402
 from serve.update import Updater  # noqa: E402
+import maya_names  # noqa: E402  (tools/) the settings' names users see (MAYA_*) and the older ones the code reads
 
 try:                        # Project Maya's release (the dashboard's About; the engine's INFO carries none)
     MAYA_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() or None
@@ -983,7 +984,7 @@ class StrataEngine:
 
 
 class Vision:
-    """The resident image encoder: `strata-vision` (llama.cpp mtmd + the mmproj file) reads `ENC <image> <out>`
+    """The resident image encoder: `maya-vision` (llama.cpp mtmd + the mmproj file) reads `ENC <image> <out>`
     lines and writes each image's embeddings; results are cached by the image's hash, so a conversation that
     sends the same picture again (every turn, with most clients) encodes it once.
 
@@ -1004,7 +1005,7 @@ class Vision:
         if cfg.get("no_flash_attn"):   # GLM-5.3's encoder on a GPU: full-precision attention (cosine 0.9997 vs 0.999)
             args.append("--no-flash-attn")
         self.args, self.log, self.env = args, log, env
-        self.dir = Path(tempfile.mkdtemp(prefix="strata-vision-"))
+        self.dir = Path(tempfile.mkdtemp(prefix="maya-vision-"))
         self.proc = None
         self.lend = self.reclaim = None   # on demand: callables (the engine's VLEND / VRECLAIM), wired by main()
         self.owed = False                 # the engine's memory is not back yet (a reclaim that kept failing)
@@ -1075,7 +1076,7 @@ class Vision:
         if source.startswith("data:"):
             return base64.b64decode(source.split(",", 1)[1])
         if source.startswith(("http://", "https://")):
-            req = urllib.request.Request(source, headers={"User-Agent": "strata"})
+            req = urllib.request.Request(source, headers={"User-Agent": "maya"})
             with urllib.request.urlopen(req, timeout=60) as r:
                 return r.read()
         path = source[7:] if source.startswith("file://") else source
@@ -1085,7 +1086,7 @@ class Vision:
 
     @staticmethod
     def normalize(data: bytes) -> bytes:
-        """The formats strata-vision's decoder (stb_image) reads pass through; anything else is converted to PNG."""
+        """The formats maya-vision's decoder (stb_image) reads pass through; anything else is converted to PNG."""
         if data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n" or data[:2] == b"BM" or \
                 data[:6] in (b"GIF87a", b"GIF89a"):
             return data
@@ -1148,7 +1149,7 @@ class Vision:
 
 def vision_footprint(vcfg: dict, env: dict, cache_file: Path, gpu: int) -> tuple[int, int] | None:
     """(image token cap, bytes) for the on-demand vision encoder on THIS machine's first GPU: measured once by
-    `strata-vision --measure` (before the model loads, so the GPU is otherwise idle) and cached per encoder file, cap
+    `maya-vision --measure` (before the model loads, so the GPU is otherwise idle) and cached per encoder file, cap
     and GPU.  A cap the config does not set is the largest of 4096 / 2048 / 1024 image tokens whose footprint stays
     within 15% of the card (a 32 GB card keeps 4096, an 8-12 GB card gets 1024).  None: no GPU to measure on, or
     no measurement (the encoder failed or printed no well-formed MEM line)."""
@@ -1532,7 +1533,7 @@ class Service:
             try:
                 cfg = json.loads(Path(self.config_path).read_text(encoding="utf-8-sig"))
                 secret = re.compile(r"key|token|secret|password", re.I)
-                env = {k: ("***" if secret.search(k) else v) for k, v in (cfg.get("env") or {}).items()}
+                env = {maya_names.shown(k): ("***" if secret.search(k) else v) for k, v in (cfg.get("env") or {}).items()}
                 out.append(f"Config: {Path(self.config_path).name}: args {' '.join(map(str, cfg.get('args') or []))}; "
                            f"gpu {cfg.get('gpu')}; env {json.dumps(env)}")
             except (OSError, ValueError):
@@ -1635,7 +1636,8 @@ class Service:
         if stat:
             sh = list(getattr(self.engine, "stat_history", []) or [])
             tiers = {"now": stat, "history": {k: [s.get(k) for s in sh] for k in
-                                              ("tok_s", "ms_tok", "vram_hit", "ram_fetch", "disk", "promo")}}
+                                              ("tok_s", "ms_tok", "vram_hit", "ram_fetch", "disk", "promo",
+                                               "cpu", "ram", "disk_mb", "engram_ms")}}   # (the last four: DeepSeek's)
         hw = dict(tel["now"])
         cards = hw.pop("vram", None)                      # (each card's processes: for the GPU map only)
         return {"engine": engine, "live": live, "tiers": tiers, "gpu_map": self._gpu_map(cards),
@@ -1663,6 +1665,9 @@ class Service:
                  "ram_fetch": "Experts a token read from the RAM tier",
                  "disk": "Experts a token read from the SSD",
                  "promo": "Experts a token promoted into VRAM",
+                 "cpu": "Experts a token computed on the CPU lane (DeepSeek)",
+                 "disk_mb": "MB a token the storage read (DeepSeek, Linux)",
+                 "engram_ms": "The n-gram memory's (Engram) read time a token, ms (DeepSeek)",
                  "vram_used": "Expert slots in use in VRAM", "vram_slots": "Expert slots in VRAM",
                  "ram_used": "Expert slots in use in RAM", "ram_slots": "Expert slots in RAM"}
 
@@ -1715,14 +1720,21 @@ class Service:
         busy, ctx = bool(s.get("busy")), self.engine.max_context
         images = self.vision is not None
         return {
-            "service": "strata", "model": self.model,
+            "service": "maya", "model": self.model,
             "engine": (getattr(self.engine, "info", {}) or {}).get("version"),
             "started": int(self.started_at), "uptime_s": int(time.time() - self.started_at),
             "cache_max_tokens": ctx,
             "context": {"native": ctx, "max_positions": ctx},
             "concurrency": {"serving": places, "requested": places},   # more than that wait their turn
             "dialects": ["/v1/chat/completions", "/v1/messages"],
-            "vision": {"enabled": images, "available": images, "error": None},
+            "vision": {"enabled": images, "available": images,
+                       "error": None if images or (getattr(self.engine, "info", {}) or {}).get("vision") != "off"
+                       else "the model's vision tower did not load (the server's log says why)"},
+            # (DeepSeek on a Windows APU: Windows' commit - the page file - kept experts off the GPU; the NOTE says so)
+            "memory_note": (lambda i: None if not i.get("gpu_commit_capped_gb") else
+                            f"{i['gpu_commit_capped_gb']} GB of experts stay off the GPU: Windows' page file is too small; "
+                            f"a page file of {i.get('pagefile_hint_gb')} GB keeps them on the GPU")(
+                                getattr(self.engine, "info", {}) or {}),
             "activity": {"requests": totals["requests"] + max(int(busy), active),
                          "in_flight": max(int(busy), active) + int(s.get("queued") or 0),
                          "last_request_at": int(last_at) if last_at else None},
@@ -3396,7 +3408,8 @@ def main() -> int:
                                          "{...}}); the web app's chat can use their tools (also \"mcp_servers\" in "
                                          "the config)")
     a = ap.parse_args()
-    cfg = json.loads(Path(a.config).read_text(encoding="utf-8-sig")) if a.config else {}   # Notepad adds a BOM
+    maya_names.alias_env(os.environ)   # (MAYA_* settings under the names the code and the engine read)
+    cfg = maya_names.env_in(json.loads(Path(a.config).read_text(encoding="utf-8-sig"))) if a.config else {}   # (a BOM: Notepad)
     apply_server_env(cfg)
     if a.gpu is not None:
         cfg["gpu"] = int(a.gpu) if a.gpu.strip().isdigit() else a.gpu
@@ -3457,9 +3470,13 @@ def main() -> int:
         if vision is None and not vcfg and engine.info.get("vision") == "ds4":
             # DeepSeek-V4.1: the engine's own vision tower (the checkpoint's); the server resizes the pictures
             vision = ds4_vision.Vision(ds4_vision.Geometry.from_info(engine.info),
-                                       Path(tempfile.mkdtemp(prefix="strata-ds4-pictures-")), Vision.load)
+                                       Path(tempfile.mkdtemp(prefix="maya-ds4-pictures-")), Vision.load)
             print(f"[maya] images: the model's vision tower runs in the engine (GPU {engine.info.get('vision_gpu')}, "
                   f"{engine.info.get('vision_mib')} MiB), up to {vision.g.max_tokens} tokens a picture", flush=True)
+        elif vision is None and not vcfg and engine.info.get("vision") == "off":
+            # (DeepSeek-V4.1: its tower did not load - the engine's NOTE line above says why; no pictures offered)
+            print("[maya] images: OFF - pictures are refused until the vision tower loads (see the line above)",
+                  flush=True)
         if on_demand:
             lent = int(engine.info.get("vision_lend") or 0)
             if lent > 0:

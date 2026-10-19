@@ -564,7 +564,7 @@ void read_slice(const Glm5Model::Shard& sh, uint64_t off, size_t len, uint8_t* d
         }
     }
     if (sh.base == nullptr) {   // the views went after the load (pack_release_views): nothing to fall back to
-        std::fprintf(stderr, "glm fast: an expert read of %s failed (error %lu) - STRATA_GLM_KEEP_MAP=1 keeps the "
+        std::fprintf(stderr, "glm fast: an expert read of %s failed (error %lu) - MAYA_GLM_KEEP_MAP=1 keeps the "
                              "mapping to fall back to\n", sh.path.c_str(), (unsigned long) GetLastError());
         std::abort();
     }
@@ -614,7 +614,7 @@ bool Glm5Model::fast_setup(std::string& err) {
             const char* rk = getenv("STRATA_GLM_PREFETCH_RANK");
             std::fprintf(stderr, "glm fast: CUDA%d prefetch on: up to %d of the next layer's predicted experts a layer%s, "
                                  "the copy at %s, %s blocks, %s\n", dev_, F->max_pf,
-                         std::atoi(pn) > F->max_pf ? " (STRATA_GLM_PREFETCH_N is at most 2)" : "",
+                         std::atoi(pn) > F->max_pf ? " (MAYA_GLM_PREFETCH_N is at most 2)" : "",
                          at != nullptr && (std::strcmp(at, "fetch") == 0 || std::strcmp(at, "cpu") == 0) ? at : "route",
                          bl != nullptr ? bl : "half the SMs'",
                          rk != nullptr ? (std::string("prediction ranks 1-") + rk).c_str() : "any prediction rank");
@@ -1583,7 +1583,7 @@ bool Glm5Model::fast_setup(std::string& err) {
             if (F->ram_resident && !staging_only && n < cap) {
                 err = "glm fast: --glm-ram-resident: the RAM tier cannot hold every non-VRAM expert (class " +
                       std::to_string(c) + ": " + std::to_string(n) + " of " + std::to_string(cap) +
-                      " slots pinned; raise STRATA_GLM_RAM_GB, its headroom, or lower --max-context)";
+                      " slots pinned; raise MAYA_GLM_RAM_GB, its headroom, or lower --max-context)";
                 return false;
             }
             R.base = (uint8_t*) p;
@@ -1607,7 +1607,7 @@ bool Glm5Model::fast_setup(std::string& err) {
             if (left > 0 && left - unseen_pf < head_b / 2)
                 std::fprintf(stderr, "glm fast: WARNING - CUDA%d: %.1f GB of RAM free after its RAM tier, and the prompt "
                                      "path still pins up to %.1f GB: if the system swaps or stalls, set "
-                                     "STRATA_GLM_RAM_GB lower\n", dev_, (double) left / 1073741824.0,
+                                     "MAYA_GLM_RAM_GB lower\n", dev_, (double) left / 1073741824.0,
                              (double) unseen_pf / 1073741824.0);
         }
         int64_t ram_slots = 0;
@@ -1713,7 +1713,7 @@ bool Glm5Model::fast_setup(std::string& err) {
             }
             if (uncovered > 0) {
                 err = "glm fast: --glm-ram-resident: " + std::to_string(uncovered) +
-                      " experts fit neither tier after the warm - raise STRATA_GLM_RAM_GB or lower --max-context";
+                      " experts fit neither tier after the warm - raise MAYA_GLM_RAM_GB or lower --max-context";
                 return false;
             }
             std::fprintf(stderr, "glm fast: CUDA%d RAM-resident verified: all %d experts are in VRAM or pinned RAM\n",
@@ -1734,7 +1734,7 @@ void Glm5Model::ram_left_check() const {
         const int64_t left = avail_ram_now();
         if (left > 0 && left < F->ram_check_head / 2)
             std::fprintf(stderr, "glm fast: WARNING - %.1f GB of RAM free after the split's RAM tiers: if the system "
-                                 "swaps or stalls, set STRATA_GLM_RAM_GB lower\n", (double) left / 1073741824.0);
+                                 "swaps or stalls, set MAYA_GLM_RAM_GB lower\n", (double) left / 1073741824.0);
         return;
     }
 }
@@ -3171,7 +3171,12 @@ bool Glm5Model::save_usage() {
         f << out;
         if (!f) return false;
     }
-    return std::rename(tmp.c_str(), up.c_str()) == 0;
+    std::error_code ec;   // replaces an existing file (std::rename fails over one on Windows: the usage never updated)
+    std::filesystem::rename(tmp, up, ec);
+    if (!ec) return true;
+    std::error_code ec2;
+    std::filesystem::remove(tmp, ec2);
+    return false;
 }
 
 // ---------------------------------------------------------------- the expert profile and the routing trace
@@ -6143,7 +6148,7 @@ bool Glm5Model::decode_spec(strata::kernels::SamplerParams& sp, int64_t max_new,
             }
         }
         if (fast_->spec_live_h == nullptr || fast_->spec_skip_d == nullptr) {
-            std::fprintf(stderr, "glm spec: STRATA_GLM_SPEC_CANCEL - its buffers did not allocate; decoding without it\n");
+            std::fprintf(stderr, "glm spec: MAYA_GLM_SPEC_CANCEL - its buffers did not allocate; decoding without it\n");
             cancel = false;
         }
     }
@@ -6151,8 +6156,8 @@ bool Glm5Model::decode_spec(strata::kernels::SamplerParams& sp, int64_t max_new,
     if (cancel_env && !cancel_said) {
         cancel_said = true;
         std::fprintf(stderr, "glm spec: %s\n", cancel ? "a wrong draft cancels the head's speculative pass at its next layer "
-                                                        "(STRATA_GLM_SPEC_CANCEL)"
-                                                      : "STRATA_GLM_SPEC_CANCEL needs a head group of one GPU - not used");
+                                                        "(MAYA_GLM_SPEC_CANCEL)"
+                                                      : "MAYA_GLM_SPEC_CANCEL needs a head group of one GPU - not used");
     }
     // the head group's recurrent-state backups (each part on its own device and stream)
     const auto kda_all = [&](bool restore) -> bool {
@@ -6181,7 +6186,7 @@ bool Glm5Model::decode_spec(strata::kernels::SamplerParams& sp, int64_t max_new,
             return false;
         }
         cudaSetDevice(dev_);
-        std::fprintf(stderr, "glm spec: speculative sampling ON (STRATA_GLM_SPEC_SAMPLE) - sampled requests draw the draft "
+        std::fprintf(stderr, "glm spec: speculative sampling ON (MAYA_GLM_SPEC_SAMPLE) - sampled requests draw the draft "
                              "from the draft block and keep it with min(1, p/q)\n");
     }
     struct MtpSampleOff {   // fast_mtp draws only inside this request's decode

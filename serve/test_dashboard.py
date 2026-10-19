@@ -113,7 +113,7 @@ class Dashboard(unittest.TestCase):
         text = b.decode()
         self.assertEqual(s, 200)
         self.assertIn("Project Maya", text)
-        self.assertIn("STRATA_GLM_RAM_GB", text)
+        self.assertIn("MAYA_GLM_RAM_GB", text)   # (a config's settings under the names users see)
         self.assertNotIn("secret", text)
 
     def test_token_count_matches_the_prompt(self):

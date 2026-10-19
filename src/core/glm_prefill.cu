@@ -3171,7 +3171,7 @@ bool Glm5Model::prefill(const std::vector<int32_t>& tokens, std::string& err, in
         return v ? std::max(0, std::atoi(v)) : 0;
     }();
     if (ok && stall_test > 0) {
-        progress_at("the prompt: STRATA_GLM_STALL_TEST's pause");
+        progress_at("the prompt: MAYA_GLM_STALL_TEST's pause");
         std::this_thread::sleep_for(std::chrono::seconds(stall_test));
     }
     // a DFlash drafter reads only the prompt's last positions (its window): the captures start there

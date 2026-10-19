@@ -36,6 +36,10 @@ struct Mat {
     int K = 0;                           // bits per weight, 1..8
     int cb = 2;                          // codebook: 0 3inst, 1 mcg, 2 mul1
     int ld = 0;                          // tiles per 16-row slice in memory (the full matrix's n / 16); 0: n / 16
+    // a GGUF's plain matrix instead (DeepSeek-V4.1's maya-ds4: fmt 1 BF16): raw = [n][ld] (row r = output r, ld
+    // values a row; 0: k), the EXL3 fields unused - the engine sends it to its own kernels, never to these
+    int fmt = 0;
+    const void* raw = nullptr;
 };
 
 /// Trellis bytes of a k x n matrix at K bits.
@@ -80,6 +84,7 @@ struct ExpertLayout {
     size_t suh[3] = {0, 0, 0}, svh[3] = {0, 0, 0}, trellis[3] = {0, 0, 0};
     int K[3] = {0, 0, 0};
     int cb = 2;
+    int fmt = 0;   // 2: a GGUF's MXFP4 expert (maya-ds4's own kernels): trellis[r] = matrix r's offset, [out][in / 32]
 };
 /// The routed experts of one token (the engine's device plan: plan_ptr[i] = the blob in VRAM, 0 = not on the device;
 /// plan_w[i] its weight).  gate/up over x (n_embd F32) -> clamped swiglu -> h (F32 [k][n_ff], scratch the caller

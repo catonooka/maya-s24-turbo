@@ -323,7 +323,7 @@ def download(url, dst: Path, what=None):
     total = 0
     for attempt in range(5):
         try:
-            req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "strata-setup"})
+            req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "maya-setup"})
             total = int(urllib.request.urlopen(req, timeout=60).headers.get("Content-Length", 0))
             break
         except OSError as e:
@@ -337,7 +337,7 @@ def download(url, dst: Path, what=None):
     have = part.stat().st_size if part.exists() else 0
     for attempt in range(30):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "strata-setup", "Range": f"bytes={have}-"})
+            req = urllib.request.Request(url, headers={"User-Agent": "maya-setup", "Range": f"bytes={have}-"})
             with urllib.request.urlopen(req, timeout=60) as r, open(part, "ab" if have else "wb") as f:
                 if have and r.status != 206:                     # the server ignored the range: start over
                     f.seek(0)

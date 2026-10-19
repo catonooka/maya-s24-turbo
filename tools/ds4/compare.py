@@ -1,4 +1,4 @@
-"""tools/ds4/compare.py - the engine's logits (strata-ds4 --dump-logits) against the reference's (tools/ds4/ref.py --dump).
+"""tools/ds4/compare.py - the engine's logits (maya-ds4 --dump-logits) against the reference's (tools/ds4/ref.py --dump).
 
     python tools/ds4/compare.py --ref ref.npz --engine engine.f32 [--vocab 129280]
 

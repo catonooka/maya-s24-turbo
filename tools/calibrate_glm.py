@@ -379,5 +379,6 @@ def apply(env: dict, settings: dict) -> dict:
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         sys.exit("usage: calibrate_glm.py <maya-*.json>")
-    res = run(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")))
+    import maya_names
+    res = run(maya_names.env_in(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8-sig"))))
     print(json.dumps(res, indent=1))

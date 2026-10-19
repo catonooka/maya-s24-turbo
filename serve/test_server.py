@@ -1408,6 +1408,13 @@ class UsageAndStatus(unittest.TestCase):
         finally:
             self.engine.multi = 0
         self.assertFalse(s["vision"]["available"])
+        self.assertIsNone(s["memory_note"])
+        old_info = getattr(self.engine, "info", None)   # (DeepSeek on a Windows APU: the page file kept experts off)
+        self.engine.info = {**(old_info or {}), "gpu_commit_capped_gb": 12, "pagefile_hint_gb": 190}
+        try:
+            self.assertIn("a page file of 190 GB", self.svc.v1_status()["memory_note"])
+        finally:
+            self.engine.info = old_info
         self.assertEqual(s["activity"]["in_flight"], 0)
         self.assertGreaterEqual(s["activity"]["requests"], 1)
         self.assertEqual(s["last_timings"]["cache_n"], ClockedEngine.REUSED)
@@ -1585,7 +1592,7 @@ class VisionFootprint(unittest.TestCase):
         d = Path(self.tmp.name)
         (d / "mmproj.gguf").write_bytes(b"x")
         self.cache = d / "vision-memory.json"
-        self.vcfg = {"exe": "strata-vision", "mmproj": str(d / "mmproj.gguf"), "model": "vocab.gguf",
+        self.vcfg = {"exe": "maya-vision", "mmproj": str(d / "mmproj.gguf"), "model": "vocab.gguf",
                      "max_tokens": 1024}
 
     def tearDown(self):

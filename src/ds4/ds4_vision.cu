@@ -11,7 +11,7 @@
 #include "ds4_vision.cuh"
 
 #include <cublas_v2.h>
-#include <cuda_bf16.h>
+#include "ds4_numerics.cuh"
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -44,7 +44,7 @@ constexpr int kSmT = 512, kSmPer = 20;   // softmax: a row of up to 10240 keys i
 constexpr size_t kWs = 16u << 20;        // cuBLAS workspace
 
 __device__ __forceinline__ float bf(uint16_t b) { return __uint_as_float((uint32_t) b << 16); }
-__device__ __forceinline__ uint16_t bfr(float f) { return __bfloat16_as_ushort(__float2bfloat16_rn(f)); }
+__device__ __forceinline__ uint16_t bfr(float f) { return bf16_rn(f); }
 
 __device__ float block_reduce(float v, bool is_max) {
     __shared__ float red[32];
@@ -204,7 +204,9 @@ bool VisionTower::dalloc(T*& p, size_t n, std::string& err) {
     return true;
 }
 
-VisionTower::~VisionTower() {
+VisionTower::~VisionTower() { release(); }
+
+void VisionTower::release() {
     if (at_ < 0) return;
     int cur = 0;
     cudaGetDevice(&cur);
@@ -212,6 +214,7 @@ VisionTower::~VisionTower() {
     for (int i = 0; i < 2; ++i) {
         if (copied_[i]) cudaEventDestroy((cudaEvent_t) copied_[i]);
         if (used_[i]) cudaEventDestroy((cudaEvent_t) used_[i]);
+        copied_[i] = used_[i] = nullptr;
     }
     if (blas_) cublasDestroy((cublasHandle_t) blas_);
     if (st_) cudaStreamDestroy((cudaStream_t) st_);
@@ -219,6 +222,11 @@ VisionTower::~VisionTower() {
     for (void* p : dallocs_) cudaFree(p);
     if (host_) cudaFreeHost(host_);
     cudaSetDevice(cur);
+    blas_ = st_ = cs_ = nullptr;
+    dallocs_.clear();
+    host_ = nullptr;
+    dev_ = at_ = -1;
+    dev_bytes_ = 0;
 }
 
 bool VisionTower::load(const VisionGeo& g, int device, const Reader& read, std::string& err) {

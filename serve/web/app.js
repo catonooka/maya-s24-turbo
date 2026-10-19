@@ -214,7 +214,11 @@ async function loadHealth() {
     if (d.temperature !== undefined) DEFAULTS.temperature = d.temperature;
     if (d.top_p !== undefined) DEFAULTS.top_p = d.top_p;
     if (d.temperature !== undefined || d.top_k !== undefined) DEFAULTS.top_k = d.top_k !== undefined ? d.top_k : 0;
-    if (!store.get("sampling", null)) settings = {...DEFAULTS};
+    // each model keeps its own Chat settings (DeepSeek's are not GLM's), and its own thinking levels' meaning
+    samplingKey = /deepseek/i.test(health.model || "") ? "sampling_deepseek" : "sampling";
+    settings = {...DEFAULTS, ...store.get(samplingKey, {})};
+    if (!THINKING.includes(settings.thinking)) settings.thinking = DEFAULTS.thinking;
+    thinkingTitles();
     $("attach-btn").title = health.images ? "Attach a text file or a picture (or drop it here)"
                                           : "Attach a text file (or drop it here)";
     $("chat-empty-sub").textContent = health.mcp_tools ? "Runs on this machine. Nothing leaves it, unless an MCP tool you turned on reaches the web."
@@ -258,14 +262,31 @@ $("metrics").innerHTML = METRICS.map((m) => `
       stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>
   </div></div>`).join("");
 
-// the GLM engine's expert tiers: where each routed expert came from while the model writes
-// (speed, time per token and the VRAM hit are the Throughput card's - not repeated here)
-const TIERS = [
-  {key: "ram_fetch", label: "From RAM", icon: "link", unit: "/tok", digits: 2, tone: "info"},
-  {key: "disk", label: "From SSD", icon: "disk", unit: "/tok", digits: 2, tone: "warn"},
-  {key: "promo", label: "Promoted", icon: "bolt", unit: "/tok", digits: 2},
-];
-$("tiers").innerHTML = TIERS.map((m) => `
+// the expert tiers, by engine (the STAT lines): the GLM engine's - where each routed expert came from while the model
+// writes - or DeepSeek's (maya-ds4): the experts the CPU lane computed, what the storage read, the cache's moves and the
+// n-gram memory (Engram) a token.  Speed, time per token and the VRAM hit are the Throughput card's - not repeated here
+const TIER_SETS = {
+  glm: [
+    {key: "ram_fetch", label: "From RAM", icon: "link", unit: "/tok", digits: 2, tone: "info",
+     sub: "experts pulled over PCIe from RAM"},
+    {key: "disk", label: "From SSD", icon: "disk", unit: "/tok", digits: 2, tone: "warn", sub: "experts read from the SSD"},
+    {key: "promo", label: "Promoted", icon: "bolt", unit: "/tok", digits: 2, sub: "experts moved into VRAM"},
+  ],
+  ds4: [
+    {key: "cpu", label: "On the CPU", icon: "cpu", unit: "/tok", digits: 1, tone: "info",
+     sub: "experts the CPU computed from RAM"},
+    {key: "disk_mb", label: "Disk reads", icon: "disk", unit: " MB/tok", digits: 1, tone: "warn",
+     sub: "read from the SSD a token"},
+    {key: "promo", label: "Promoted", icon: "bolt", unit: "/tok", digits: 2, sub: "experts moved into VRAM"},
+    {key: "engram_ms", label: "N-gram memory", icon: "layers", unit: " ms/tok", digits: 2, sub: "n-gram lookups"},
+  ],
+};
+let tiersShown = null;   // the set the cards are built for
+function tierCards(kind) {
+  if (tiersShown === kind) return TIER_SETS[kind];
+  tiersShown = kind;
+  $("tiers").classList.toggle("metrics--four", TIER_SETS[kind].length === 4);
+  $("tiers").innerHTML = TIER_SETS[kind].map((m) => `
   <div class="st-card metric-card"><div class="st-metric">
     <span class="st-metric__label">${icon(m.icon, "st-icon st-icon--sm")}${esc(m.label)}</span>
     <span class="st-metric__value" id="tv-${m.key}">–</span>
@@ -274,36 +295,59 @@ $("tiers").innerHTML = TIERS.map((m) => `
       <path class="area" fill="currentColor" opacity=".12"/><path class="line" fill="none" stroke="currentColor"
       stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>
   </div></div>`).join("");
-const TIER_SUB = {ram_fetch: "experts pulled over PCIe from RAM", disk: "experts read from the SSD", promo: "experts moved into VRAM"};
+  return TIER_SETS[kind];
+}
 function renderTiers(t, eng) {
   const card = $("tiers-card");
   if (!t || !t.now) { card.hidden = true; return; }
   card.hidden = false;
+  const ds4 = !!(eng && eng.engine_kind === "ds4");
   const n = t.now, h = t.history || {};
   const age = n.time ? Math.max(0, Date.now() / 1000 - n.time) : null;
   const stale = age != null && age > 30;               // a reading from the last answer, not live
   card.classList.toggle("is-stale", stale);
-  for (const m of TIERS) {
+  for (const m of tierCards(ds4 ? "ds4" : "glm")) {
     const v = n[m.key];
     const shown = v == null ? null : fmt(v, m.digits);
     $(`tv-${m.key}`).innerHTML = shown == null ? "–" : `${esc(shown)}<small>${esc(m.unit)}</small>`;
-    $(`ts-${m.key}`).textContent = (stale ? "last answer: " : "") + (TIER_SUB[m.key] || "");
+    let sub = m.sub;
+    if (m.key === "engram_ms" && eng && eng.engram_lookups) sub = `${fmt(+eng.engram_lookups)} n-gram lookups a token`;
+    if (m.key === "disk_mb" && v == null) sub = "not measured on this system";
+    if (m.key === "cpu" && n.ram != null) sub = `${fmt(n.ram, 1)} of them from RAM, the rest from the SSD`;
+    $(`ts-${m.key}`).textContent = (stale ? "last answer: " : "") + sub;
     spark(`tp-${m.key}`, (h[m.key] || []).map((x) => (x == null ? 0 : x)), m.max);
   }
-  const vu = n.vram_used || 0, ru = n.ram_used || 0;
-  const total = (eng && eng.experts) || Math.max(1, vu + ru);
-  const disk = Math.max(0, total - vu - ru);
+  let vu, ru, disk, total;
+  const ds4Tier = ds4 && (+eng.ram_experts || 0) > 0;
+  if (ds4) {   // DeepSeek: the VRAM slots, the RAM tier's (when on), and the rest read in place from the model's files
+    vu = +eng.expert_slots || 0;
+    ru = ds4Tier ? +eng.ram_experts : +eng.cpu_experts || 0;
+    disk = ds4Tier ? Math.max(0, (+eng.cpu_experts || 0) - ru) : 0;
+    total = Math.max(1, vu + ru + disk);
+  } else {
+    vu = n.vram_used || 0; ru = n.ram_used || 0;
+    total = (eng && eng.experts) || Math.max(1, vu + ru);
+    disk = Math.max(0, total - vu - ru);
+  }
   $("tierbar-vram").style.width = `${(100 * vu) / total}%`;
   $("tierbar-ram").style.width = `${(100 * ru) / total}%`;
   $("tierbar-disk").style.width = `${(100 * disk) / total}%`;
-  $("tier-vram-text").textContent = `${fmt(vu)} experts · ${fmt(n.vram_gb, 1)} GB`;
-  $("tier-ram-text").textContent = `${fmt(ru)} experts · ${fmt(n.ram_gb, 1)} GB`;
+  $("tier-ram-label").textContent = ds4 && !ds4Tier ? "RAM cache / SSD (in place)" : "Pinned RAM";
+  $("tier-disk-item").hidden = ds4 && !ds4Tier;
+  $("tier-vram-text").textContent = ds4 ? `${fmt(vu)} experts` : `${fmt(vu)} experts · ${fmt(n.vram_gb, 1)} GB`;
+  $("tier-ram-text").textContent = ds4 ? `${fmt(ru)} experts` : `${fmt(ru)} experts · ${fmt(n.ram_gb, 1)} GB`;
   $("tier-disk-text").textContent = `${fmt(disk)} experts`;
   $("tiers-sub").textContent = age == null ? "" : stale ? `last reading ${ago(age)} ago, from the last answer`
                                                         : `live · ${fmt(total)} routed experts`;
   // advice from the live numbers (only while they are fresh)
   let tip = "";
-  if (!stale && n.disk != null && n.disk >= 3) {
+  if (ds4) {
+    if (!stale && n.disk_mb != null && n.disk_mb >= 500) {
+      tip = "Much of every token is read from the SSD: more RAM keeps more of the model's experts cached, and answers get faster.";
+    } else if (!stale && n.vram_hit != null && n.vram_hit < 0.5) {
+      tip = "Most experts run on the CPU: more VRAM (or a second GPU) keeps more of them on the card.";
+    }
+  } else if (!stale && n.disk != null && n.disk >= 3) {
     tip = "Many experts are read from the SSD for every token: more RAM, a smaller model or a shorter context makes answers faster.";
   } else if (!stale && n.vram_hit != null && n.vram_hit < 0.85 && (n.ram_fetch || 0) >= 4) {
     tip = "Most misses come from RAM over PCIe: more VRAM (or a second GPU) keeps more experts on the card.";
@@ -606,6 +650,10 @@ function renderBanners(m) {
   } else if (rl && rl.state === "failed" && rl.ended && Date.now() / 1000 - rl.ended < 600) {
     out.push(["error", `The context change did not work: ${rl.error || "the engine did not start"}. It runs with ${ctxfmt(rl.context)} again.`]);
   }
+  const eng = m.engine || {};
+  if (eng.gpu_commit_capped_gb > 0) {   // (DeepSeek on a Windows APU: the page file kept experts off the GPU)
+    out.push(["warn", `${fmt(eng.gpu_commit_capped_gb)} GB of experts stay off the GPU: Windows' page file is too small to hold them there. A page file of ${fmt(eng.pagefile_hint_gb)} GB keeps them on the GPU (System > About > Advanced system settings > Performance > Advanced > Virtual memory), then restart Maya.`]);
+  }
   const gpus = (m.hardware || {}).gpus || [{index: null, temp: (m.hardware || {}).gpu_temp}];
   for (const g of gpus) {
     if (g.temp != null && g.temp >= 87) out.push(["warn", `${g.index == null ? "The GPU" : `GPU ${g.index}`} is at ${fmt(g.temp)} °C: it may slow itself down to cool off.`]);
@@ -802,13 +850,14 @@ function renderAbout(eng, hw, st, storage) {
       ? `${k} attention cache, streamed: ${fmt(eng.kv_resident)} positions per layer in VRAM, the rest in RAM`
       : `${k} attention cache, in VRAM${kvPerTok ? ` (about ${fmt(kvPerTok / 1024)} KB a token, ${fmt(eng.kv_gb, 1)} GB at this size)` : ""}`;
   } else {
-    const k = {int8: "8-bit", q4_0: "4-bit (Hadamard-rotated)", fp16: "16-bit", f32: "32-bit"}[eng.kv] || eng.kv;
+    const k = {int8: "8-bit", q4_0: "4-bit (Hadamard-rotated)", fp16: "16-bit", bf16: "16-bit", f32: "32-bit",
+               fp4: "4-bit FP4 as DeepSeek stores it (the recent-token window FP8)"}[eng.kv] || eng.kv;
     kv = k ? `${k}${eng.kv_resident ? `, streamed: ${fmt(eng.kv_resident)} positions per layer in VRAM, the rest in RAM` : ", all in VRAM"}` : null;
   }
   facts($("facts-engine"), [
     ["Version", ver ? `Project Maya v${ver}${eng.version ? ` · engine ${eng.version}` : ""}` : null],
     ["Model", eng.model],
-    ["Engine", eng.engine_kind ? `${eng.engine_kind === "glm-fast" ? "GLM fast path" : eng.engine_kind}` : null],
+    ["Engine", eng.engine_kind ? ({"glm-fast": "GLM fast path", ds4: "DeepSeek-V4.1 (maya-ds4)"}[eng.engine_kind] || eng.engine_kind) : null],
     ["Context", eng.max_context ? `${fmt(eng.max_context)} tokens (Settings changes it)` : null],
     ["Trained for", eng.trained_context ? `up to ${fmt(eng.trained_context)} tokens` : null],
     ["KV cache", kv],
@@ -1240,7 +1289,19 @@ const DEFAULTS = {thinking: "high", temperature: 0.6, top_p: 0.95, top_k: 20, mi
                   mcp: true, system: "", sys_default: false, thinking_v: 2};
 const THINKING = ["none", "low", "high", "max"];
 const glmLevel = (v, v2) => (v2 ? v : {medium: "high", high: "max", xhigh: "max"}[v] || v);
-let settings = {...DEFAULTS, ...store.get("sampling", {})};
+let samplingKey = "sampling";        // the running model's saved settings (loadHealth: DeepSeek's own key)
+let settings = {...DEFAULTS, ...store.get(samplingKey, {})};
+// the thinking buttons say what each level is for the running model
+const THINK_TITLES = {
+  glm: {none: "No thinking: it answers right away", low: "GLM's Low: a short think", high: "GLM's High: thinks it through",
+        max: "GLM's Max: the most thorough, and the longest"},
+  deepseek: {none: "No thinking: it answers right away", low: "DeepSeek's Low: reasoning effort 50",
+             high: "DeepSeek's High: reasoning effort 75", max: "DeepSeek's Max: reasoning effort 100, the most thorough"},
+};
+function thinkingTitles() {
+  const t = THINK_TITLES[samplingKey === "sampling_deepseek" ? "deepseek" : "glm"];
+  for (const b of $("s-thinking").children) if (t[b.dataset.v]) b.title = t[b.dataset.v];
+}
 if (settings.thinking_v !== 2) { settings.thinking = glmLevel(settings.thinking, false); settings.thinking_v = 2; }
 if (!THINKING.includes(settings.thinking)) settings.thinking = "high";
 let chats = [];                       // {id, title, created, updated, messages, system}, newest first
@@ -2272,7 +2333,7 @@ async function applySettings() {
   settings = {thinking: f.thinking, temperature: f.temperature, top_p: f.top_p, top_k: f.top_k, min_p: f.min_p, max: f.max,
               seed: f.seed, show: f.show, mcp: f.mcp, sys_default: f.sys_default,
               system: f.sys_default ? f.system : settings.system || ""};
-  store.set("sampling", settings);
+  store.set(samplingKey, settings);
   current.system = f.system;
   if (messages.length) saveChat();
   closeDrawer(true);

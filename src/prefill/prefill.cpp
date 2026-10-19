@@ -1407,7 +1407,7 @@ bool Prefill::run(const int64_t* tokens, int64_t n, int64_t pos0, std::string& e
                             (cudaMalloc((void**) &pooled16, (size_t) rows * s.idx_dim * 4) != cudaSuccess ||
                              cudaMalloc((void**) &dead16, (size_t) s.idx_dim * 4) != cudaSuccess ||
                              cudaMalloc((void**) &ids16, (size_t) (m.T * m.cap) * 4) != cudaSuccess)) {
-                            err = "STRATA_IDX_FP16_CHECK: no room for its buffers";
+                            err = "MAYA_IDX_FP16_CHECK: no room for its buffers";
                             return false;
                         }
                         round_f16(st.idx_pooled, pooled16, rows * s.idx_dim, m.cs);

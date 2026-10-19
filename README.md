@@ -1,23 +1,26 @@
 <h1 align="center">Project Maya</h1>
 
-<p align="center"><b>A 321-billion-parameter AI model on your own GPU</b><br>
-GLM-5.3-Flash, private and fast · one NVIDIA GPU or up to 16 · AMD and Windows (experimental) · chat, pictures,
-OpenAI- and Anthropic-compatible API · several requests at once</p>
+<p align="center"><b>GLM-5.3-Flash (321 B) and DeepSeek-V4.1-Flash-1017 (748 B) on your own GPU</b><br>
+private and fast · one NVIDIA GPU or up to 16 · AMD and Windows (experimental) · chat, pictures, OpenAI- and
+Anthropic-compatible API · several requests at once</p>
 
 <p align="center">Created and led by <b>Peasant Smith</b> (<a href="https://github.com/mw00">@mw00</a>), co-maintained
 with <b><a href="https://github.com/needmorevram">@needmorevram</a></b></p>
 
-<p align="center"><a href="https://buymeacoffee.com/peasantsmith">☕ Support Project Maya - buy me a coffee</a></p>
+<p align="center"><a href="https://buymeacoffee.com/peasantsmith"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50"></a><br>
+<sub>Project Maya is free. If it runs well on your PC, a coffee keeps the work on it going.</sub></p>
 
 Models this size usually need a datacenter. Maya runs **[GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash)**
-(zai-org, MIT license) on the hardware you already have: 321 B parameters, about 18 B active per token, and a context
-of up to 1 M tokens. Its engine is built for this one model. It keeps the experts your conversation uses most on the
-GPU, the next ones in RAM and the rest on your NVMe SSD, and moves them as you chat. It measures your GPUs, CPU, RAM
-and SSD and tunes itself to them. Nothing leaves your machine.
+(zai-org, MIT license; 321 B parameters, about 18 B active per token, a context of up to 1 M tokens) and
+**[DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017)** (DeepSeek, MIT license;
+748 B parameters) on the hardware you already have. Each model has an engine built for it. It keeps the experts your
+conversation uses most on the GPU, the next ones in RAM and the rest on your NVMe SSD, and moves them as you chat. It
+measures your GPUs, CPU, RAM and SSD and tunes itself to them. Nothing leaves your machine.
 
 - **Fast:** up to 118 tokens/s on four RTX 4090s, 81 on one RTX PRO 6000, 30+ on a single RTX 5090. Real numbers from
   real users below.
-- **Close to the original:** Maya's own quants keep 97.7-99.2% of the FP8 model's zero-shot accuracy.
+- **Close to the original:** Maya's own quants of GLM-5.3-Flash keep 97.7-99.2% of the FP8 model's zero-shot
+  accuracy; Maya-S of DeepSeek-V4.1-Flash-1017 picks the same next token as the original 92.6% of the time.
 - **Plugs into your tools:** OpenAI- and Anthropic-compatible API with tool calls, ready for coding agents.
 - **Several requests at once:** up to 8 answered together - for agents that run several sessions, or several people
   on one PC.
@@ -39,6 +42,32 @@ the model's MTP block, which drafts tokens ahead.
 The setup asks which one to download and recommends one for your PC. How they're made and measured: [MAYA-S](bench/results/MAYA-S.md),
 [MAYA-S24](bench/results/MAYA-S24.md), [MAYA-M](bench/results/MAYA-M.md), [MAYA-L](bench/results/MAYA-L.md). On
 [Hugging Face](https://huggingface.co/peasantsmith/GLM-5.3-Flash-Maya-GGUF).
+
+### DeepSeek-V4.1-Flash-1017 (new)
+
+The setup also offers **[DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017)**
+(DeepSeek, MIT license; 748 B parameters) on an engine of its own (`maya-ds4`): `./setup.sh --setup` and pick it, or
+`./setup.sh --model DeepSeek-V4.1-Flash-1017`.
+
+| Files | Size | Runs on |
+| --- | ---: | --- |
+| **[Maya-S](https://huggingface.co/peasantsmith/DeepSeek-V4.1-Flash-1017-Maya-GGUF)**, Project Maya's own quant (default): the experts in 2-3 bits, 92.6% the same next token as the original | 178 GB + the Engram tables (203 GB, unsloth's two files) | NVIDIA from Volta (V100) on, and AMD; Linux and Windows |
+| unsloth's [UD-Q8_K_XL GGUF](https://huggingface.co/unsloth/DeepSeek-V4.1-Flash-1017-GGUF) (DeepSeek's own formats) | 508 GB | the same |
+| unsloth's UD-Q4_K_XL GGUF (dense weights Q8_0: less VRAM) | 501 GB | the same |
+| LibertAIDAI's [EXL3 2.9 bpw](https://huggingface.co/LibertAIDAI/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw) + DeepSeek's Engram tables | 414 GB | NVIDIA RTX 30 / A100 and newer |
+
+- **Any amount of memory:** the most-used experts go to the GPUs, the others are read in place from the model's files -
+  from RAM where they fit, from the SSD otherwise. More VRAM and RAM is faster; keep the files on an NVMe SSD.
+- **The DSpark drafter:** with the GGUFs the setup also fetches the model's own drafter (8 GB from Maya's repo:
+  DeepSeek's FP4 experts, its dense weights in 8-bit) and measures whether drafting makes your PC faster; it keeps it
+  only where it does.
+- **Pictures:** with the GGUFs the setup fetches DeepSeek's vision tower (1 GB of its checkpoint); it runs on the first
+  GPU in about 320 MB. `--no-vision` leaves it out.
+- **One GPU or several:** the layers are split across the GPUs (pairs of equal GPUs also split each layer where the
+  files' formats allow), its thinking levels (Off, Low, High, Max) in the chat, and its own numbers in the monitor.
+- **Strix Halo / Gorgon Halo on Windows:** Windows counts the GPU's share of the memory against its page file, so the
+  setup asks for a page file big enough to keep every expert on the GPU and says the size
+  ([docs/AMD_MAYA.md](docs/AMD_MAYA.md)).
 
 <details>
 <summary>Community quants that also run on Maya</summary>
@@ -100,9 +129,9 @@ VRAM holds, the more it gains ([how](docs/SETTINGS.md#several-requests-at-once))
 
 | | |
 | --- | --- |
-| **GPU** | NVIDIA, compute capability 7.0 or newer (V100, RTX 20 and newer): one, or up to 16 that share the model. More VRAM is faster. Pascal (Tesla P40 / P100, GTX 10) is experimental, not validated yet. **AMD (experimental):** RX 7900 XT / XTX, Radeon AI PRO R9700 / RX 9070, Strix Halo and Gorgon Halo (Radeon 8060S / 8065S); RX 6800 / 6900 and Radeon PRO V620 / W6800 not validated yet; text only - [docs/AMD_MAYA.md](docs/AMD_MAYA.md) |
+| **GPU** | NVIDIA, compute capability 7.0 or newer (V100, RTX 20 and newer): one, or up to 16 that share the model. More VRAM is faster. Pascal (Tesla P40 / P100, GTX 10) is experimental, not validated yet. **AMD (experimental):** RX 7900 XT / XTX, Radeon AI PRO R9700 / RX 9070, Strix Halo and Gorgon Halo (Radeon 8060S / 8065S); RX 6800 / 6900 and Radeon PRO V620 / W6800 not validated yet; GLM-5.3-Flash reads text only there, DeepSeek-V4.1-Flash-1017 pictures too - [docs/AMD_MAYA.md](docs/AMD_MAYA.md) |
 | **RAM** | 32 GB runs it. More RAM keeps more experts close and is faster |
-| **Disk** | **A fast NVMe SSD** with room for the model (~100 GB for Maya-S, ~160 GB for Maya-L) and its picture encoder (1.1 GB). Not a hard disk |
+| **Disk** | **A fast NVMe SSD** with room for the model (~100 GB for Maya-S, ~160 GB for Maya-L, ~390 GB for DeepSeek-V4.1-Flash-1017's Maya-S, ~520 GB for unsloth's GGUF) and its picture encoder (1.1 GB). Not a hard disk |
 | **System** | Linux (x86-64; a CPU with AVX2 is best), the NVIDIA driver, CUDA 12.x (CUDA 13 works for RTX 20 and newer, not for the V100 or Pascal), g++, Python 3.10+. Windows 10/11 (experimental): [docs/WINDOWS.md](docs/WINDOWS.md). Not WSL2. AMD: ROCm 7 |
 
 The setup checks all of this, prints the exact command for anything missing, and installs nothing system-wide.
@@ -141,14 +170,14 @@ builds everything once (20-40 minutes plus the download) and **starts the model*
 - **From another device:** `./maya.sh --setup --host 0.0.0.0 --api-key <secret>`. Always set a key.
 - **Tuning:** `./maya.sh --calibrate` tunes the engine to your hardware in 10-15 minutes. Every setting:
   [docs/SETTINGS.md](docs/SETTINGS.md).
-- **Several requests at once:** `./maya.sh --parallel 4` (Windows: `START-MAYA.bat --parallel 4`; up to 8) keeps
+- **Several requests at once** (GLM-5.3-Flash): `./maya.sh --parallel 4` (Windows: `START-MAYA.bat --parallel 4`; up to 8) keeps
   it in the config, and the dashboard shows how many answers are being written. Each extra request keeps its own
   context in VRAM, so a few fewer experts fit there ([how](docs/SETTINGS.md#several-requests-at-once)).
-- **Long contexts:** new setups keep each attention layer's cache in RAM with a window of it in VRAM
+- **Long contexts** (GLM-5.3-Flash): new setups keep each attention layer's cache in RAM with a window of it in VRAM
   (`--kv-streaming on`; `./maya.sh --setup` adds it to an existing config), so the VRAM holds more experts - at 512K
   on an RTX 3090, prompts 4-9x faster and decode +5%; 1M context fits one 3090
   ([how](docs/SETTINGS.md)).
-- **Faster answers with a DFlash2 drafter:** `./maya.sh --setup --draft dflash2` (NVIDIA RTX 30 / A100 and newer)
+- **Faster answers with a DFlash2 drafter** (GLM-5.3-Flash): `./maya.sh --setup --draft dflash2` (NVIDIA RTX 30 / A100 and newer)
   downloads a small drafter that drafts up to 7 tokens a round and gives the same answers - Maya-L +44% on nine GPUs
   and +12% on two (against the MTP block), +19% on one RTX 3090 ([how](docs/SETTINGS.md#drafting-with-dflash2)). How
   much it gains depends on the PC: on one GPU that reads much of the model from RAM it is often slower. So a
@@ -182,13 +211,17 @@ your setup and the engine's speed lines; nothing is sent anywhere by itself. The
 - **Windows: answers suddenly several times slower:** the card is too full and Windows moves GPU memory to RAM. Leave
   more of it free: `START-MAYA.bat --setup --vram-reserve-mib 2048`
   ([the expert pool's size](docs/SETTINGS.md#the-expert-pools-size)).
+- **Windows on a Strix Halo / Gorgon Halo: other programs run out of memory, or the setup warns about the page
+  file:** set the page file to the size the setup prints ([docs/AMD_MAYA.md](docs/AMD_MAYA.md)).
 - **The download stopped:** run `./maya.sh` again; it continues where it stopped.
 - **Port 8080 is in use:** Maya is already running, or `--port 8081` starts another one.
 
 ## Support
 
-Project Maya is free and open source. If it's useful to you, you can support it at
-**[buymeacoffee.com/peasantsmith](https://buymeacoffee.com/peasantsmith)**. Thank you!
+Project Maya is free and open source. If it's useful to you, you can support it here - thank you!
+
+<p align="center"><a href="https://buymeacoffee.com/peasantsmith"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50"></a></p>
+
 Speed reports, bug reports and pull requests are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) says what helps most.
 
 ## Credits and license
@@ -196,8 +229,8 @@ Speed reports, bug reports and pull requests are welcome: [CONTRIBUTING.md](CONT
 - **People:** Project Maya is created and led by Peasant Smith ([@mw00](https://github.com/mw00),
   [X](https://x.com/PeasantSmith)), who owns the project, its name and the Maya models.
   [@needmorevram](https://github.com/needmorevram) ([X](https://x.com/needmorevram)) is a co-maintainer and
-  contributed major features: DFlash2 drafting, EXL3 support, KV streaming, conversation checkpoints, the layer-split
-  search, the expert profile and the CPU expert kernels. Thanks also to everyone who sent code and speed reports
+  contributed major features: DFlash2 drafting, EXL3 support, KV streaming,
+  conversation checkpoints, the layer-split search, the expert profile and the CPU expert kernels. Thanks also to everyone who sent code and speed reports
   ([contributors](https://github.com/mw00/project-maya/graphs/contributors)).
 - **Built on [Strata](https://github.com/Niko1221/Strata)** (MIT License, Copyright (c) 2026 Niko1221 and the Strata
   contributors): Maya's engine started from Strata's and was rewritten for GLM-5.3-Flash (the expert tiers across VRAM,
@@ -209,8 +242,13 @@ Speed reports, bug reports and pull requests are welcome: [CONTRIBUTING.md](CONT
   kernel and tensor-core decoding of a tile (MIT License, Copyright (c) 2025 Turboderp; `third_party/exllamav3/LICENSE`). **The DFlash2 drafter's
   forward** follows [beellama.cpp](https://github.com/Anbeeld/beellama.cpp)'s (MIT License, Copyright (c) 2023-2026
   The ggml authors, Anbeeld; `third_party/beellama.cpp/LICENSE`).
-- The model: [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) by zai-org (MIT); Maya's quants and the
-  image encoder file are made from zai-org's released weights and keep its license. The optional DFlash2 drafter
+- The models: [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) by zai-org (MIT); Maya's quants and the
+  image encoder file are made from zai-org's released weights and keep its license.
+  [DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017) by DeepSeek (MIT); Maya's
+  quant and drafter are made from DeepSeek's released weights and keep its license; the vision tower comes from
+  DeepSeek's checkpoint, the Engram tables and the GGUF option from
+  [unsloth's GGUFs](https://huggingface.co/unsloth/DeepSeek-V4.1-Flash-1017-GGUF), the EXL3 option is
+  [LibertAIDAI's](https://huggingface.co/LibertAIDAI/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw). The optional DFlash2 drafter
   ([GLM-5.3-Flash-DFlash2-GGUF](https://huggingface.co/Anbeeld/GLM-5.3-Flash-DFlash2-GGUF) by Anbeeld) is CC BY-NC-ND
   4.0, non-commercial use only, and is downloaded only when you choose it.
 - The dashboard's font: Outfit (SIL Open Font License 1.1, `serve/web/fonts/OFL.txt`).

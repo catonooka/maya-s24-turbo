@@ -1,8 +1,8 @@
-// src/ds4/ds4_main.cpp - strata-ds4: DeepSeek-V4.1-Flash on Maya.
+// src/ds4/ds4_main.cpp - maya-ds4: DeepSeek-V4.1-Flash on Maya.
 //
-//   strata-ds4 --pack <model>/maya-ds4 --ids 0,128803,... --n 16          greedy tokens after the ids
-//   strata-ds4 --pack ... --ids ... --dump-logits out.f32                every position's logits (the oracle's check)
-//   strata-ds4 --pack ... --serve                                       Maya's engine protocol on stdin / stdout
+//   maya-ds4 --pack <model>/maya-ds4 --ids 0,128803,... --n 16          greedy tokens after the ids
+//   maya-ds4 --pack ... --ids ... --dump-logits out.f32                every position's logits (the oracle's check)
+//   maya-ds4 --pack ... --serve                                       Maya's engine protocol on stdin / stdout
 //
 // --serve speaks what serve/server.py's StrataEngine expects: INFO lines, then `READY <context> stop`; per request
 // `GEN <max_new> [key=value ...] <id,id,...>` answered by `T <id>` lines and `DONE <generated> <prompt> <prompt ms>
@@ -11,6 +11,7 @@
 // that prompt's end; anything else starts over.  `GENI <max_new> [keys] <file> <ids>` carries the prompt's pictures
 // (the file: see read_pics); the state is shared only where the same picture sits at the same place.
 #include "ds4_model.hpp"
+#include "strata/platform/env_alias.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -32,6 +33,23 @@ double now_ms() {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+// the bytes this process had the storage read for it (Linux's /proc/self/io; -1 where there is none): the Monitor's
+// disk reads a token, the experts read in place from the model's files included
+long long io_read_bytes() {
+#ifdef __linux__
+    std::FILE* f = std::fopen("/proc/self/io", "r");
+    if (f == nullptr) return -1;
+    char line[128];
+    long long v = -1;
+    while (std::fgets(line, sizeof line, f) != nullptr)
+        if (std::sscanf(line, "read_bytes: %lld", &v) == 1) break;
+    std::fclose(f);
+    return v;
+#else
+    return -1;
+#endif
+}
+
 std::vector<int> parse_ids(const std::string& s) {
     std::vector<int> v;
     const char* p = s.c_str();
@@ -48,7 +66,7 @@ std::vector<int> parse_ids(const std::string& s) {
 
 void usage() {
     std::fprintf(stderr,
-                 "strata-ds4 --pack <model>/maya-ds4 [--gpus 0,1,...] [--max-context N] [--reserve-mib N]\n"
+                 "maya-ds4 --pack <model>/maya-ds4 [--gpus 0,1,...] [--max-context N] [--reserve-mib N]\n"
                  "           [--vram-experts F] [--cpu-threads N] [--expert-profile FILE|none] [--no-expert-cache] [--verbose]\n"
                  "           [--tp N] [--threads on|off] [--prefill-chunk N] [--dspark on|off|none] [--dspark-conf F]\n"
                  "           [--vision on|off] [--mmap-experts on|off|auto]\n"
@@ -93,6 +111,20 @@ struct Lines {
     }
 };
 
+// The drafts between two stats: each draft position (1st, 2nd, ..) - how often it was verified with every draft
+// before it kept, and how often it was kept then
+std::string per_position(const strata::ds4::Stats& s0, const strata::ds4::Stats& s1) {
+    std::string pp = "per position (kept / reached):";
+    for (int i = 0; i < 8; ++i) {
+        const long long r = s1.draft_reached[i] - s0.draft_reached[i], k = s1.draft_kept[i] - s0.draft_kept[i];
+        if (r <= 0) break;
+        char b[64];
+        std::snprintf(b, sizeof b, " %d: %lld/%lld %.0f%%", i + 1, k, r, 100.0 * (double) k / (double) r);
+        pp += b;
+    }
+    return pp;
+}
+
 // One round of decoding after `tok` (the token at pos(), not fed yet): with the drafter, its drafts while their
 // confidence holds (at most `room` - 1 of them), verified together; else a plain step.  `out` gets the tokens that follow
 // tok (the accepted drafts, then the trunk's next), the last of them the next round's tok.
@@ -104,7 +136,7 @@ bool round(strata::ds4::Model& m, int tok, int room, bool spec, float conf_min, 
     if (spec && room > 1 && m.draft_block() > 0) {
         std::vector<int> drafts;
         std::vector<float> conf;
-        if (!m.draft(tok, drafts, conf, err)) return false;
+        if (!m.draft(tok, drafts, conf, err, temperature, top_p, top_k, min_p, seed, counter)) return false;
         int keep = 0;
         while (keep < (int) drafts.size() && keep < room - 1 && conf[(size_t) keep] >= conf_min) ++keep;
         if (keep > 0) {
@@ -129,6 +161,8 @@ struct Req {
     float temperature = 0.0f, top_p = 1.0f, min_p = 0.0f;
     int top_k = 64;
     unsigned long long seed = 0;
+    int spec = -1;          // spec=0|1: this request drafts or not (-1: as the engine was started)
+    float conf = -1.0f;     // dspark_conf=F: the drafts' confidence floor for this request (-1: the engine's)
     std::string file;   // GENI: the pictures
     std::vector<int> ids;
 };
@@ -222,6 +256,8 @@ bool parse_gen(const std::string& line, Req& r, bool geni) {
         else if (k == "top_k") r.top_k = std::atoi(v.c_str());
         else if (k == "min_p") r.min_p = std::strtof(v.c_str(), nullptr);
         else if (k == "seed") r.seed = std::strtoull(v.c_str(), nullptr, 10);
+        else if (k == "spec") r.spec = std::atoi(v.c_str()) != 0;
+        else if (k == "dspark_conf") r.conf = std::strtof(v.c_str(), nullptr);
     }
     return !r.ids.empty() && (!geni || !r.file.empty());
 }
@@ -334,7 +370,7 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
         }
         // the prompt in windows (PP <read> <total> <ms> <tok/s> <reuse> every 64 tokens), a checkpoint before its last
         // token and one after it: the next turn re-renders this one, and shares its start up to one of them
-        const size_t last = r.ids.size() - 1;
+        const size_t total = r.ids.size();
         size_t done = from, next_pp = from + 64;
         m.set_progress([&](int64_t d) {   // (a run of chunks: each one through every layer)
             const double ms = now_ms() - t0;
@@ -342,21 +378,27 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
                         ms > 0 ? 1000.0 * (double) (done + (size_t) d - from) / ms : 0.0, from);
             std::fflush(stdout);
         });
-        while (ok && done < last) {
-            const size_t n = std::min<size_t>((size_t) m.feed_unit(), last - done);
-            ok = m.feed(r.ids.data() + done, (int) n, 0, err);
+        // (DS4_LAST_WINDOW=1: the last token in a window of its own after the checkpoint, as before - for A/B runs)
+        static const bool last_window = std::getenv("DS4_LAST_WINDOW") != nullptr;
+        while (ok && done < total) {
+            const size_t n = std::min<size_t>((size_t) m.feed_unit(), total - done);
+            // (the prompt's end: the last token in the same run, the checkpoint before it kept on the way)
+            const bool fin = done + n == total;
+            if (fin && last_window) {
+                ok = (n < 2 || m.feed(r.ids.data() + done, (int) n - 1, 0, err));
+                if (ok) m.checkpoint(1);
+                ok = ok && m.feed(r.ids.data() + done + n - 1, 1, 1, err);
+            } else
+                ok = fin ? m.feed_mark(r.ids.data() + done, (int) n, 1, 1, err)
+                         : m.feed(r.ids.data() + done, (int) n, 0, err);
             done += n;
-            if (ok && (done >= next_pp || done == last)) {
+            if (ok && (done >= next_pp || done == total)) {
                 const double ms = now_ms() - t0;
                 std::printf("PP %zu %zu %.1f %.1f %zu\n", done, r.ids.size(), ms,
                             ms > 0 ? 1000.0 * (double) (done - from) / ms : 0.0, from);
                 std::fflush(stdout);
                 next_pp = done + 64;
             }
-        }
-        if (ok) {
-            m.checkpoint(1);
-            ok = m.feed(r.ids.data() + last, 1, 1, err);
         }
         m.set_images({});
         if (!ok) {
@@ -378,14 +420,43 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
         bool cool = false;
         int tok = m.sample(r.temperature, r.top_p, r.top_k, r.min_p, r.seed, counter++);
         std::vector<int> got;
+        // STAT for the Monitor every 8 tokens and at the end, over this answer so far: the GLM engine's keys (speed, the
+        // VRAM hit, promotions a token) and DeepSeek's own - experts a token on the CPU lane, MB a token the storage
+        // read (Linux), the n-gram memory's (Engram) read time a token, the drafts' acceptance
+        const strata::ds4::Stats s_dec = m.stats();
+        const long long io_dec = io_read_bytes();
+        auto stat_line = [&]() {
+            const strata::ds4::Stats& s = m.stats();
+            const double ms = now_ms() - t1;
+            const double fed = (double) std::max<int64_t>(1, s.tokens - s_dec.tokens);
+            const double ex = (double) (s.experts - s_dec.experts), cx = (double) (s.cpu_experts - s_dec.cpu_experts);
+            std::string out = "STAT";
+            char b[160];
+            std::snprintf(b, sizeof b, " tok_s=%.2f ms_tok=%.2f vram_hit=%.4f cpu=%.3f ram=%.3f promo=%.3f engram_ms=%.3f",
+                          ms > 0 ? 1000.0 * (double) produced / ms : 0.0, produced > 0 ? ms / (double) produced : 0.0,
+                          ex > 0 ? 1.0 - cx / ex : 1.0, cx / fed, (double) (s.ram_experts - s_dec.ram_experts) / fed,
+                          (double) (s.swaps - s_dec.swaps) / fed, (s.engram_ms - s_dec.engram_ms) / fed);
+            out += b;
+            const long long io = io_read_bytes();
+            if (io >= 0 && io_dec >= 0) {
+                std::snprintf(b, sizeof b, " disk_mb=%.3f", (double) (io - io_dec) / 1e6 / fed);
+                out += b;
+            }
+            if (d_off > 0) {
+                std::snprintf(b, sizeof b, " drafts=%.3f", (double) d_acc / (double) d_off);
+                out += b;
+            }
+            std::printf("%s\n", out.c_str());
+        };
         for (;;) {
             if (in.stop.load()) {
                 finish = "cancel";
                 break;
             }
             std::printf("T %d\n", tok);
-            std::fflush(stdout);
             ++produced;
+            if (produced % 8 == 0) stat_line();
+            std::fflush(stdout);
             bool end = false;
             for (int e : eos) end = end || tok == e;
             if (end) {
@@ -397,8 +468,10 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
                 const int room = (int) std::min<long long>(limit - produced, m.max_context() - m.pos());
                 int off = 0, acc = 0;
                 // a round whose drafts were all below the confidence floor: the next one does without the drafter
-                const bool try_spec = spec && !cool;
-                if (!round(m, tok, room, try_spec, conf_min, r.temperature, r.top_p, r.top_k, r.min_p, r.seed, counter, got,
+                // (a request's spec / dspark_conf keys over the engine's: the speed calibration measures both ways)
+                const bool try_spec = (r.spec < 0 ? spec : r.spec != 0) && !cool;
+                if (!round(m, tok, room, try_spec, r.conf >= 0 ? r.conf : conf_min, r.temperature, r.top_p, r.top_k,
+                           r.min_p, r.seed, counter, got,
                            off, acc, err)) {
                     std::fprintf(stderr, "ds4: %s\n", err.c_str());
                     finish = "cancel";
@@ -414,6 +487,7 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
         }
         // (a stop within accepted drafts leaves the state past it: the next prompt shares less with it, and goes back to
         //  the checkpoint at this prompt's end)
+        stat_line();
         const double t2 = now_ms();
         std::printf("DONE %lld %zu %.1f %.1f %s %lld %lld %zu 0 0\n", produced, r.ids.size(), t1 - t0, t2 - t1, finish,
                     d_acc, d_off, from);
@@ -426,6 +500,8 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
                      t1 > t0 ? 1000.0 * (double) (r.ids.size() - from) / (t1 - t0) : 0.0, produced, t2 - t1,
                      t2 > t1 ? 1000.0 * (double) produced / (t2 - t1) : 0.0,
                      s.experts ? 100.0 * (double) s.cpu_experts / (double) s.experts : 0.0);
+        if (d_off > 0) std::fprintf(stderr, "maya ds4 serve: drafts %lld of %lld kept; %s\n", d_acc, d_off,
+                                    per_position(s_dec, s).c_str());
         m.save_profile();
     }
     m.save_profile();
@@ -435,6 +511,7 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
 }  // namespace
 
 int main(int argc, char** argv) {
+    strata::platform::env_aliases();   // (MAYA_* settings under their older names too)
     strata::ds4::Options o;
     std::string ids_s, dump, eos = "1";
     int n = 0, window = 16;
@@ -511,7 +588,7 @@ int main(int argc, char** argv) {
     strata::ds4::Model m;
     std::string err;
     if (!m.load(o, err)) {
-        std::fprintf(stderr, "strata-ds4: %s\n", err.c_str());
+        std::fprintf(stderr, "maya-ds4: %s\n", err.c_str());
         return 1;
     }
     if (!o.vision_only) std::fprintf(stderr, "%s", m.describe().c_str());
@@ -523,14 +600,14 @@ int main(int argc, char** argv) {
         const bool got = f != nullptr && !px.empty() && std::fread(px.data(), 1, px.size(), f) == px.size();
         if (f != nullptr) std::fclose(f);
         if (!got) {
-            std::fprintf(stderr, "strata-ds4: %s: expected %d x %d RGB bytes (--size WxH)\n", enc_rgb.c_str(), enc_w, enc_h);
+            std::fprintf(stderr, "maya-ds4: %s: expected %d x %d RGB bytes (--size WxH)\n", enc_rgb.c_str(), enc_w, enc_h);
             return 1;
         }
         std::vector<uint16_t> span;
         for (int k = 0; k < 2; ++k) {   // (the second: warm)
             const double te = now_ms();
             if (!m.encode_image(px.data(), enc_w, enc_h, span, err)) {
-                std::fprintf(stderr, "strata-ds4: %s\n", err.c_str());
+                std::fprintf(stderr, "maya-ds4: %s\n", err.c_str());
                 return 1;
             }
             std::fprintf(stderr, "vision: %d x %d pixels -> a span of %zu rows in %.0f ms\n", enc_w, enc_h,
@@ -547,7 +624,7 @@ int main(int argc, char** argv) {
     if (!images.empty()) {   // --images: a GENI file's pictures, for the prompt's spans
         std::vector<Pic> pics;
         if (!read_pics(images, pics, err)) {
-            std::fprintf(stderr, "strata-ds4: %s\n", err.c_str());
+            std::fprintf(stderr, "maya-ds4: %s\n", err.c_str());
             return 1;
         }
         std::vector<strata::ds4::Image> imgs;
@@ -555,7 +632,7 @@ int main(int argc, char** argv) {
             auto rows = std::make_shared<std::vector<uint16_t>>();
             const double te = now_ms();
             if (!m.encode_image(q.rgb.data(), q.width, q.height, *rows, err)) {
-                std::fprintf(stderr, "strata-ds4: %s\n", err.c_str());
+                std::fprintf(stderr, "maya-ds4: %s\n", err.c_str());
                 return 1;
             }
             std::fprintf(stderr, "picture at %lld: %d x %d pixels, %zu tokens, %.0f ms\n", (long long) q.start, q.width,
@@ -571,7 +648,7 @@ int main(int argc, char** argv) {
         const int T = (int) std::min<size_t>((size_t) window, ids.size() - a);
         const bool last = a + (size_t) T == ids.size();
         if (!m.feed(ids.data() + a, T, df != nullptr ? T : (last ? 1 : 0), err)) {
-            std::fprintf(stderr, "strata-ds4: %s\n", err.c_str());
+            std::fprintf(stderr, "maya-ds4: %s\n", err.c_str());
             return 1;
         }
         if (df != nullptr && m.logits(lg)) std::fwrite(lg.data(), 4, lg.size(), df);
@@ -582,6 +659,10 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "prompt: %zu tokens in %.0f ms (%.2f tok/s, windows of %d)\n", ids.size(), t1 - t0,
                  1000.0 * (double) ids.size() / (t1 - t0), window);
     const strata::ds4::Stats s0 = m.stats();
+    if (s0.eg_rows > 0)
+        std::fprintf(stderr, "prompt's Engram rows: %lld, %.1f%% without a read (repeats and the row cache), %lld read\n",
+                     (long long) s0.eg_rows, 100.0 * (double) s0.eg_hits / (double) s0.eg_rows, (long long) s0.eg_reads);
+    const long long io0 = io_read_bytes();
     std::vector<int> out;
     unsigned long long counter = 0;
     long long d_off = 0, d_acc = 0, rounds = 0;
@@ -599,7 +680,7 @@ int main(int argc, char** argv) {
                 const bool try_spec = spec && !cool;
                 if (!round(m, tok, n - (int) out.size(), try_spec, o.dspark_conf, temp, 1.0f, temp > 0 ? 64 : 1, 0.0f,
                            cli_seed, counter, got, off, acc, err)) {
-                    std::fprintf(stderr, "strata-ds4: %s\n", err.c_str());
+                    std::fprintf(stderr, "maya-ds4: %s\n", err.c_str());
                     return 1;
                 }
                 d_off += off;
@@ -621,6 +702,7 @@ int main(int argc, char** argv) {
                              "%.2f ms a round, verifying %.1f ms in all (%lld windows)\n",
                      rounds, d_off, d_acc, (double) out.size() / (double) rounds, (s1.draft_ms - s0.draft_ms) / nv,
                      s1.verify_ms - s0.verify_ms, (long long) (s1.drafts_offered > 0 ? 0 : 0));
+        std::fprintf(stderr, "dspark %s\n", per_position(s0, s1).c_str());
     }
     const double t2 = now_ms();
     const auto& s = m.stats();
@@ -634,6 +716,47 @@ int main(int argc, char** argv) {
                          "head wait %.2f, Engram reads %.2f\n",
                  (s.layer_ms - s0.layer_ms) / nt, (s.gpu_wait_ms - s0.gpu_wait_ms) / nt, (s.cpu_ms - s0.cpu_ms) / nt,
                  (s.head_ms - s0.head_ms) / nt, (s.engram_ms - s0.engram_ms) / nt);
+    if (s.eg_rows > s0.eg_rows) {   // the Engram rows: how many the row cache served, the reads' time behind the layers
+        const double rows = (double) (s.eg_rows - s0.eg_rows);
+        std::fprintf(stderr, "Engram per token: %.0f rows, %.1f%% without a read (the row cache holds %lld of %lld), "
+                             "%.1f read, the reads %.2f ms from asking to the last one (left to wait: %.2f)\n",
+                     rows / nt, 100.0 * (double) (s.eg_hits - s0.eg_hits) / rows, (long long) s.eg_cached,
+                     (long long) s.eg_cache_cap, (double) (s.eg_reads - s0.eg_reads) / nt, (s.eg_io_ms - s0.eg_io_ms) / nt,
+                     (s.engram_ms - s0.engram_ms) / nt);
+    }
+    const long long io1 = io_read_bytes();
+    if (io0 >= 0 && io1 >= 0)
+        std::fprintf(stderr, "decode reads from the disk: %.1f MB a token\n", (double) (io1 - io0) / 1e6 / nt);
+    if (s.ahead_picks > s0.ahead_picks) {   // lookahead
+        const double p = (double) (s.ahead_picks - s0.ahead_picks), c = (double) (s.ahead_cold - s0.ahead_cold);
+        std::fprintf(stderr, "lookahead: the guesses a layer before held %.1f%% of the picks (their top k %.1f%%, two layers "
+                             "before %.1f%%); file-read picks asked for early %.1f%% (%lld of %lld); %.1f experts asked "
+                             "for early a token\n",
+                     100.0 * (double) (s.ahead_hit - s0.ahead_hit) / p, 100.0 * (double) (s.ahead_hit_k - s0.ahead_hit_k) / p,
+                     100.0 * (double) (s.ahead_hit2 - s0.ahead_hit2) / p,
+                     c > 0 ? 100.0 * (double) (s.ahead_cold_hit - s0.ahead_cold_hit) / c : 0.0,
+                     (long long) (s.ahead_cold_hit - s0.ahead_cold_hit), (long long) (s.ahead_cold - s0.ahead_cold),
+                     (double) (s.ahead_pf - s0.ahead_pf) / nt);
+        std::string rk = "lookahead: picked by the guess's rank (1 ..):";
+        for (int i = 0; i < 16; ++i) {
+            const long long n = (long long) (s.ahead_rank_n[i] - s0.ahead_rank_n[i]);
+            if (n <= 0) break;
+            char b[24];
+            std::snprintf(b, sizeof b, " %.0f%%", 100.0 * (double) (s.ahead_rank_hit[i] - s0.ahead_rank_hit[i]) / (double) n);
+            rk += b;
+        }
+        std::fprintf(stderr, "%s\n", rk.c_str());
+    }
+    if (s.prof_tokens > s0.prof_tokens) {   // DS4_PROF
+        const double pt = (double) (s.prof_tokens - s0.prof_tokens);
+        double sum = 0;
+        for (int i = 0; i < 6; ++i) sum += (s.prof_ms[i] - s0.prof_ms[i]) / pt;
+        std::fprintf(stderr, "GPU per token (DS4_PROF): %.2f ms - between layers %.2f, attention %.2f, routing + shared "
+                             "expert %.2f, experts gate/up %.2f, waiting for the CPU lane %.2f, down + post %.2f\n", sum,
+                     (s.prof_ms[0] - s0.prof_ms[0]) / pt, (s.prof_ms[1] - s0.prof_ms[1]) / pt,
+                     (s.prof_ms[2] - s0.prof_ms[2]) / pt, (s.prof_ms[3] - s0.prof_ms[3]) / pt,
+                     (s.prof_ms[4] - s0.prof_ms[4]) / pt, (s.prof_ms[5] - s0.prof_ms[5]) / pt);
+    }
     if (df != nullptr) std::fclose(df);
     m.save_profile();
     return 0;

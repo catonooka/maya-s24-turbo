@@ -9,6 +9,14 @@
 # and is wrong about its own performance, which is the worst of both outcomes.
 cmake_minimum_required(VERSION 3.24)
 project(strata VERSION 0.1.27 LANGUAGES CXX)
+
+# Maya's build options by the names its docs give them: -DMAYA_X=... sets STRATA_X, the name this file reads
+get_cmake_property(_maya_cache CACHE_VARIABLES)
+foreach(_v IN LISTS _maya_cache)
+  if(_v MATCHES "^MAYA_(.+)$")
+    set(STRATA_${CMAKE_MATCH_1} "${${_v}}")
+  endif()
+endforeach()
 add_compile_definitions(STRATA_VERSION="${PROJECT_VERSION}")
 # issue #31: release builds keep a PDB beside the exe (not shipped in it), so a minidump from a stalled engine can
 # be read back to the exact source line
@@ -76,11 +84,11 @@ if(STRATA_ENABLE_CUDA)
     endif()
     if(_base LESS 75)
       message(FATAL_ERROR
-        "Strata needs an NVIDIA GPU of compute capability 7.5 or newer (RTX 20 / 30 / 40 / 50 series), but "
+        "Maya needs an NVIDIA GPU of compute capability 7.5 or newer (RTX 20 / 30 / 40 / 50 series), but "
         "CMAKE_CUDA_ARCHITECTURES is '${CMAKE_CUDA_ARCHITECTURES}'.")
     endif()
   endforeach()
-  message(STATUS "Strata: CUDA enabled, arch ${CMAKE_CUDA_ARCHITECTURES}")
+  message(STATUS "Maya: CUDA enabled, arch ${CMAKE_CUDA_ARCHITECTURES}")
   # Pascal (sm_6x - a "native" build on a Tesla P40, as maya.py's arch_setting() asks for below sm_75): GP102 / GP104
   # cache global loads in L2 only unless the code is compiled to cache them in L1 as well, and the decode's GEMVs - many
   # small loads of weights, scales and the q8_1 activations every warp of a block reads - starve there (Maya-L's Q6_K
@@ -95,7 +103,7 @@ if(STRATA_ENABLE_CUDA)
     string(REGEX REPLACE "-.*$" "" _base "${_a}")
     if(_base MATCHES "^6[0-9]$")
       string(APPEND CMAKE_CUDA_FLAGS " -Xptxas -dlcm=ca")
-      message(STATUS "Strata: Pascal (sm_${_base}): global loads cached in L1 (-Xptxas -dlcm=ca)")
+      message(STATUS "Maya: Pascal (sm_${_base}): global loads cached in L1 (-Xptxas -dlcm=ca)")
       break()
     endif()
   endforeach()
@@ -203,7 +211,7 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
              COMMAND strata-load --file ${CMAKE_CURRENT_SOURCE_DIR}/pack/full/experts.bin --layers 1)
     set_tests_properties(expert_arena_load PROPERTIES PASS_REGULAR_EXPRESSION "per-layer checksums")
   else()
-    message(STATUS "strata: pack/full/experts.bin absent - the expert arena load test is NOT registered")
+    message(STATUS "maya: pack/full/experts.bin absent - the expert arena load test is NOT registered")
   endif()
 
   # ---- strata_kernels (P2.S2) ----
@@ -400,17 +408,30 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     target_link_libraries(tune_hipblaslt PRIVATE hip::host roc::hipblas roc::hipblaslt)
   endif()
 
-  add_executable(strata src/program/generate.cpp)
-  target_include_directories(strata PRIVATE ${_strata_gpu_include_directories})
-  target_link_libraries(strata PRIVATE strata_engine strata_prefill strata_spec ${_strata_gpu_runtime_target})
+  add_executable(maya src/program/generate.cpp)
+  target_include_directories(maya PRIVATE ${_strata_gpu_include_directories})
+  target_link_libraries(maya PRIVATE strata_engine strata_prefill strata_spec ${_strata_gpu_runtime_target})
 
-  # DeepSeek-V4.1-Flash (EXL3, tools/ds4/pack.py): its own engine over the kernel libraries (src/ds4)
-  if(STRATA_ENABLE_CUDA)
-    add_executable(strata-ds4 src/ds4/ds4_main.cpp src/ds4/ds4_model.cu src/ds4/ds4_kernels.cu src/ds4/ds4_vision.cu)
-    target_include_directories(strata-ds4 PRIVATE ${_strata_gpu_include_directories})
-    target_link_libraries(strata-ds4 PRIVATE strata_kernels strata_kernels_cpu ${_strata_gpu_runtime_target} CUDA::cublas)
+  # DeepSeek-V4.1-Flash (EXL3, tools/ds4/pack.py; or a GGUF, tools/ds4/pack_gguf.py): its own engine over the kernel
+  # libraries (src/ds4)
+  # (CUDA, or HIP through include/strata/hip_compat as the GLM engine; Linux and Windows)
+  if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
+    add_executable(maya-ds4 src/ds4/ds4_main.cpp src/ds4/ds4_model.cu src/ds4/ds4_kernels.cu src/ds4/ds4_vision.cu
+                              src/ds4/ds4_gguf.cu src/ds4/ds4_gguf_cpu.cpp src/ds4/ds4_iq.cu src/ds4/ds4_iq_cpu.cpp)
+    target_include_directories(maya-ds4 PRIVATE ${_strata_gpu_include_directories} third_party/ggml)
+    target_link_libraries(maya-ds4 PRIVATE strata_kernels strata_kernels_cpu ${_strata_gpu_runtime_target}
+                          ${_strata_gpu_blas_target})
     add_executable(ds4_cpu_bench tests/ds4_cpu_bench.cpp)
     target_link_libraries(ds4_cpu_bench PRIVATE strata_kernels_cpu)
+    # the CPU lane's MXFP4 rows: every tier this CPU runs (and ggml-cpu's dot) at the experts' real size (no GPU)
+    add_executable(ds4_mx_bench tests/ds4_mx_bench.cpp src/ds4/ds4_gguf_cpu.cpp)
+    target_link_libraries(ds4_mx_bench PRIVATE strata_kernels_cpu)
+    # the GGUF kernels (BF16 matrices, MXFP4 experts) against a double-precision reference, and the packed KV caches
+    # against the BF16 rows bit for bit (needs a GPU, no model)
+    add_executable(ds4_gguf_test tests/ds4_gguf_test.cu src/ds4/ds4_gguf.cu src/ds4/ds4_gguf_cpu.cpp src/ds4/ds4_iq.cu
+                                 src/ds4/ds4_iq_cpu.cpp src/ds4/ds4_kernels.cu)
+    target_include_directories(ds4_gguf_test PRIVATE ${_strata_gpu_include_directories} third_party/ggml)
+    target_link_libraries(ds4_gguf_test PRIVATE strata_kernels_cpu ${_strata_gpu_runtime_target})
   endif()
 
   if(STRATA_ENABLE_HIP)

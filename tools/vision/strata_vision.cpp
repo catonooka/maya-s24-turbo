@@ -4,7 +4,7 @@
 // mtmd library and the model's mmproj file (vision encoder + projector).  The engine does the rest: it places the
 // rows at the image's pad tokens and gives them their 2-D M-RoPE positions (see --serve GENI in generate.cpp).
 //
-//   strata-vision --mmproj <mmproj.gguf> --model <text model .gguf, first split> [--gpu] [--threads N]
+//   maya-vision --mmproj <mmproj.gguf> --model <text model .gguf, first split> [--gpu] [--threads N]
 //                 [--max-tokens N] [--no-flash-attn] [--no-warmup] [--measure]
 //
 // --measure: load, warm up at the largest picture, print "MEM <bytes> <base> <total>" and end - the GPU memory this
@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
         else { std::fprintf(stderr, "unknown argument %s\n", a.c_str()); return 2; }
     }
     if (mmproj.empty() || model.empty()) {
-        std::fprintf(stderr, "usage: strata-vision --mmproj <mmproj.gguf> --model <model.gguf> [--gpu] [--threads N] "
+        std::fprintf(stderr, "usage: maya-vision --mmproj <mmproj.gguf> --model <model.gguf> [--gpu] [--threads N] "
                              "[--max-tokens N]\n");
         return 2;
     }

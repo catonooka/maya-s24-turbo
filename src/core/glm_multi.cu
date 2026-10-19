@@ -127,7 +127,7 @@ bool Glm5Model::seq_alloc_arenas(std::string& err) {
     SeqCtx check;
     if (seq_layout(max_ctx_, check) != state_bytes_ || check.dsa_pool != dsa_pool_ || check.kda_conv != kda_conv_ ||
         check.dsa_lat != dsa_lat_ || check.ik_ring != ik_ring_) {
-        err = "glm multi: the state layout does not match load_pack's (this build cannot run STRATA_GLM_SEQS)";
+        err = "glm multi: the state layout does not match load_pack's (this build cannot run MAYA_GLM_SEQS)";
         return false;
     }
     seq_[0].state = state_;
@@ -140,7 +140,7 @@ bool Glm5Model::seq_alloc_arenas(std::string& err) {
             cudaGetLastError();
             err = "pack: sequence state " + std::to_string(s) + " of " + std::to_string(n) + " (" +
                   std::to_string(c.bytes >> 20) + " MB) does not fit on CUDA" + std::to_string(dev_) +
-                  " - fewer STRATA_GLM_SEQS or a smaller STRATA_GLM_SEQ_CTX";
+                  " - fewer MAYA_GLM_SEQS or a smaller MAYA_GLM_SEQ_CTX";
             return false;
         }
         cudaMemset(a, 0, c.bytes);
@@ -186,7 +186,7 @@ bool Glm5Model::seq_pipe_ready(std::string& err) {
     const Glm5Geometry& g = g_;
     for (Glm5Model* m = this; m != nullptr; m = m->split_next_.get()) {
         if (m->seq_.empty()) {
-            err = "glm multi: one sequence state only (STRATA_GLM_SEQS)";
+            err = "glm multi: one sequence state only (MAYA_GLM_SEQS)";
             return false;
         }
         cudaSetDevice(m->dev_);

@@ -1591,7 +1591,7 @@ bool Glm5Model::dflash_bind(std::string& err) {
     // one drafter at a time: the NextN block's decode and its states would run beside the DFlash windows
     // (load_pack_env sets STRATA_GLM_NO_MTP, so the block is never loaded with a DFlash drafter)
     if (has_mtp()) {
-        err = "glm dflash: the NextN (MTP) draft block is loaded too - DFlash replaces it (STRATA_GLM_NO_MTP=1)";
+        err = "glm dflash: the NextN (MTP) draft block is loaded too - DFlash replaces it (MAYA_GLM_NO_MTP=1)";
         return false;
     }
     if (tail->dev_ != D->dev()) {

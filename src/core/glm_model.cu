@@ -1837,7 +1837,7 @@ bool Glm5Model::load_pack_place(const std::string& pack_dir, int64_t max_ctx, st
     cudaGetLastError();
     std::vector<int> bounds, devs;
     if (const char* dv = getenv("STRATA_GLM_DEVS"); dv != nullptr && !ints(dv, devs)) {
-        err = std::string("STRATA_GLM_DEVS: not a device list: ") + dv;
+        err = std::string("MAYA_GLM_DEVS: not a device list: ") + dv;
         return false;
     }
     if (!spec.empty() && spec != "auto") {
@@ -2887,7 +2887,7 @@ bool strata::core::Glm5Model::load_pack(const std::string& pack_dir, int64_t max
     // token_embd at all (the embedding row is dequantized on the host from the shard mapping)
     fast_mode_ = getenv("STRATA_GLM_SLOW") == nullptr;
     if (exl3_ && !fast_mode_) {
-        err = "pack: an EXL3 model runs on the fast path only (unset STRATA_GLM_SLOW)";
+        err = "pack: an EXL3 model runs on the fast path only (unset MAYA_GLM_SLOW)";
         return false;
     }
     const auto keep16 = [&](const Row& r, const strata::TensorInfo* t) {
@@ -3191,7 +3191,7 @@ bool strata::core::Glm5Model::load_pack(const std::string& pack_dir, int64_t max
         const bool own = find_tensor("blk." + std::to_string(g_.n_layers) + ".nextn.eh_proj.weight") != nullptr;
         auto extra = std::make_unique<strata::GgufFile>(mtp_gguf);
         if (extra->find("blk." + std::to_string(g_.n_layers) + ".nextn.eh_proj.weight") == nullptr) {
-            err = std::string("STRATA_GLM_MTP_GGUF: ") + mtp_gguf + " has no blk." + std::to_string(g_.n_layers) +
+            err = std::string("MAYA_GLM_MTP_GGUF: ") + mtp_gguf + " has no blk." + std::to_string(g_.n_layers) +
                   " draft block";
             return false;
         }
@@ -3473,7 +3473,7 @@ bool strata::core::Glm5Model::load_pack(const std::string& pack_dir, int64_t max
     dflash_on_ = fast_mode_ && !dflash_path_.empty();
     if (!dflash_path_.empty() && l1_ == g_.n_layers) {
         if (!fast_mode_)
-            std::fprintf(stderr, "glm dflash: the draft needs the fast path (STRATA_GLM_SLOW is set) - drafting off\n");
+            std::fprintf(stderr, "glm dflash: the draft needs the fast path (MAYA_GLM_SLOW is set) - drafting off\n");
         else if (!dflash_load(dflash_path_, dev_, err))
             return false;
     }

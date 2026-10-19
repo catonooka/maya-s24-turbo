@@ -57,8 +57,22 @@ struct Stats {
     int64_t experts = 0, cpu_experts = 0;   // routed experts run, and how many of them on the CPU lane
     double cpu_ms = 0.0, gpu_wait_ms = 0.0;   // the CPU lane's time; the host's waits for the routing
     double layer_ms = 0.0, head_ms = 0.0, engram_ms = 0.0;   // the layers' host time in all; the head's wait; Engram reads
+    int64_t eg_rows = 0, eg_hits = 0, eg_reads = 0;   // Engram rows asked for, served without a read, read from the files
+    double eg_io_ms = 0.0;                            // the windows' Engram reads, issue to last done (mostly hidden)
+    int64_t eg_cached = 0, eg_cache_cap = 0;          // the row cache's rows held, its capacity
     int64_t swaps = 0;                // experts the cache moved into VRAM
+    int64_t ram_experts = 0, ram_moves = 0;   // CPU-lane experts read from the RAM tier; experts moved into it
+    double prof_ms[6] = {};          // DS4_PROF: the GPU's time in decode by stage (between layers, attention, routing +
+    int64_t prof_tokens = 0;         // shared expert, experts' gate / up, the wait for the CPU lane, down + post)
+    // lookahead (decode windows of one): the picks of layers guessed a layer before (the next layer's gate on this
+    // layer's FFN input), of them in the guess's top k / in all its guesses / in the guess two layers before; the picks
+    // read from the files, of them prefetched early; experts prefetched early
+    int64_t ahead_picks = 0, ahead_hit_k = 0, ahead_hit = 0, ahead_hit2 = 0;
+    int64_t ahead_cold = 0, ahead_cold_hit = 0, ahead_pf = 0;
+    int64_t ahead_rank_n[16] = {}, ahead_rank_hit[16] = {};   // the next-layer guesses by rank, and how many were picked
     int64_t drafts_offered = 0, drafts_accepted = 0, drafts_rounds = 0;
+    // per draft position (the 1st .. 8th of a round): verified with all the drafts before it accepted, and accepted
+    int64_t draft_reached[8] = {}, draft_kept[8] = {};
     double draft_ms = 0.0, verify_ms = 0.0;   // the drafter's time, the verification windows' time
 };
 
@@ -73,6 +87,10 @@ public:
     /// Feeds n tokens (windows of up to 16, or a long run in chunks of prefill_chunk); the last `logits_rows` of them get
     /// logits (logits_rows > 16: only a run of one chunk or window).
     bool feed(const int* tokens, int n, int logits_rows, std::string& err);
+    /// feed() of a prompt's end that also keeps the state before its last token in checkpoint `slot` (a prompt's
+    /// last token then rides along in the run of chunks instead of a window of its own); the same as
+    /// feed(n - 1), checkpoint(slot), feed(1)
+    bool feed_mark(const int* tokens, int n, int logits_rows, int slot, std::string& err);
     /// The next token from the last feed's last logit row (greedy when temperature <= 0).
     int sample(float temperature, float top_p, int top_k, float min_p, uint64_t seed, uint64_t counter);
     /// The last feed's logit rows on the host (rows x vocab floats).
@@ -80,9 +98,14 @@ public:
 
     /// The DSpark drafter (speculative decoding): its block size (0: not loaded), drafts for the positions after `y`
     /// (y: the token at pos(), not fed yet) with their confidences, and the verification of [y, drafts]: how many of the
-    /// drafts stand and the token after them (the state then holds y and the accepted drafts).
+    /// drafts stand and the token after them (the state then holds y and the accepted drafts).  The drafts are the
+    /// drafter's argmax; a sampled request passes its chain (the same temperature / top_p / top_k / min_p / seed /
+    /// counter as its verify()) so that with DS4_DSPARK_SAMPLE=1 they are drawn from the drafter's distribution, as
+    /// DeepSeek's reference does.  verify() keeps a draft d with probability min(1, p(d) / q(d)) over the request's
+    /// chain - the speculative-sampling rule, so every token is still distributed as the model's own draw.
     int draft_block() const;
-    bool draft(int y, std::vector<int>& drafts, std::vector<float>& conf, std::string& err);
+    bool draft(int y, std::vector<int>& drafts, std::vector<float>& conf, std::string& err, float temperature = 0.0f,
+               float top_p = 1.0f, int top_k = 0, float min_p = 0.0f, uint64_t seed = 0, uint64_t counter = 0);
     bool verify(int y, const std::vector<int>& drafts, float temperature, float top_p, int top_k, float min_p,
                 uint64_t seed, uint64_t counter, int& accepted, int& next, std::string& err);
 

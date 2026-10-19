@@ -33,6 +33,8 @@ public:
     VisionTower& operator=(const VisionTower&) = delete;
     ~VisionTower();
     bool load(const VisionGeo& g, int device, const Reader& read, std::string& err);
+    /// Frees everything load took (a load that failed half way too); loaded() is false after it.
+    void release();
     bool loaded() const { return dev_ >= 0; }
     int device() const { return dev_; }
     size_t device_bytes() const { return dev_bytes_; }

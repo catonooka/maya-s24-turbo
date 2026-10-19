@@ -15,6 +15,7 @@
 // (`phase-2-correct-engine.md:5-9`).  What it is FOR is the honest tok/s figure and the logit dump.
 
 #include "strata/core/expert_cache.hpp"
+#include "strata/platform/env_alias.hpp"
 #include "strata/core/expert_source.hpp"
 #include "strata/core/remote_experts.hpp"
 #include "strata/core/on_device.hpp"
@@ -329,7 +330,7 @@ struct Options {
 
 void usage() {
     std::fprintf(stderr,
-                 "strata generate --pack DIR --tokens \"1,2,3\" [options]\n"
+                 "maya generate --pack DIR --tokens \"1,2,3\" [options]\n"
                  "\n"
                  "  --pack DIR           the pack directory (default pack/full)\n"
                  "  --glm-pack DIR       a GLM-5.3-Flash pack (M3.1): the verified Glm5Model runner behind the\n"
@@ -339,19 +340,19 @@ void usage() {
                  "                       verify window checks them; --spec-min-p P stops a draft at a selector\n"
                  "                       confidence below P (default 0.5 on 3+ GPUs, 0.95 on one; two GPUs: at\n"
                  "                       least one draft, up to 4 while the confidences' product stays at 0.9 -\n"
-                 "                       STRATA_GLM_DFLASH_MIN / _CUM).  The model's\n"
-                 "                       MTP block is not loaded with it.  Env: STRATA_GLM_DFLASH\n"
+                 "                       MAYA_GLM_DFLASH_MIN / _CUM).  The model's\n"
+                 "                       MTP block is not loaded with it.  Env: MAYA_GLM_DFLASH\n"
                  "  --expert-cache auto|N  (--glm-pack) the expert pool in VRAM: auto (the default) takes the free\n"
                  "                       VRAM less the reserve and checks it again once written; N caps the first\n"
-                 "                       GPU's at N of its largest experts.  Env: STRATA_GLM_EXPERT_CACHE\n"
+                 "                       GPU's at N of its largest experts.  Env: MAYA_GLM_EXPERT_CACHE\n"
                  "  --vram-reserve-mib N (--glm-pack) VRAM kept free beside the expert pool (default 700; a small\n"
-                 "                       card's gives way to the pool's floor).  Env: STRATA_GLM_RESERVE_MB\n"
+                 "                       card's gives way to the pool's floor).  Env: MAYA_GLM_RESERVE_MB\n"
                  "  --vram-reserve-later-mib N  (--glm-pack) the same on a split's later GPUs (default: the above).\n"
-                 "                       Env: STRATA_GLM_RESERVE_LATER_MB\n"
+                 "                       Env: MAYA_GLM_RESERVE_LATER_MB\n"
                  "  --glm-ram-resident   the pinned RAM tier holds every expert VRAM does not, and nothing is evicted\n"
-                 "                       to disk. The start fails if the tier cannot hold them (raise STRATA_GLM_RAM_GB\n"
-                 "                       or lower --max-context). Env: STRATA_GLM_RAM_RESIDENT=1\n"
-                 "  --glm-ram-slack N    extra RAM-tier slots per MoE layer (STRATA_GLM_RAM_SLACK; default 16 when\n"
+                 "                       to disk. The start fails if the tier cannot hold them (raise MAYA_GLM_RAM_GB\n"
+                 "                       or lower --max-context). Env: MAYA_GLM_RAM_RESIDENT=1\n"
+                 "  --glm-ram-slack N    extra RAM-tier slots per MoE layer (MAYA_GLM_RAM_SLACK; default 16 when\n"
                  "                       resident, 0 otherwise)\n"
                  "  --parallel N         --serve: up to N requests decode at once (1-8, default 1). One GPU decodes\n"
                  "                       them together (each weight read once for all); a split pipelines them\n"
@@ -376,7 +377,7 @@ void usage() {
                  "                       whole K/V in pinned RAM; the freed VRAM goes to expert slots. 0 (default):\n"
                  "                       all of it in VRAM. A context of N cells or fewer is not streamed. With\n"
                  "                       --glm-pack: N positions of each DSA layer's latent cache\n"
-                 "                       (STRATA_GLM_KV_RESIDENT)\n"
+                 "                       (MAYA_GLM_KV_RESIDENT)\n"
                  "  --kv-streaming on|off  KV streaming as a switch (the setup writes `on` into the config): on keeps\n"
                  "                       --kv-resident's N cells in VRAM, 32768 when it gives none; off keeps all\n"
                  "                       of the KV in VRAM whatever --kv-resident says\n"
@@ -417,7 +418,7 @@ void usage() {
                  "  --no-capture         run the layers directly instead of replaying graphs\n"
                  "  --shared-late        A/B: shared expert after the CPU pool (default: overlapped with it)\n"
                  "  --keep-canonical     A/B: also load canonical copies of natively served tensors (more VRAM)\n"
-                 "  --vision             --serve takes images too (GENI requests; embeddings from strata-vision)\n"
+                 "  --vision             --serve takes images too (GENI requests; embeddings from maya-vision)\n"
                  "  --prompt-cache N     --serve: keep N conversation checkpoints between requests (default 6, ~118 MB\n"
                  "                       of RAM each; 0 = read every prompt from the start)\n"
                  "  --prompt-cache-every N  --serve: also checkpoint every N fresh prompt tokens (default 16384, 0 = off)\n"
@@ -1961,7 +1962,7 @@ static int glm_pack_generate(const Options& o) {
                          prompt_ms / (double) std::max<size_t>(1, prompt.size()), (long long) st2.pool_used,
                          (long long) st2.pool_slots, (long long) st2.ram_used, (long long) st2.ram_slots);
             if (st2.disk_skips > st1.disk_skips)
-                std::fprintf(stderr, "glm skip: %.2f disk-only experts/tok left out (STRATA_GLM_DISK_SKIP_W / _FROM)\n",
+                std::fprintf(stderr, "glm skip: %.2f disk-only experts/tok left out (MAYA_GLM_DISK_SKIP_W / _FROM)\n",
                              (double) (st2.disk_skips - st1.disk_skips) / n);
             if (model.spec_steps_ > spec0)
                 std::fprintf(stderr, "glm spec: %llu of %llu drafts accepted (%.1f%%)\n",
@@ -1991,7 +1992,7 @@ static int glm_pack_generate(const Options& o) {
     // through the pipelined decode (Glm5Model::multi_issue), each card of the split on a different conversation.
     const bool multi = o.serve && model.fast() && model.seq_count() > 1;
     if (multi && model.dflash_ready())
-        std::fprintf(stderr, "glm dflash: not used with STRATA_GLM_SEQS=%d - the several-conversation scheduler decodes "
+        std::fprintf(stderr, "glm dflash: not used with MAYA_GLM_SEQS=%d - the several-conversation scheduler decodes "
                              "without it (and without the MTP block, which --dflash leaves unloaded)\n",
                      model.seq_count());
     struct Ctx {   // a context's driver-side state while another one is bound (the bound one's is in the globals)
@@ -2604,7 +2605,7 @@ static int glm_pack_generate(const Options& o) {
         int n = 2, L = 512, G = 256, K = 32, same_prompt = 0;
         std::sscanf(mb, "%d,%d,%d,%d,%d", &n, &L, &G, &K, &same_prompt);
         if (n > model.seq_count() || n < 1 || L < 2 || G < 2) {
-            std::fprintf(stderr, "multi bench: %d sequences asked, %d states (STRATA_GLM_SEQS)\n", n, model.seq_count());
+            std::fprintf(stderr, "multi bench: %d sequences asked, %d states (MAYA_GLM_SEQS)\n", n, model.seq_count());
             return 2;
         }
         model.set_host_logits(false);
@@ -2986,7 +2987,7 @@ static int glm_pack_generate(const Options& o) {
     else std::printf("READY %lld stop pause\n", (long long) o.max_context);
     std::fprintf(stderr, "maya generate: glm5-next serve (M3.1): GEN <max_new> [keys] <ids>, GENI <max_new> [keys] "
                          "<embeddings> <ids>; QUIT to end\n");
-    // GENI: the embeddings file is one or more strata-vision records (int32 'SVE1', n, nx, ny, n_embd, then n x n_embd
+    // GENI: the embeddings file is one or more maya-vision records (int32 'SVE1', n, nx, ny, n_embd, then n x n_embd
     // floats) in prompt order; their rows stand in for the prompt's <|image|> tokens, in order (GLM-5.3's image
     // tokens take no positions of their own: the rows only replace the embeddings)
     constexpr int64_t kGlmImageToken = 154854;   // <|image|>
@@ -3227,7 +3228,7 @@ static int glm_pack_generate(const Options& o) {
                     if (got == 0 && std::feof(f)) break;
                     if (got != sizeof hdr || hdr[0] != 0x31455653 || hdr[1] <= 0 || hdr[4] != E ||
                         (size_t) hdr[1] > toks.size() - cur_img_rows.size() / (size_t) E) {
-                        ge = "not a strata-vision record for this model";
+                        ge = "not a maya-vision record for this model";
                         break;
                     }
                     const size_t at = cur_img_rows.size();
@@ -3300,6 +3301,7 @@ static int glm_pack_generate(const Options& o) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    strata::platform::env_aliases();   // (MAYA_* settings under their older names too)
     // **UNBUFFERED, BECAUSE THE INTERESTING OUTPUT IS THE OUTPUT BEFORE A CRASH.**  `stdout` redirected to a
     // pipe or a file is block-buffered, so a program that dies loses every line it had already printed - which
     // turns "it crashed at step 7" into "it crashed somewhere", and the difference is a debugging session.
@@ -3994,7 +3996,7 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr,
                              "maya generate: %s declares architecture %s (GLM-5.3-Flash)\n"
                              "maya generate: the qwen4exp driver path cannot serve it - run the pack instead:\n"
-                             "maya generate:   strata generate --glm-pack <pack_dir> --tokens ... (the verified\n"
+                             "maya generate:   maya generate --glm-pack <pack_dir> --tokens ... (the verified\n"
                              "maya generate:   Glm5Model runner; docs/GLM5-FLASH.md §9)\n",
                              o.native_preset.c_str(), v->s.c_str());
                 return 2;
@@ -4595,7 +4597,7 @@ int main(int argc, char** argv) {
             bool ok = false;
             if (fake_fails > 0) {
                 --fake_fails;
-                err = "ExpertCache: cudaMalloc failed: out of memory (STRATA_TEST_CACHE_FAIL)";
+                err = "ExpertCache: cudaMalloc failed: out of memory (MAYA_TEST_CACHE_FAIL)";
             } else {
                 ok = sized_slots.empty()
                     ? xcache.open(o.expert_cache, g.n_layers, g.n_expert, (int64_t) strata::kernels::cpu::expert_layout().max_blob, err)
@@ -6044,7 +6046,7 @@ int main(int argc, char** argv) {
         strata::spec::SuffixDrafter sfx(std::max(1, o.suffix_draft), 64, (size_t) o.max_context + 4096);
         strata::spec::DraftPolicy policy(S);   // MTP or lookup window, learned over the whole process
         // The vision path (--vision): GENI <max_new> <embeddings file> <id,id,...> carries images.  The file is one
-        // or more strata-vision records (int32 'SVE1', n, nx, ny, n_embd, then n x n_embd floats) in prompt order;
+        // or more maya-vision records (int32 'SVE1', n, nx, ny, n_embd, then n x n_embd floats) in prompt order;
         // each image's rows go to its run of <|image_pad|> tokens, whose M-RoPE positions are mtmd's: t = p,
         // h = p + y, w = p + x, and the text after the image continues at p + max(nx, ny).
         constexpr int64_t kImagePad = 248056;   // qwen4exp.ple.image_token_id: the PLE hash reads it for image cells
@@ -6144,7 +6146,7 @@ int main(int argc, char** argv) {
                         if (got == 0) break;
                         if (got != 5 || hdr[0] != 0x31455653 || hdr[1] < 1 || hdr[2] < 1 || hdr[3] < 1 ||
                             (int64_t) hdr[2] * hdr[3] != hdr[1] || hdr[4] != (int32_t) g.n_embd) {
-                            ve = "bad embeddings file (expected strata-vision records of width " +
+                            ve = "bad embeddings file (expected maya-vision records of width " +
                                  std::to_string((long long) g.n_embd) + ")";
                             break;
                         }
@@ -6295,7 +6297,7 @@ int main(int argc, char** argv) {
                         cudaStreamSynchronize(st->stream);
                     }
                     reread_to = resume;
-                    std::fprintf(stderr, "maya serve: STRATA_CKPT_REREAD: reading %lld tokens again instead of "
+                    std::fprintf(stderr, "maya serve: MAYA_CKPT_REREAD: reading %lld tokens again instead of "
                                          "restoring\n", (long long) resume);
                 } else if (c == nullptr || !checkpoint_restore(*c, ss, g) || c->stage_parts.size() != stages.size() ||
                            [&] {

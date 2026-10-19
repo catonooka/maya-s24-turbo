@@ -1,4 +1,4 @@
-"""serve/ds4_vision.py - pictures for DeepSeek-V4.1 (strata-ds4 runs the vision tower itself).
+"""serve/ds4_vision.py - pictures for DeepSeek-V4.1 (maya-ds4 runs the vision tower itself).
 
 The server's half of DeepSeek's inference/image_processor.py: a picture is resized (aspect kept, gray padding) to a
 pixel size whose 14 x 14 patch grid, merged 3 x 3 by the aligner, costs at most `max_tokens` prompt tokens, and its
@@ -127,7 +127,7 @@ def prepare(data: bytes, g: Geometry) -> Picture:
 
 
 class Vision:
-    """The server's side of strata-ds4's pictures: the resize (cached by the picture's bytes: a conversation sends
+    """The server's side of maya-ds4's pictures: the resize (cached by the picture's bytes: a conversation sends
     its pictures with every turn) and the GENI file.  Shaped like serve.server.Vision where the Service uses it."""
 
     def __init__(self, geometry: Geometry, directory: Path, load):

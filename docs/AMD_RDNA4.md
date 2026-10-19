@@ -31,15 +31,15 @@ A manual build, using Maya's existing pinned llama.cpp checkout:
 ```sh
 maya_rocm_root="$(realpath "${ROCM_PATH:-/opt/rocm}")"
 cmake -S . -B build-multi -G Ninja -DCMAKE_BUILD_TYPE=Release \
-  -DSTRATA_ENABLE_HIP=ON -DSTRATA_ENABLE_CUDA=OFF \
-  -DSTRATA_NATIVE_EXPERTS=ON -DSTRATA_PREFILL_MMQ=ON \
-  -DSTRATA_BUILD_TESTS=OFF \
+  -DMAYA_ENABLE_HIP=ON -DMAYA_ENABLE_CUDA=OFF \
+  -DMAYA_NATIVE_EXPERTS=ON -DMAYA_PREFILL_MMQ=ON \
+  -DMAYA_BUILD_TESTS=OFF \
   '-DCMAKE_HIP_ARCHITECTURES=gfx1100;gfx1201;gfx1151' \
   -DCMAKE_HIP_COMPILER="$maya_rocm_root/llvm/bin/clang++" \
   -DCMAKE_HIP_COMPILER_ROCM_ROOT="$maya_rocm_root" \
   -DCMAKE_PREFIX_PATH="$maya_rocm_root" \
-  -DSTRATA_GGML_DIR="$PWD/third_party/llama.cpp"
-cmake --build build-multi --target strata strata-device hip_expert_cache_staging \
+  -DMAYA_GGML_DIR="$PWD/third_party/llama.cpp"
+cmake --build build-multi --target maya strata-device hip_expert_cache_staging \
   hip_intrinsics hip_handoff hip_glm_handoff hip_glm_prefill_attention iq1_s_parity \
   glm_hc_parity glm_kda_parity glm_ffn_parity glm_dsa_parity glm_layer_parity \
   glm_model_test hip_prefill_mmq_parity -j 3
@@ -60,9 +60,9 @@ env -u ROCR_VISIBLE_DEVICES LD_LIBRARY_PATH=/opt/rocm/lib HIP_VISIBLE_DEVICES=1 
   ctest --test-dir build-multi --output-on-failure --timeout 60 \
   -R '^(glm_(hc|kda|ffn|dsa|layer)_parity|glm_model_test|hip_intrinsics|hip_(glm_handoff|glm_prefill_attention|handoff|device_selftest|prefill_mmq_parity|expert_cache_staging)|iq1_s_parity)$'
 env -u ROCR_VISIBLE_DEVICES LD_LIBRARY_PATH=/opt/rocm/lib HIP_VISIBLE_DEVICES=1 \
-  STRATA_GLM_HC1=1 build-multi/glm_hc_parity --selftest
+  MAYA_GLM_HC1=1 build-multi/glm_hc_parity --selftest
 env -u ROCR_VISIBLE_DEVICES LD_LIBRARY_PATH=/opt/rocm/lib HIP_VISIBLE_DEVICES=1 \
-  STRATA_GLM_HC2=1 build-multi/glm_hc_parity --selftest
+  MAYA_GLM_HC2=1 build-multi/glm_hc_parity --selftest
 ```
 
 Both cards pass 14/14 GPU checks; HC1/HC2 also pass on the R9700. The intrinsics

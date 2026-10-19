@@ -1,4 +1,4 @@
-"""tools/ds4/tok.py - token ids for strata-ds4's --ids, and text back from its output (DeepSeek-V4.1's tokenizer).
+"""tools/ds4/tok.py - token ids for maya-ds4's --ids, and text back from its output (DeepSeek-V4.1's tokenizer).
 
     python tools/ds4/tok.py --model ~/models/DSV4 --chat "Why is the sky blue?" [--think]   -> 0,128803,...
     python tools/ds4/tok.py --model ~/models/DSV4 --decode 18033,1                          -> text

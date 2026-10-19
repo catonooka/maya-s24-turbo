@@ -10,7 +10,7 @@ It first asks which model to set up:
 - **GLM-5.3-Flash** - Project Maya's GGUF quants (or turboderp's EXL3 quants), from one GPU up; the steps below;
 - **DeepSeek-V4.1-Flash-1017** (experimental) - [LibertAIDAI's EXL3 quant at 2.9 bits](https://huggingface.co/LibertAIDAI/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw)
   (211 GB) and its two Engram tables from [DeepSeek's repo](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017)
-  (203 GB), on its own engine (`build/strata-ds4`): Linux, NVIDIA RTX 30 / A100 or newer. It is fast with about 230 GB
+  (203 GB), on its own engine (`build/maya-ds4`): Linux, NVIDIA RTX 30 / A100 or newer. It is fast with about 230 GB
   of VRAM and RAM together; with less, the setup warns and the engine reads the experts that do not fit from the
   model's files on the SSD (`--mmap-experts auto`), much slower - one RTX 3090 with 64 GB of RAM: prompts about 50
   tokens/s, answers 4-5 tokens/s (faster with `--dspark none`). The same steps with these differences: the
@@ -19,6 +19,14 @@ It first asks which model to set up:
   `--model-dir DIR` uses files you already have; the pack is `DIR/maya-ds4/` (`tools/ds4/pack.py`, about a minute);
   pictures need nothing more - the model's own vision tower runs in the engine; the config is `maya-ds4.json`, with
   tensor parallel across pairs of equal GPUs (`--tp 2`); there is no tuning step (the engine balances its own split).
+
+  Or from [unsloth's GGUFs](https://huggingface.co/unsloth/DeepSeek-V4.1-Flash-1017-GGUF) (`--ds4-quant`; the setup asks):
+  **UD-Q8_K_XL** (508 GB, the default: dense weights BF16, routed experts MXFP4, the Engram tables FP8 - DeepSeek's own
+  formats) or **UD-Q4_K_XL** (501 GB: dense weights Q8_0, less VRAM). The same engine reads them in place (the pack is
+  `tools/ds4/pack_gguf.py`'s), from NVIDIA Volta (V100) on: the most-used experts in VRAM, the others read from the
+  GGUF through the OS page cache - from RAM where they fit, from the SSD otherwise - so it runs whatever the memory
+  (more VRAM and RAM is faster; keep the files on an NVMe SSD; `--mmap-experts off` copies as many of them into RAM as
+  fit instead, on huge pages split across the CPU sockets' memory - measured no faster than the page cache). The GGUFs have no DSpark drafter and no vision tower.
 
 GLM-5.3-Flash's first run takes 20-40 minutes plus the download:
 
@@ -68,7 +76,8 @@ is not downloaded again, and your settings stay. By hand: `git pull`, then `./se
 | `--models-dir DIR` | where downloaded models go, each in a folder named after it - `DIR/Maya-L/` holds that model's GGUF files (default `../Maya-data/models`); put it on the NVMe |
 | `--download-model` | download the model without asking (the commands and size are still printed) |
 | `--model NAME` | which model, without asking: `DeepSeek-V4.1-Flash-1017`, or a GLM-5.3-Flash download: `Maya-S-v2-IQ2_XXS` (Maya-S), `Maya-S24`, `Maya-M`, `Maya-M-Derisked`, `Maya-L`, or `EXL3-3.05bpw` / `EXL3-4.05bpw` - an experimental EXL3 quant at 3.05 or 4.05 bits per weight ([3.05bpw](https://huggingface.co/turboderp/GLM-5.3-Flash-exl3/tree/3.05bpw), 125.3 GB; [4.05bpw](https://huggingface.co/turboderp/GLM-5.3-Flash-exl3/tree/4.05bpw), 165.2 GB; both with the MTP block) that the engine reads in place from its safetensors: NVIDIA only, 3.05bpw tested on Linux, neither measured against the FP8 model |
-| `--model-dir DIR` | use DeepSeek-V4.1-Flash-1017's files you already have: the folder with the EXL3 quant's files and the Engram shards `model-00047-of-00048.safetensors` / `model-00048-of-00048.safetensors` of DeepSeek's repo (it must be writable: the pack goes inside it) |
+| `--model-dir DIR` | use DeepSeek-V4.1-Flash-1017's files you already have: the folder with a GGUF's shards, or with the EXL3 quant's files and the Engram shards `model-00047-of-00048.safetensors` / `model-00048-of-00048.safetensors` of DeepSeek's repo (it must be writable: the pack goes inside it) |
+| `--ds4-quant Q` | DeepSeek-V4.1-Flash-1017's files: `gguf-q8` (unsloth's UD-Q8_K_XL GGUF, the default), `gguf-q4` (its UD-Q4_K_XL: dense weights Q8_0) or `exl3` (LibertAIDAI's EXL3 quant at 2.9 bits) |
 | `--no-vision` | text only: no image encoder (DeepSeek: its vision tower off) |
 | `--draft mtp` / `--draft dflash2` | how the model drafts tokens ahead: its MTP block (the default), or a DFlash2 drafter - downloaded (0.7 GB) into `DIR/GLM-5.3-Flash-DFlash2/` and passed as `--dflash` (Maya-L: +44% on nine GPUs, +12% on two, +19% on one GPU; NVIDIA RTX 30 / A100 and newer - older cards keep the MTP block unless you pass this; the drafter's license is CC BY-NC-ND 4.0, non-commercial use only). The [speed calibration](SETTINGS.md#the-speed-calibration) then keeps it only if it is faster on your PC |
 | `--gpu N` / `--gpus 0,1,2,3` | one GPU, or several (up to 16) that split the model's layers |
