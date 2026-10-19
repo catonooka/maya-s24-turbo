@@ -4,6 +4,48 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.16 - 2026-10-19
+
+DeepSeek-V4.1-Flash-1017 on Maya: Project Maya's own quant of the 748B model, on NVIDIA and AMD, Linux and Windows,
+with any amount of memory.
+
+- **DeepSeek-V4.1-Flash-1017.** The setup now asks which model to run: GLM-5.3-Flash as before, or DeepSeek's 748B
+  model on an engine of its own (`maya-ds4`): its sliding-window and compressed sparse attention with the two-level
+  indexer, hyper-connections, the Engram n-gram tables, the DSpark drafter and the vision tower.
+- **Maya-S, Project Maya's own quant of it** (the default, `--ds4-quant maya-s`): the routed experts in 2-3 bits with
+  error-feedback rounding, the attention, shared experts and dense weights in 8-bit - 178 GB, plus DeepSeek's Engram
+  tables (203 GB, read a few rows a token from the SSD). It picks the same next token as the original model 92.6% of
+  the time. [On Hugging Face](https://huggingface.co/peasantsmith/DeepSeek-V4.1-Flash-1017-Maya-GGUF).
+- **Or unsloth's GGUFs** (`--ds4-quant gguf-q8` / `gguf-q4`: DeepSeek's own formats, 508 / 501 GB), **or LibertAIDAI's
+  EXL3 quant** at 2.9 bits (`--ds4-quant exl3`; RTX 30 / A100 or newer; its basic path: #271 by @needmorevram).
+- **Big models, little memory:** the most-used experts go to the GPUs, the others are read in place from the model's
+  files - from RAM where they fit, from the SSD otherwise. Keep the files on an NVMe SSD. Runs from NVIDIA Volta
+  (V100) on and on AMD (RX 7900, Radeon AI PRO R9700 / RX 9070, Strix Halo / Gorgon Halo).
+- **The DSpark drafter:** the setup fetches the model's drafter (8 GB, from Maya's repo: DeepSeek's FP4 experts, its
+  dense weights in 8-bit) and a speed calibration keeps it only on PCs where drafting makes answers faster.
+- **Pictures:** with the GGUFs the setup fetches DeepSeek's vision tower (1 GB of its checkpoint); it runs on the
+  first GPU in about 320 MB, on NVIDIA and AMD.
+- **Several GPUs:** the layers are split across them; pairs of equal GPUs also split each layer where the files'
+  formats allow.
+- **Fast prompts:** a prompt streams only the experts it picks, read from the SSD side by side, and short prompts take
+  whichever path is faster on the PC.
+- **The attention caches as DeepSeek stores them:** the compressed cache and the index keys in FP4, the sliding window
+  in FP8 - 3.5x smaller, the same answers, faster prompts, and more experts fit in VRAM at long contexts.
+- **A faster CPU lane:** the experts the CPU computes use 8-bit integer dot products (AVX2, AVX-VNNI, AVX-512), each
+  CPU picking its fastest; the results are the same on every one.
+- **Windows on a Strix Halo / Gorgon Halo:** Windows counts the GPU's share of the memory against its page file. The
+  setup asks for a page file big enough to keep every expert on the GPU and says the size; without it the engine keeps
+  fewer experts there and never starves other programs (docs/AMD_MAYA.md).
+- **The dashboard and the Chat per model:** with DeepSeek, the Monitor shows its own numbers (experts on the GPU and
+  the CPU, SSD reads, the cache's moves, the n-gram memory), the Chat's thinking levels are DeepSeek's (Off, Low,
+  High, Max) with its recommended settings, and each model keeps its own saved settings.
+- **Model downloads that keep going:** four files at a time, each resumed where it stopped, and run again on its own
+  when the connection drops or stalls.
+- **GLM-5.3-Flash:** the expert usage record is saved on Windows again (it stopped updating after the first save
+  there).
+- **Name scope adjustments:** the programs and settings follow Maya's name; existing installs and settings keep
+  working and are carried over at their next start.
+
 ## v1.1.15 - 2026-10-16
 
 Faster EXL3 drafting across many GPUs, faster long prompts on V100s, a faster CPU lane on Zen 5, and EXL3 on AMD
