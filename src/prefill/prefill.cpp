@@ -441,8 +441,45 @@ const MmqPlan& mmq_plan() {
     }();
     return plan;
 }
+// The Volta grouped-WMMA prompt experts (STRATA_PF_WMMA): requested, this pack's layers all in the kernel's format
+// set (gate/up IQ3_XXS / IQ3_S / IQ2_S / IQ4_XS, down IQ4_NL / Q2_0 - the 640-column down needs a block size that
+// divides it), and the current device strict Volta (sm_70).  When on, the MoE products skip the q8_1 quantization:
+// the activations stay FP16 (mixed_h, gathered by src; H reused as FP16), so Xq and Hq are not sized and H is a
+// view of xn16 (T * D uint16 >= T * 640).
+bool wmma_buffers() {
+#if defined(STRATA_USE_HIP)
+    return false;
+#else
+    static const bool covered = [] {
+        const char* e = std::getenv("STRATA_PF_WMMA");
+        if (!e || std::atoi(e) == 0 || !mmq_plan().any || mmq_plan().fallback) return false;
+        const auto& lay = strata::kernels::cpu::expert_layout();
+        if (!lay.native || lay.fmt.empty()) return false;
+        for (const auto& f : lay.fmt)
+            if ((f.gu_type != 18 && f.gu_type != 21 && f.gu_type != 22 && f.gu_type != 23) ||
+                (f.d_type != 20 && f.d_type != 42)) return false;
+        return true;
+    }();
+    if (!covered) return false;
+    static thread_local int cached_device = -1;
+    static thread_local bool volta = false;
+    int device = -1;
+    if (cudaGetDevice(&device) != cudaSuccess) return false;
+    if (device != cached_device) {
+        int major = 0, minor = 0;
+        if (cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device) != cudaSuccess ||
+            cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device) != cudaSuccess) return false;
+        volta = major == 7 && minor == 0;
+        cached_device = device;
+        if (volta) std::fprintf(stderr, "prefill: Volta grouped-WMMA prompt experts on (CUDA%d)\n", device);
+    }
+    return volta;
+#endif
+}
 uint64_t moe_set_bytes(size_t T, int64_t n_expert) {
     const MmqPlan& mp = mmq_plan();
+    const bool wmma = wmma_buffers();
+    if (wmma) static_assert(D >= K * 640, "the WMMA path's H view needs xn16 to cover T * 640 rows");
     Alloc a; a.count_only = true; bool ok = true;
     a.take<float>(T * n_expert, ok); a.take<float>(T * K, ok); a.take<int32_t>(T * K, ok); a.take<int32_t>(T * K, ok);
     a.take<int32_t>(T * K, ok);
@@ -451,7 +488,7 @@ uint64_t moe_set_bytes(size_t T, int64_t n_expert) {
     if (mp.fallback) a.take<uint16_t>(T * K * 640, ok);
     a.take<float>(T * K * N, ok); a.take<float>(T * 640, ok);
     a.take<float>(T * 640, ok); a.take<uint16_t>(T * 640, ok); a.take<float>(T * N, ok); a.take<float>(T, ok);
-    if (mp.any) {
+    if (mp.any && !wmma) {
         a.take<uint8_t>(mmq::q8_bytes((int64_t) (T * K), N), ok);
         a.take<float>(T * K * 640, ok);
         a.take<uint8_t>(mmq::q8_bytes((int64_t) (T * K), 640), ok);
@@ -619,9 +656,12 @@ bool Prefill::carve(size_t T, void* alloc) {
         m.sgate = c.take<float>(T * 640, ok); m.sup = c.take<float>(T * 640, ok); m.sh_h = c.take<uint16_t>(T * 640, ok);
         m.shared = c.take<float>(T * N, ok); m.sg = c.take<float>(T, ok);
         if (mp.any) {
-            m.Xq = c.take<uint8_t>(mmq::q8_bytes((int64_t) (T * K), N), ok);
-            m.H = c.take<float>(T * K * 640, ok);
-            m.Hq = c.take<uint8_t>(mmq::q8_bytes((int64_t) (T * K), 640), ok);
+            // the WMMA path keeps the activations FP16: no q8_1 row tables, and H is a view of xn16 (T * D uint16
+            // >= T * K * 640 float).  The order and sizes must match moe_set_bytes exactly.
+            const bool wmma = wmma_buffers();
+            m.Xq = wmma ? nullptr : c.take<uint8_t>(mmq::q8_bytes((int64_t) (T * K), N), ok);
+            m.H = wmma ? reinterpret_cast<float*>(m.xn16) : c.take<float>(T * K * 640, ok);
+            m.Hq = wmma ? nullptr : c.take<uint8_t>(mmq::q8_bytes((int64_t) (T * K), 640), ok);
         }
         if (base == nullptr) ok = false;
     }
@@ -1536,6 +1576,7 @@ bool Prefill::run(const int64_t* tokens, int64_t n, int64_t pos0, std::string& e
                     for (int32_t e = 0; e < m.g->n_expert; ++e) if (m.cnt[(size_t) e] > 0) order.push_back(e);
                     const strata::kernels::cpu::ExpertLayout& lay = strata::kernels::cpu::expert_layout();
                     const bool use_mmq = mmq_plan().any && mmq_plan().layer[(size_t) l];
+                    const bool use_wmma = use_mmq && wmma_buffers();
                     const int mmq_gt = lay.native ? lay.fmt[(size_t) l].gu_type : 42;
                     const int mmq_dt = lay.native ? lay.fmt[(size_t) l].d_type : 42;
                     const size_t mmq_gub = use_mmq ? mmq::matrix_bytes(mmq_gt, 1280, N) : 0;
@@ -1543,7 +1584,8 @@ bool Prefill::run(const int64_t* tokens, int64_t n, int64_t pos0, std::string& e
                     pt.mark(kPfGather, cs);
                     if (use_mmq) {
                         // step 2b: the layer's activations as q8_1 rows in expert order, straight from `mixed`
-                        mmq::quantize(m.mixed, m.src_dev, m.Xq, mmq_gt, N, N, T * K, m.cs);
+                        // (the WMMA path keeps them FP16 - mixed_h read through src - and skips this)
+                        if (!use_wmma) mmq::quantize(m.mixed, m.src_dev, m.Xq, mmq_gt, N, N, T * K, m.cs);
                         // each group's rows: absolute bounds (gate/up reads the layer's rows), relative ones (down
                         // reads the group's own quantized H)
                         const size_t n = order.size(), ng = (n + MMQ_GROUP - 1) / MMQ_GROUP;
@@ -1636,6 +1678,26 @@ bool Prefill::run(const int64_t* tokens, int64_t n, int64_t pos0, std::string& e
                             int64_t maxr = 0;
                             for (size_t i = j0; i <= j; ++i) maxr = std::max<int64_t>(maxr, m.cnt[(size_t) order[i]]);
                             pt.mark(kPfGemmGU, cs);
+                            if (use_wmma) {
+                                // the Volta tensor-core grouped GEMM: FP16 activations read through `src` (no q8_1
+                                // row tables, no zeroed tail - the kernel reads each expert's rows by its bounds),
+                                // H kept FP16 in the xn16 view.  The launcher rejects a shape its tiles do not
+                                // cover, which would be a gate bug: the formats are checked by wmma_buffers().
+                                auto* h16 = reinterpret_cast<uint16_t*>(m.H);
+                                if (!strata::kernels::gemm_iq_f16_grouped(mmq_gt, m.grp_gu, mmq_gub, 1280, N,
+                                        m.mixed_h, N, m.bounds_dev + j0, ngx, (int) maxr, m.GU, 1280, m.cs,
+                                        m.src_dev, nullptr, false)) {
+                                    err = "prefill: grouped WMMA rejected the gate/up shape"; return false;
+                                }
+                                swiglu_split(m.GU + r0 * 1280, h16 + r0 * 640, nr, m.cs);
+                                pt.mark(kPfGemmD, cs);
+                                if (!strata::kernels::gemm_iq_f16_grouped(mmq_dt, m.grp_d, mmq_db, N, 640,
+                                        h16 + r0 * 640, 640, m.bounds_dev + n + 1 + g * (MMQ_GROUP + 1), ngx,
+                                        (int) maxr, m.Dm + r0 * N, N, m.cs, nullptr, nullptr, true)) {
+                                    err = "prefill: grouped WMMA rejected the down shape"; return false;
+                                }
+                                return true;
+                            }
                             // the zeroed tail after the group's last expert (see MMQ_TAIL)
                             cudaMemsetAsync(m.grp_gu + (size_t) ngx * mmq_gub, 0, MMQ_TAIL, m.cs);
                             cudaMemsetAsync(m.grp_d + (size_t) ngx * mmq_db, 0, MMQ_TAIL, m.cs);
@@ -1735,7 +1797,8 @@ bool Prefill::run(const int64_t* tokens, int64_t n, int64_t pos0, std::string& e
                             return c;
                         };
                         const int64_t bgu = bad(m.GU, T * K * 1280), bdm = bad(m.Dm, T * K * N), bbo = bad(m.bo, T * N);
-                        const int64_t bh = m.H ? bad(m.H, T * K * 640) : -1;
+                        // under WMMA, H is an FP16 view of xn16 - reading it as floats would report garbage
+                        const int64_t bh = (m.H && !wmma_buffers()) ? bad(m.H, T * K * 640) : -1;
                         static int64_t reported = -1;
                         if ((bgu || bdm || bbo || bh > 0) && reported != stats_.chunks) {
                             reported = stats_.chunks;

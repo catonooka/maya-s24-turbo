@@ -1879,6 +1879,18 @@ __global__ void swiglu_rows_kernel(const float* gu, float* h, int rows, int n_ff
     h[r * ld_h + c] = (g / (1.0f + expf(-g))) * u;
 }
 
+// the same rows, FP16 out with its own stride (the Volta grouped-WMMA down product reads its activations as FP16)
+__global__ void swiglu_rows_h16_kernel(const float* gu, uint16_t* h, int rows, int n_ff, int ld_h, float limit) {
+    const int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= (int64_t) rows * n_ff) return;
+    const int64_t r = i / n_ff;
+    const int c = (int) (i - r * n_ff);
+    const float* row = gu + r * 2 * n_ff;
+    const float g = fminf(row[c], limit);
+    const float u = fminf(fmaxf(row[n_ff + c], -limit), limit);
+    h[r * ld_h + c] = __half_as_ushort(__float2half_rn((g / (1.0f + expf(-g))) * u));
+}
+
 __global__ void swiglu_f16_kernel(const float* __restrict__ gate, const float* __restrict__ up, __half* __restrict__ h,
                                   int64_t n, float limit) {
     const int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
@@ -2344,6 +2356,13 @@ void swiglu_rows(const float* gu, float* h, int rows, int n_ff, float limit, cud
     if (rows <= 0) return;
     swiglu_rows_kernel<<<nblk((int64_t) rows * n_ff), 256, 0, s>>>(gu, h, rows, n_ff, ld_h > 0 ? ld_h : n_ff, limit);
     check("swiglu_rows");
+}
+
+void swiglu_rows_h16(const float* gu, void* h16, int rows, int n_ff, float limit, cudaStream_t s, int ld_h) {
+    if (rows <= 0) return;
+    swiglu_rows_h16_kernel<<<nblk((int64_t) rows * n_ff), 256, 0, s>>>(gu, (uint16_t*) h16, rows, n_ff,
+                                                                       ld_h > 0 ? ld_h : n_ff, limit);
+    check("swiglu_rows_h16");
 }
 
 void swiglu_f16(const float* gate, const float* up, void* h16, int64_t n, float limit, cudaStream_t s) {

@@ -303,6 +303,15 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     target_include_directories(qsa_prompt_attn_parity PRIVATE ${_strata_gpu_include_directories})
     target_link_libraries(qsa_prompt_attn_parity PRIVATE strata_kernels ${_strata_gpu_runtime_target})
   endif()
+  # the Volta grouped-WMMA prompt experts (STRATA_PF_WMMA) against a double reference over the same FP16 weights
+  # (GPU, synthetic, no model); skips with 77 below sm_70
+  if(STRATA_BUILD_TESTS AND STRATA_ENABLE_CUDA)
+    add_executable(pf_wmma_parity src/kernels/pf_wmma_parity.cpp)
+    target_include_directories(pf_wmma_parity PRIVATE ${_strata_gpu_include_directories})
+    target_link_libraries(pf_wmma_parity PRIVATE strata_kernels ${_strata_gpu_runtime_target})
+    add_test(NAME pf_wmma_parity COMMAND pf_wmma_parity)
+    set_tests_properties(pf_wmma_parity PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+  endif()
   # plan v0.3 P6: llama.cpp's block layouts and codebook grids for the i-quant formats (MIT, third_party/ggml)
   target_include_directories(strata_kernels PRIVATE third_party/ggml)
   # Match the pinned llama.cpp CUDA arithmetic contract for this adapter only.

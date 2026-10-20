@@ -135,6 +135,8 @@ void expert_scatter(const int* ids, const int* rank, const int* base, int n, int
 /// h[r][c] = silu(min(gu[r][c], limit)) * clamp(gu[r][n_ff + c], +-limit), rows of [gate | up].
 void swiglu_rows(const float* gu, float* h, int rows, int n_ff, float limit, cudaStream_t s, int ld_h = 0);
 // (ld_h: h's row stride, n_ff when 0; h = gu with ld_h = 2 n_ff writes each row's result over its gate half)
+/// The same rows, FP16 out (the Volta grouped-WMMA down product's activations): h16's row stride ld_h halves.
+void swiglu_rows_h16(const float* gu, void* h16, int rows, int n_ff, float limit, cudaStream_t s, int ld_h = 0);
 /// The same from separate gate/up arrays, FP16 out.
 void swiglu_f16(const float* gate, const float* up, void* h16, int64_t n, float limit, cudaStream_t s);
 /// ffn[t] = sum_j w[t][j] * out[pos[t*k + j]] + sh[t] (plan order, like the one-token combine).

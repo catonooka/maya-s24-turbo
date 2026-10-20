@@ -169,6 +169,47 @@ MlaAttnPath mla_attn_path() {
     return gb::mla_wmma2_default() ? MlaAttnPath::WMMA2 : MlaAttnPath::F16Q;
 }
 #endif
+// The Volta grouped-WMMA MoE products (STRATA_PF_WMMA, the same switch as the Qwen prompt path): the FP16
+// tensor-core grouped GEMM replaces MMQ's dp4a products for a layer whose gate/up and down are IQ formats the
+// kernel decodes (its gate/up tile is 256 values wide, so E must split into whole 256-value chunks; its down
+// kernels cover IQ4_NL / Q2_0 at any K % 128 and IQ3_S / IQ3_XXS / IQ2_S at any K % 256 - E = 4096 and
+// n_ff = 2048 both do).  The products read FP16 activations, which the run_set's WMMA branch converts into the
+// Xq / Hq buffers - FP16 is 2 bytes a value where the q8_1 layout reserves 1.125, so carve_moe sizes those two
+// buffers for it (env_on alone: the carve runs at three call sites that must agree on one layout, so it cannot
+// carry the per-device probe below).  The probe is per device, so a layer asks each time and the log line prints
+// once per device.
+bool wmma_env_on() {
+    static const bool want = [] {
+        const char* v = getenv("STRATA_PF_WMMA");
+        return v != nullptr && std::atoi(v) != 0;
+    }();
+    return want;
+}
+bool moe_wmma_on(int gu_type, int d_type, int E, int nff) {
+#if defined(STRATA_USE_HIP)
+    (void) gu_type; (void) d_type; (void) E; (void) nff;
+    return false;
+#else
+    if (!wmma_env_on()) return false;
+    // the gate/up product's K is E (its tile is 256 values wide); the down product's K is n_ff, where the IQ4_NL and
+    // Q2_0 kernels work on 32- and 64-value blocks (K % 128) and the IQ3_*/IQ2_S half-superblock decoders on
+    // 128-value halves of a 256-value superblock (K % 256)
+    const bool gu_ok = (gu_type == 18 || gu_type == 21 || gu_type == 22 || gu_type == 23) && E % 256 == 0;
+    const bool dn_ok = (d_type == 20 || d_type == 42) ? nff % 128 == 0
+                                                      : (d_type == 18 || d_type == 21 || d_type == 22) && nff % 256 == 0;
+    if (!gu_ok || !dn_ok) return false;
+    static thread_local int probed = -1;
+    static thread_local bool ok = false;
+    int dev = 0;
+    if (cudaGetDevice(&dev) != cudaSuccess) return false;
+    if (dev != probed) {
+        ok = strata::kernels::gemm_iq_f16_grouped_supported(dev);
+        probed = dev;
+        if (ok) std::fprintf(stderr, "glm prefill: Volta grouped-WMMA prompt experts on (CUDA%d)\n", dev);
+    }
+    return ok;
+#endif
+}
 struct DsaBufs {
     float *qr_raw, *qr, *kv_raw, *ik_raw, *ig_raw, *iw, *q, *iq, *score, *q_abs, *ctx, *attn;
     uint16_t *qr16, *attn16;
@@ -262,6 +303,11 @@ MoeBufs carve_moe(Carve& c, size_t T, size_t sub, const Glm5Geometry& g) {
         h_bytes = std::max(h_bytes, strata::prefill::rdna4::act_bytes(W, g.n_ff_exp));
     }
 #endif
+    if (wmma_env_on()) {   // the WMMA branch's FP16 activation windows (a part's rows, at most W): 2 bytes a value
+                           // where the q8_1 layout reserves 1.125 (block_q8_1_mmq is 144 bytes per 128 values)
+        x_bytes = std::max(x_bytes, (size_t) W * (size_t) g.n_embd * 2);
+        h_bytes = std::max(h_bytes, (size_t) W * (size_t) g.n_ff_exp * 2);
+    }
     b.Xq = c.take<uint8_t>(x_bytes);
     b.Hq = c.take<uint8_t>(h_bytes);
     // each set's gate/up rows live in its own OUTP rows until the down product, the swiglu over their gate halves
@@ -2447,6 +2493,10 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
             return v == nullptr || std::atoi(v) != 0;
         }();
         const bool glu = glu_on && mmq::glu_supported(Ly.gu_type, nff);
+        // the Volta grouped-WMMA products for this layer (STRATA_PF_WMMA): the run_set's branch below converts the
+        // activations to FP16 and runs both products on the tensor cores; a rejected launch falls back to MMQ once
+        const bool wmma = moe_wmma_on(Ly.gu_type, Ly.d_type, E, nff);
+        static bool wmma_fell_back = false;
 #if defined(STRATA_HIP_PREFILL_FUSED)
         // X is rounded once per token; the fused GU epilogue writes rounded H.
         // The shared scratch reserves the larger of the two activation formats.
@@ -2484,10 +2534,35 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
                         continue;
                     }
 #endif
-                    mmq::quantize(S->x, M.row_tok + r0 + a, M.Xq, Ly.gu_type, E, E, nrows, s);
-                    // the part's bounds are the set's (from a): the activations and the destination are addressed a
-                    // rows back so that bound a is the part's first row
                     float* GU = M.OUTP + (size_t) o * E;   // 2 * n_ff == n_embd: the set's own OUTP rows hold its gate/up
+                    if (wmma && !wmma_fell_back) {
+                        // the FP16 tensor-core products: the part's rows gathered from S->x into Xq (the q8_1 sizing
+                        // covers W * E halves), the FP32 gate/up split through the clamped swiglu into Hq (its q8_1
+                        // sizing covers W * n_ff halves), the down back into the window's OUTP rows.  The bounds are
+                        // the set's from a and the activations start a rows back, as in the MMQ products' trick.
+                        auto* x16 = reinterpret_cast<uint16_t*>(M.Xq) - (size_t) a * E;
+                        auto* h16 = reinterpret_cast<uint16_t*>(M.Hq) - (size_t) a * nff;
+                        strata::kernels::exl3::rows_f16(S->x, E, M.row_tok + r0 + a, nrows, E, x16 + (size_t) a * E, s);
+                        if (!strata::kernels::gemm_iq_f16_grouped(Ly.gu_type, wbase + (size_t) i0 * stride, stride,
+                                2 * nff, E, x16, E, d_bounds + i0, i1 - i0, max_rows, GU - (size_t) a * (2 * nff),
+                                2 * nff, s)) {
+                            wmma_fell_back = true;
+                            std::fprintf(stderr, "glm prefill: grouped WMMA rejected the gate/up shape, MMQ from here\n");
+                        } else {
+                            gb::swiglu_rows_h16(GU, h16 + (size_t) a * nff, nrows, nff, g.swiglu_exp, s);
+                            if (!strata::kernels::gemm_iq_f16_grouped(Ly.d_type, wbase + (size_t) i0 * stride + Ly.down_off,
+                                    stride, E, nff, h16, nff, d_bounds + i0, i1 - i0, max_rows,
+                                    M.OUTP + (size_t) (o - a) * E, E, s)) {
+                                wmma_fell_back = true;
+                                std::fprintf(stderr, "glm prefill: grouped WMMA rejected the down shape, MMQ from here\n");
+                            } else {
+                                S->mark("moe_wmma", s);
+                                i0 = i1;
+                                continue;
+                            }
+                        }
+                    }
+                    mmq::quantize(S->x, M.row_tok + r0 + a, M.Xq, Ly.gu_type, E, E, nrows, s);
                     mmq::Product gu;
                     gu.w = wbase + (size_t) i0 * stride;
                     gu.type = Ly.gu_type;

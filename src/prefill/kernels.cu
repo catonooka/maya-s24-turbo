@@ -429,6 +429,13 @@ __global__ void swiglu_il_kernel(const float* __restrict__ gu, uint16_t* __restr
     const float g = gu[r * 1280 + 2 * k], u = gu[r * 1280 + 2 * k + 1];
     h16[i] = hf(g / (1.0f + __expf(-g)) * u);
 }
+__global__ void swiglu_split_kernel(const float* __restrict__ gu, uint16_t* __restrict__ h16, int64_t n) {
+    const int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n * 640) return;
+    const int64_t r = i / 640, k = i % 640;
+    const float g = gu[r * 1280 + k], u = gu[r * 1280 + 640 + k];
+    h16[i] = hf(g / (1.0f + __expf(-g)) * u);
+}
 __global__ void swiglu_pair_kernel(const float* __restrict__ g, const float* __restrict__ u, uint16_t* __restrict__ h16,
                                    int64_t n) {
     const int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
@@ -662,6 +669,11 @@ void swiglu_interleaved(const float* gu, uint16_t* h16, int64_t n, void* stream)
     if (n <= 0) return;
     swiglu_il_kernel<<<blocks_for(n * 640), 256, 0, (cudaStream_t) stream>>>(gu, h16, n);
     check("swiglu_interleaved");
+}
+void swiglu_split(const float* gu, uint16_t* h16, int64_t n, void* stream) {
+    if (n <= 0) return;
+    swiglu_split_kernel<<<blocks_for(n * 640), 256, 0, (cudaStream_t) stream>>>(gu, h16, n);
+    check("swiglu_split");
 }
 void swiglu_pair(const float* g, const float* u, uint16_t* h16, int64_t n, void* stream) {
     swiglu_pair_kernel<<<blocks_for(n * 640), 256, 0, (cudaStream_t) stream>>>(g, u, h16, n);
