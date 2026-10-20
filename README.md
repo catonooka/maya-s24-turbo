@@ -55,6 +55,9 @@ The setup also offers **[DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepse
 (DeepSeek, MIT license; 748 B parameters) on an engine of its own (`maya-ds4`): `./setup.sh --setup` and pick it, or
 `./setup.sh --model DeepSeek-V4.1-Flash-1017`.
 
+The server uses the pinned official prompt encoder, with numeric reasoning budgets and ID-matched parallel tool
+results. See [the prompt format notes](docs/deepseek-prompt-format.md) for API details and the standalone Jinja limits.
+
 | Files | Size | Runs on |
 | --- | ---: | --- |
 | **[Maya-S](https://huggingface.co/peasantsmith/DeepSeek-V4.1-Flash-1017-Maya-GGUF)**, Project Maya's own quant (default): the experts in 2-3 bits, 92.6% the same next token as the original | 340 GB, with the Engram tables (Q6_K) | NVIDIA from Volta (V100) on, and AMD; Linux and Windows |

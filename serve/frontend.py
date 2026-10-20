@@ -17,6 +17,7 @@ and the formats change often; the engine boundary is token ids in, text deltas o
 from __future__ import annotations
 
 import json
+import copy
 import re
 import threading
 import uuid
@@ -55,6 +56,32 @@ class ChatTemplate:
 
     def render(self, messages: list[dict], tools: list[dict] | None = None, add_generation_prompt: bool = True,
                **kwargs) -> str:
+        if self.deepseek:
+            # Pinned, reviewed upstream encoder: keep its roles, tool ordering,
+            # namespace semantics, tasks and thinking policy in one implementation.
+            from serve.ds41_encoding import encode_messages
+            history = copy.deepcopy(messages)
+            schemas = [t if "function" in t else {"type": "function", "function": t}
+                       for t in tools or []]
+            if schemas:
+                if not history or history[0].get("role") != "system":
+                    history.insert(0, {"role": "system", "content": ""})
+                history[0]["tools"] = schemas
+            options = deepseek_effort_kwargs(kwargs.get("reasoning_effort"))
+            thinking = kwargs.get("enable_thinking") is not False and options.get("enable_thinking") is not False
+            prompt = encode_messages(history, thinking_mode="thinking" if thinking else "chat",
+                                     reasoning_effort=options.get("reasoning_effort"))
+            # The reference encoder always opens a generation turn after a user,
+            # tool result or late system message. Expose Jinja's opt-out without
+            # changing the pinned encoder or removing explicit task tokens.
+            if not add_generation_prompt and history:
+                last = history[-1]
+                opens_turn = last.get("role") in ("user", "tool") or (
+                    last.get("role") == "system" and len(history) > 1)
+                header = "<｜Assistant｜>" + ("<think>" if thinking else "</think>")
+                if opens_turn and last.get("task") is None and prompt.endswith(header):
+                    prompt = prompt[:-len(header)]
+            return prompt
         off = False
         if self.glm_effort:
             off = kwargs.pop("enable_thinking", True) is False
@@ -116,6 +143,17 @@ def effort_kwargs(value) -> dict:
     return {"enable_thinking": False} if level is None else {"reasoning_effort": level}
 
 
+def deepseek_effort_kwargs(value) -> dict:
+    """DeepSeek's 1..100 budget, retaining the existing named effort aliases."""
+    if type(value) is int:
+        if not 1 <= value <= 100:
+            raise ValueError("DeepSeek reasoning_effort must be in [1, 100]")
+        return {"reasoning_effort": value}
+    if value is not None and value is not False and not isinstance(value, str):
+        raise ValueError("DeepSeek reasoning_effort must be an integer in [1, 100] or a named effort")
+    return effort_kwargs(value)
+
+
 def budget_effort(tokens) -> dict:
     """Anthropic's thinking budget (budget_tokens) -> a level: under 2K Low, under 8K High, else Max."""
     try:
@@ -166,6 +204,40 @@ def images_of(messages: list[dict]) -> list[str]:
     <|vision_start|><|image_pad|><|vision_end|> per image item, message by message)."""
     return [item["source"] for m in messages if isinstance(m.get("content"), list)
             for item in m["content"] if item.get("type") == "image"]
+
+
+def deepseek_images(messages: list[dict]) -> list[str]:
+    """Image sources in the reference encoder's final tool-result/prompt order."""
+    from serve.ds41_encoding import (_extract_image, _is_image_block, merge_tool_messages,
+                                     sort_tool_results_by_call_order)
+    ordered = sort_tool_results_by_call_order(merge_tool_messages(messages))
+    images = []
+
+    def collect(blocks):
+        for block in blocks or []:
+            if not isinstance(block, dict):
+                continue
+            if _is_image_block(block):
+                images.append(_extract_image(block))
+            elif block.get("type") == "tool_result" and isinstance(block.get("content"), list):
+                collect(block["content"])
+
+    for message in ordered:
+        # Collect only images: textual special literals are protected later by
+        # render_ids, and must not be rejected as forged image placeholders here.
+        blocks = message.get("content_blocks") if "content_blocks" in message else message.get("content")
+        if isinstance(blocks, list):
+            collect(blocks)
+    sources = []
+    for item in images:
+        source = item.get("source")
+        if isinstance(source, str):
+            sources.append(source)
+        elif isinstance(source, dict):
+            sources.append(_image_source({"type": "image", "source": source}))
+        else:
+            sources.append(item.get("url") or item.get("data") or "")
+    return sources
 
 
 # A special token's text written INSIDE a message is that text, not the token.  The rendered prompt is encoded with the
@@ -299,8 +371,58 @@ def stable_tool_order(tools: list[dict] | None) -> list[dict] | None:
     return sorted(tools, key=lambda t: pos[t["name"]])
 
 
-def openai_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dict]:
+def openai_to_messages(req: dict, deepseek: bool = False) -> tuple[list[dict], list[dict] | None, dict]:
     """OpenAI Chat Completions -> (template messages, template tools, template kwargs)."""
+    if deepseek:
+        from serve.ds41_encoding import _tool_name_for_encoding, tools_from_openai_format
+        messages = copy.deepcopy(req.get("messages", []))
+        for message in messages:
+            if message.get("role") == "developer":
+                message["role"] = "system"
+            if _has_image(message.get("content")):
+                message["content"] = _parts_of(message["content"])
+            for call in message.get("tool_calls") or []:
+                function = call.get("function") or {}
+                if "arguments" not in function:
+                    continue
+                original = arguments = function["arguments"]
+                # Decode before literal marking: JSON Unicode escapes can hide
+                # special tokens until the reference encoder loads arguments.
+                # Match its tolerance for twice-encoded JSON and its fallback.
+                for _ in range(2):
+                    if not isinstance(arguments, str):
+                        break
+                    try:
+                        arguments = json.loads(arguments)
+                    except ValueError:
+                        break
+                function["arguments"] = arguments if isinstance(arguments, dict) else {"arguments": original}
+        # Unlike the legacy adapter, preserve tool IDs, namespaces, content_blocks,
+        # mid-system roles, latest_reminder and task fields for the reference encoder.
+        declared = copy.deepcopy(req.get("tools") or [])
+        tools = tools_from_openai_format(declared) if declared else None
+        if req.get("tool_choice") == "none":
+            tools = None
+            for message in messages:
+                message.pop("tools", None)
+        kwargs = {}
+        reasoning = req.get("reasoning") if isinstance(req.get("reasoning"), dict) else {}
+        effort = req.get("reasoning_effort", reasoning.get("effort"))
+        kwargs.update(deepseek_effort_kwargs(effort))
+        for key, value in (req.get("chat_template_kwargs") or {}).items():
+            if key == "enable_thinking" and not value:
+                kwargs = {"enable_thinking": False}
+            elif key == "reasoning_effort" and "enable_thinking" not in kwargs:
+                kwargs.update(deepseek_effort_kwargs(value))
+        choice = req.get("tool_choice")
+        if tools and choice == "required":
+            kwargs["_force_tool"] = ""
+        elif tools and isinstance(choice, dict) and choice.get("type") == "function":
+            function = dict(choice.get("function") or {})
+            if choice.get("namespace") is not None:
+                function["namespace"] = choice["namespace"]
+            kwargs["_force_tool"] = _tool_name_for_encoding(function) if function.get("name") else ""
+        return messages, tools, kwargs
     messages = []
     for m in req.get("messages", []):
         role = m.get("role")
@@ -344,12 +466,13 @@ def openai_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dict]:
     return _late_system_to_user(messages), tools, kwargs
 
 
-def anthropic_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dict]:
+def anthropic_to_messages(req: dict, deepseek: bool = False) -> tuple[list[dict], list[dict] | None, dict]:
     """Anthropic Messages -> (template messages, template tools, template kwargs)."""
     messages = []
     system = req.get("system")
     if system:
-        messages.append({"role": "system", "content": _text_of(system)})
+        text = "\n\n".join(_text_of([part]) for part in system) if deepseek and isinstance(system, list) else _text_of(system)
+        messages.append({"role": "system", "content": text})
     for m in req.get("messages", []):
         content = m.get("content")
         if isinstance(content, str):
@@ -359,6 +482,11 @@ def anthropic_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dic
                 isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
             messages.append({"role": "user", "content": _parts_of(content)})
             continue
+        if deepseek and m.get("role") == "user":
+            # The reference encoder sorts only tool-result positions by the IDs
+            # of the preceding assistant calls, retaining surrounding text.
+            messages.append({"role": "user", "content_blocks": copy.deepcopy(content or [])})
+            continue
         text, reasoning, calls = [], [], []
         for block in content or []:
             kind = block.get("type")
@@ -367,18 +495,23 @@ def anthropic_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dic
             elif kind == "thinking":
                 reasoning.append(block.get("thinking", ""))
             elif kind == "tool_use":
-                calls.append({"function": {"name": block.get("name"), "arguments": block.get("input") or {}}})
+                call = {"function": {"name": block.get("name"), "arguments": block.get("input") or {}}}
+                if deepseek:
+                    call.update(id=block.get("id", ""), type="function")
+                calls.append(call)
             elif kind == "tool_result":
                 messages.append({"role": "tool", "content": _parts_of(block.get("content"))})
         if text or calls or reasoning:
-            out = {"role": m["role"], "content": "".join(text)}
+            out = {"role": m["role"], "content": ("\n\n" if deepseek else "").join(text)}
             if reasoning:
                 out["reasoning_content"] = "".join(reasoning)
             if calls:
                 out["tool_calls"] = calls
             messages.append(out)
-    tools = stable_tool_order([{"name": t["name"], "description": t.get("description", ""),
-                                "parameters": t.get("input_schema", {})} for t in req.get("tools") or []] or None)
+    tools = [{"name": t["name"], "description": t.get("description", ""),
+              "parameters": t.get("input_schema", {})} for t in req.get("tools") or []] or None
+    if not deepseek:
+        tools = stable_tool_order(tools)
     if isinstance(req.get("tool_choice"), dict) and req["tool_choice"].get("type") == "none":
         tools = None
     kwargs = {}
@@ -388,8 +521,8 @@ def anthropic_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dic
     effort = (req.get("output_config") or {}).get("effort") if isinstance(req.get("output_config"), dict) else None
     if isinstance(thinking, dict) and thinking.get("type") == "disabled":
         kwargs["enable_thinking"] = False
-    elif effort:
-        kwargs.update(effort_kwargs(effort))
+    elif effort or (deepseek and effort is not None and effort != ""):
+        kwargs.update(deepseek_effort_kwargs(effort) if deepseek else effort_kwargs(effort))
     elif isinstance(thinking, dict) and thinking.get("budget_tokens"):
         kwargs.update(budget_effort(thinking["budget_tokens"]))
     tc = req.get("tool_choice") if isinstance(req.get("tool_choice"), dict) else {}
@@ -397,7 +530,7 @@ def anthropic_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dic
         kwargs["_force_tool"] = ""
     elif tools and tc.get("type") == "tool" and tc.get("name"):
         kwargs["_force_tool"] = tc["name"]
-    return _late_system_to_user(messages), tools, kwargs
+    return messages if deepseek else _late_system_to_user(messages), tools, kwargs
 
 
 # ------------------------------------------------------------------------------------------------ output parser
@@ -406,6 +539,17 @@ class ToolCall:
     name: str
     arguments: dict
     id: str = field(default_factory=lambda: "call_" + uuid.uuid4().hex[:24])
+    namespace: str | None = None
+
+    def to_openai(self, arguments: str | None = None) -> dict:
+        """Keep qualified names for internal routing; expose the reference API shape."""
+        namespace = self.namespace
+        call = {"id": self.id, "type": "function", "function": {
+            "name": self.name.split("::", 1)[-1] if namespace is not None else self.name,
+            "arguments": json.dumps(self.arguments, ensure_ascii=False) if arguments is None else arguments}}
+        if namespace is not None:
+            call["namespace"] = namespace
+        return call
 
 
 @dataclass
@@ -507,11 +651,14 @@ class DsmlRewriter:
     `<｜DSML｜ parameter name="K" string="true|false">V</｜DSML｜ parameter>`) rewritten, as they stream, into GLM's form
     (`<tool_call>N<arg_key>K</arg_key><arg_value>V</arg_value>...</tool_call>`) for OutputParser.  A tag split across
     deltas is held until it is whole; the whitespace between the tags of a calls block is dropped.  A value is passed
-    as written - a string="false" one is JSON, which the parser decodes by the tool's schema."""
+    as written; string="true" is JSON-quoted so the parser preserves the model's
+    string-vs-JSON flag independently of the tool's schema."""
 
     def __init__(self):
         self.buf = ""
         self.in_calls = self.in_param = False
+        self.parameter_text = ""
+        self.parameter_string = False
 
     def feed(self, text: str) -> str:
         self.buf += text
@@ -544,10 +691,18 @@ class DsmlRewriter:
         return self._plain(rest)
 
     def _plain(self, s: str) -> str:
+        if self.in_param:
+            self.parameter_text += s
+            return ""
         return "" if self.in_calls and not self.in_param and not s.strip() else s
 
     def _tag(self, tag: str, closing: bool, body: str) -> str:
         kind = body.split(None, 1)[0] if body.strip() else ""
+        if self.in_param and not (closing and kind == "parameter"):
+            # Like the reference decoder, only the parameter's closing tag is
+            # structural here. Other DSML tags can be literal argument data.
+            self.parameter_text += tag
+            return ""
         attrs = dict(_DSML_ATTR.findall(body))
         if kind == "calls":
             self.in_calls = not closing
@@ -556,7 +711,17 @@ class DsmlRewriter:
             return "</tool_call>" if closing else CALL_START + attrs.get("name", "")
         if kind == "parameter":
             self.in_param = not closing
-            return ARG_VAL_END if closing else ARG_KEY + attrs.get("name", "") + ARG_KEY_END + ARG_VAL
+            if closing:
+                value = json.dumps(self.parameter_text, ensure_ascii=False) if self.parameter_string else self.parameter_text
+                # A JSON string can contain a literal legacy parser delimiter
+                # (e.g. a tool writing an XML example). JSON's Unicode escape
+                # keeps those values intact across this internal rewrite.
+                value = value.replace("<", "\\u003c")
+                self.parameter_text = ""
+                return value + ARG_VAL_END
+            self.parameter_string = attrs.get("string") == "true"
+            self.parameter_text = ""
+            return ARG_KEY + attrs.get("name", "") + ARG_KEY_END + ARG_VAL
         return tag
 
 
@@ -570,7 +735,7 @@ class OutputParser:
         self.dsml = DsmlRewriter() if dsml else None      # DeepSeek-V4.1's tool calls, read as GLM's (DsmlRewriter)
         self.buf = ""
         self.lead = False
-        self.schemas = {t.get("name"): t for t in tools or []}
+        self.schemas = {} if dsml else {t.get("name"): t for t in tools or []}
         # stream_tools: a tool call is also reported while it is being written - "tool_start" (its name and id) as
         # soon as the name is known, then "tool_args" pieces of its JSON arguments (string parameters character by
         # character; other types whole, once complete) - before the final "tool_call".  Without it, a client sees
@@ -618,6 +783,8 @@ class OutputParser:
 
     def _start_call(self, name: str, out: list, args) -> None:
         self.scall = ToolCall(name=name, arguments={})
+        if self.dsml is not None and "::" in name:
+            self.scall.namespace = name.split("::", 1)[0]
         props = ((self.schemas.get(name) or {}).get("parameters") or {}).get("properties") or {}
         self.sdeclared = {k: (v or {}).get("type") for k, v in props.items()}
         out.append(Event("tool_start", call=self.scall))
@@ -790,7 +957,7 @@ class OutputParser:
                 self.state, self.lead = "content", True
                 self.fence, self.line, self.ticks = "", "", 0
             elif self.state == "content":
-                if self.lead:                                   # newlines right after </think> or a call
+                if self.lead and self.dsml is None:              # legacy GLM/Qwen newline policy
                     stripped = self.buf.lstrip("\n")
                     if not stripped:
                         self.buf = ""
@@ -818,7 +985,13 @@ class OutputParser:
                     out.append(Event("content", self._track(self.buf[:i + len(CALL_START)])))
                     self.buf = self.buf[i + len(CALL_START):]
                     continue
-                if i and self.buf[:i].strip():
+                if self.dsml is not None:
+                    prefix = self.buf[:i]
+                    if prefix.endswith("\n\n"):
+                        prefix = prefix[:-2]
+                    if prefix:
+                        out.append(Event("content", self._track(prefix)))
+                elif i and self.buf[:i].strip():
                     out.append(Event("content", self._track(self.buf[:i].rstrip("\n"))))
                 self.buf = self.buf[i + len(CALL_START):]
                 self.state = "call"
@@ -844,6 +1017,8 @@ class OutputParser:
                 body = self.buf[:i]
                 self.buf = self.buf[i + len(CALL_END):]
                 call = parse_tool_call(body, self.schemas.get(call_name(body)))
+                if self.dsml is not None and "::" in call.name:
+                    call.namespace = call.name.split("::", 1)[0]
                 if self.scall is not None:
                     call.id = self.scall.id
                 out.append(Event("tool_call", call=call, complete=complete))

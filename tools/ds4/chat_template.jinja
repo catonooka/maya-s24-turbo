@@ -1,4 +1,7 @@
-{#- DeepSeek-V4.1's prompt format (the model repo's encoding/encoding.py), as a chat template for Maya's server.
+{#- Legacy standalone DeepSeek-V4.1 Jinja export. Maya's server renders DeepSeek with serve/ds41_encoding.py,
+    pinned to revision 1bae0e1088993b9b82de08f59de5be5a34e42170 of deepseek-ai/DeepSeek-V4.1-Flash-1017.
+    This export covers ordinary chat/tools only; see docs/deepseek-prompt-format.md for its conformance limits.
+    DeepSeek-V4.1's prompt format (the model repo's encoding/encoding.py), approximated in Jinja.
     Turns: <｜User｜> ... <｜Assistant｜> (reasoning</think>)answer<｜end▁of▁sentence｜>.  Thinking mode ends the prompt
     with <think> and starts with a reasoning-effort line (low 50, high 75, max 100); chat mode ends it with </think>.
     Tool results (role "tool") are <tool_result> blocks of a user turn, merged with the user messages around them;

@@ -51,8 +51,8 @@ sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT))   # run as a script (run-<model>.bat) as well as a module
 from serve import ds4_vision, gpu_map  # noqa: E402
 from serve.frontend import (CALL_START, ChatTemplate, Event, OutputParser, anthropic_to_messages,  # noqa: E402
-                            effort_kwargs, effort_level, images_of, literal_tags, mark_literals,
-                            openai_to_messages, unmark_literals)
+                            deepseek_effort_kwargs, deepseek_images, effort_kwargs, effort_level, images_of,
+                            literal_tags, mark_literals, openai_to_messages, unmark_literals)
 from serve.mcp import McpCancelled, hub_from_config  # noqa: E402
 from serve.responses import (ResponseStore, input_items, input_page, normalize_request,  # noqa: E402
                              new_response, response_collect, response_events)
@@ -1871,7 +1871,8 @@ class Service:
         if force is not None and tools:
             kwargs["enable_thinking"] = False
         if self.default_effort and "reasoning_effort" not in kwargs and "enable_thinking" not in kwargs:
-            kwargs = {**kwargs, **effort_kwargs(self.default_effort)}   # the run config's thinking level
+            kwargs = {**kwargs, **(deepseek_effort_kwargs(self.default_effort) if getattr(self.template, "deepseek", False)
+                                  else effort_kwargs(self.default_effort))}   # the run config's thinking level
         prefill = ""
         if force is not None and tools:
             # GLM's form opens with the tool's name, Qwen's with <function=NAME>, DeepSeek's DSML with its calls block
@@ -1883,7 +1884,7 @@ class Service:
         given["_prefill"] = prefill
         ids = self.render_ids(messages, tools, kwargs, prefill)
         self.embeddings.path = None
-        images = images_of(messages)
+        images = deepseek_images(messages) if getattr(self.template, "deepseek", False) else images_of(messages)
         if images and isinstance(self.vision, ds4_vision.Vision):
             # DeepSeek: the engine encodes the pictures itself; each placeholder the template wrote (user text's are
             # plain text, see render_ids) becomes its picture's span, the resized pixels go in the GENI file
@@ -1961,14 +1962,15 @@ class Service:
         """POST /api/tokens: how many tokens this chat request's prompt takes - the same template, thinking level,
         tools and tokenizer as prepare(), with nothing run (no image encoder: a picture counts as its marker, so the
         count is approximate then).  The web app's context meter."""
-        messages, tools, kw = openai_to_messages(req)
+        messages, tools, kw = openai_to_messages(req, deepseek=getattr(self.template, "deepseek", False))
         kw = {k: v for k, v in kw.items() if k != "_force_tool"}
         if req.get("strata_mcp") is True and self.mcp is not None:
             own = {t.get("name") for t in tools or []}
             tools = (tools or []) + self.mcp.template_tools(exclude=own) or None
         if self.default_effort and "reasoning_effort" not in kw and "enable_thinking" not in kw:
-            kw = {**kw, **effort_kwargs(self.default_effort)}
-        sources = images_of(messages)
+            kw = {**kw, **(deepseek_effort_kwargs(self.default_effort) if getattr(self.template, "deepseek", False)
+                                  else effort_kwargs(self.default_effort))}
+        sources = deepseek_images(messages) if getattr(self.template, "deepseek", False) else images_of(messages)
         n, approximate = len(self.render_ids(messages, tools, kw)), len(sources) > 0
         if sources and isinstance(self.vision, ds4_vision.Vision):   # (DeepSeek: a picture's span is its resize's)
             try:
@@ -2472,10 +2474,13 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
         if cancel.is_set() or len(results) < len(calls):
             done = {**done, "finish": "cancel"}
             break
-        messages.append({"role": "assistant", "content": "".join(text).strip(),
-                         **({"reasoning_content": "".join(reasoning).strip()} if reasoning else {}),
-                         "tool_calls": [{"function": {"name": c.name, "arguments": c.arguments}} for c in calls]})
-        messages += [{"role": "tool", "content": r} for r in results]
+        deepseek = getattr(svc.template, "deepseek", False)
+        messages.append({"role": "assistant", "content": "".join(text) if deepseek else "".join(text).strip(),
+                         **({"reasoning_content": "".join(reasoning) if deepseek else "".join(reasoning).strip()}
+                            if reasoning else {}),
+                         "tool_calls": [{"id": c.id, "function": {"name": c.name, "arguments": c.arguments}}
+                                        for c in calls]})
+        messages += [{"role": "tool", "tool_call_id": c.id, "content": r} for c, r in zip(calls, results)]
         # a required tool call applies to the first answer only: after the tools ran, the model answers freely
         kw = {k: v for k, v in kw.items() if k not in ("_force_tool", "_prefill")}
         sampling = {k: v for k, v in (sampling or {}).items() if k != "_prefill"}
@@ -2550,16 +2555,13 @@ def openai_chunks(svc: Service, req: dict, ids, thinking, tools, max_new, cancel
             elif ev.kind == "tool_start":
                 streamed[ev.call.id] = calls
                 calls += 1
-                yield chunk({"tool_calls": [{"index": streamed[ev.call.id], "id": ev.call.id, "type": "function",
-                                             "function": {"name": ev.call.name, "arguments": ""}}]})
+                yield chunk({"tool_calls": [{"index": streamed[ev.call.id], **ev.call.to_openai(arguments="")}]})
             elif ev.kind == "tool_args":
                 yield chunk({"tool_calls": [{"index": streamed[ev.call.id], "function": {"arguments": ev.text}}]})
             elif ev.kind == "tool_call" and ev.call.id in streamed:
                 continue
             elif ev.kind == "tool_call":
-                yield chunk({"tool_calls": [{"index": calls, "id": ev.call.id, "type": "function",
-                                             "function": {"name": ev.call.name,
-                                                          "arguments": json.dumps(ev.call.arguments, ensure_ascii=False)}}]})
+                yield chunk({"tool_calls": [{"index": calls, **ev.call.to_openai()}]})
                 calls += 1
         else:
             if held:
@@ -2677,6 +2679,8 @@ def openai_collect(chunks) -> dict:
             cur = by_index.setdefault(tc.get("index", len(by_index)), {"id": None, "type": "function",
                                                                         "function": {"name": "", "arguments": ""}})
             cur["id"] = tc.get("id") or cur["id"]
+            if tc.get("namespace") is not None:
+                cur["namespace"] = tc["namespace"]
             fn = tc.get("function") or {}
             cur["function"]["name"] += fn.get("name") or ""
             cur["function"]["arguments"] += fn.get("arguments") or ""
@@ -3425,7 +3429,7 @@ def make_handler(svc: Service):
             req = svc.with_shared(req, "openai")
             req["_api"] = "web" if req.get("strata_resume") is True else "openai"   # the Monitor's request table
             svc.check_request(req)                             # a bad sampling field or logit_bias: a 400, now
-            messages, tools, kw = openai_to_messages(req)
+            messages, tools, kw = openai_to_messages(req, deepseek=getattr(svc.template, "deepseek", False))
             max_req = max_new = int(req.get("max_completion_tokens") or req.get("max_tokens") or 0)   # 0/-1: the rest
             use_mcp = req.get("strata_mcp") is True and svc.mcp is not None      # the web app's opt-in (serve/mcp.py)
             own = {t.get("name") for t in tools or []}
@@ -3525,7 +3529,7 @@ def make_handler(svc: Service):
             req = svc.with_shared(req, "anthropic")
             req["_api"] = "anthropic"
             svc.check_request(req)                             # a bad sampling field: a 400, now
-            messages, tools, kw = anthropic_to_messages(req)
+            messages, tools, kw = anthropic_to_messages(req, deepseek=getattr(svc.template, "deepseek", False))
             max_new = int(req.get("max_tokens") or 0)                  # 0/-1: the rest of the context
             ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new)
             if kw.get("_prefill"):                             # a required tool call starts the answer
@@ -3939,9 +3943,9 @@ def main() -> int:
     if getattr(engine, "multi", 0) > 1:                 # n conversations at once: n places in the FIFO
         svc.fifo.set_capacity(engine.multi)
         print(f"[maya] {engine.multi} conversations at once (--parallel)", flush=True)
-    if cfg.get("reasoning_effort"):
+    if cfg.get("reasoning_effort") or (svc.template.deepseek and cfg.get("reasoning_effort") is not None):
         try:
-            effort_kwargs(cfg["reasoning_effort"])
+            (deepseek_effort_kwargs if svc.template.deepseek else effort_kwargs)(cfg["reasoning_effort"])
         except ValueError as e:
             raise SystemExit(f"[maya] config reasoning_effort: {e}")
         svc.default_effort = cfg["reasoning_effort"]
