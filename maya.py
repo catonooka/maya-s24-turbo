@@ -3412,7 +3412,7 @@ def choose_ds4_quant(a, prev: dict) -> str:
                                              "the SSD. The EXL3 quants need RTX 30 / A100 or newer and ~230 / ~280 GB of "
                                              "VRAM + RAM:"],
                   [(label[k][0], "recommended" if k == keys[0] else None, label[k][1]) for k in keys],
-                  keys.index(default), a.yes)
+                  keys.index(default), a.yes or a.check)
     return keys[pick]
 
 
@@ -3821,7 +3821,9 @@ def main() -> int:
         say("Nothing is set up yet: the setup runs first, then the tuning.")
     prev = read_json(have[0]) if have else {}
     if a.check:
-        pc = check_pc(a, "deepseek" if a.model == DS4 or a.model_dir else "glm")
+        ds4 = a.model == DS4 or bool(a.model_dir)
+        quant = choose_ds4_quant(a, prev) if ds4 else None
+        pc = check_pc(a, "deepseek" if ds4 else "glm", gguf=ds4 and quant != "exl3")
         say()
         if a.backend == "hip":
             pick = (f"--gpus {','.join(str(g['index']) for g in pc['gpus'])}" if len(pc["gpus"]) > 1
