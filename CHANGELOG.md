@@ -4,6 +4,29 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.19 - 2026-10-20
+
+DeepSeek-V4.1-Flash reads long prompts faster with the same answers, its prompts follow DeepSeek's own format for
+agents and tools, and a round of community work.
+
+- **DeepSeek: long prompts skip work the answer does not need.** DeepSeek-V4.1-Flash's layers 20-39 see a prompt's
+  earlier tokens only through what layer 20 keeps of them, so they need their full work only on the last ~2,700 tokens
+  of a prompt. A long prompt now skips the rest: on one GPU, prompts of ~3,700 new tokens or more are read faster -
+  the longer the prompt, the more it saves - with the same answers. `MAYA_DS4_PROMPT_SKIP=2` goes further, as
+  DeepSeek's own serving does (the last 128 tokens only; the answers shift a little); `0` turns it off. Learned from
+  DeepSeek's DeepInfer.
+- **DeepSeek: prompts in DeepSeek's reference format** (#300 by @Gazelle221B, fixes #299). Conversations are rendered
+  with DeepSeek's own encoder: later system messages, message-local tools, parallel tool results and their call ids
+  are kept, so agent sessions see what they sent.
+- **DeepSeek: the engine ends at QUIT** (#306 by @loktar00), so stopping or swapping models no longer waits out a
+  timeout; profiling (`DS4_PROF`) on several GPUs no longer disturbs inference (#307 by @cosmicnag).
+- **EXL3: exllamav3 1.6's half-integer bitrates** (K 1.5 / 2.5 / 3.5) for self-calibrated community quants, every
+  decoder bit for bit exllamav3's (#265 by @sociolog).
+- **GLM:** the recurrent-state backup for drafting on a multi-GPU NextN split (#290), a warm-up prompt before READY,
+  opt-in (`MAYA_GLM_WARM_PROMPT`, #285), and a docs fix (#287), all by @gopinath87607; the gfx1100 hipBLASLt table for
+  ROCm 10 - faster prompts on RX 7900 cards with ROCm 10 (#292 by @Cass67).
+- **README:** the community's speed reports since v1.1.12 in the speed table.
+
 ## v1.1.18 - 2026-10-20
 
 DeepSeek-V4.1-Flash-1017 adapts to each PC (faster long prompts on one GPU, decode that uses the GPU's PCIe link when
