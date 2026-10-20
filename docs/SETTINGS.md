@@ -375,6 +375,20 @@ file keeps that verdict. It applies while answering (one token at a time), not w
 The engine's decode summary (`streamed to the GPU: N`) and the `pcie=` key of its STAT lines (experts a token
 streamed) show it at work; the start's log prints each format's times and how many of a token's experts it streams.
 
+## DeepSeek: long prompts read without the second half's work
+
+DeepSeek-V4.1-Flash's layers 20-39 see the earlier tokens of a prompt only through what layer 20 keeps of them (its
+compressed KV and index keys), and each of them looks back one window of 128 tokens. So for the answer and for what the
+decode keeps, those layers need their full work only on the last ~2,700 tokens of a prompt: before that, layer 20
+computes just what the later layers read, and layers 21-39 do nothing. The answers are the same (up to the order the
+experts' outputs are added in), long prompts are read faster, and the experts are read as before. DeepSeek's own
+serving goes further and runs layers 20-39 on the last 128 tokens only, which shifts the answers a little; `2` does
+that. It applies to prompts of ~3,700 new tokens or more, on one GPU (several GPUs read prompts as before).
+
+| Setting | Default | |
+| --- | --- | --- |
+| `MAYA_DS4_PROMPT_SKIP` | on (1) | `0`: every layer on every token of a prompt, as before; `2`: DeepSeek's own (the last 128 tokens only) |
+
 ## DeepSeek: skipping light experts the SSD would read (experimental)
 
 When DeepSeek-V4.1-Flash's experts do not fit in VRAM and RAM, a token waits for the SSD to read the experts it was
