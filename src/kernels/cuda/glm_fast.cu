@@ -17,6 +17,7 @@
 #endif
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include "strata/kernels/dp4a.hpp"   // sm_60: __dp4a -> the vmad fallback
 
 #define GGML_COMMON_DECL_CUDA
 #define GGML_COMMON_IMPL_CUDA
@@ -35,6 +36,22 @@
 __device__ __forceinline__ float __ldcg(const float* p) {
     return __hip_atomic_load(p, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_AGENT);
 }
+#endif
+
+// __grid_constant__ (a kernel's by-value struct argument read in place, never copied) is a compute_70 feature: CUDA
+// 12.9's nvcc refuses it in a Pascal pass ("__grid_constant__ annotation is only allowed for architecture compute_70
+// or later", 22 kernels here), so below sm_70 it is left out - the arguments are const either way.  HIP keeps
+// hip_compat's empty definition (__CUDA_ARCH__ is undefined there).
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 700
+#define STRATA_GRID_CONSTANT __grid_constant__
+#else
+#define STRATA_GRID_CONSTANT
+#endif
+// the device pass for cc 6.0 (Tesla P100 / PH402, GP100: no dp4a, the SIMD-in-word intrinsics emulated)
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 610 && !defined(STRATA_USE_HIP)
+#define GLMF_SM60 1
+#else
+#define GLMF_SM60 0
 #endif
 
 namespace strata::kernels::glmf {
@@ -201,6 +218,23 @@ __device__ __forceinline__ float dot_q5_K(const void* vbq, const block_q8_1* bq8
     return dm5f.x * sumf_d - dm5f.y * sumf_m;
 }
 
+// sm_60: Q6_K's integer steps as exact rewrites (the float expressions and their order untouched, so every sum is the
+// generic form's bit for bit) - worth ~9% of the Q6_K GEMV once its loads stopped being the limit (mv_q6_p100_kernel):
+//   q - 32 per byte, q in [0, 63]: (q + 0x60) ^ 0x80 never carries out of its byte - __vsubss4(q, 0x20202020) (which
+//     never saturates there) in 2 instructions instead of its SIMD-in-word emulation;
+//   dp4a * scale: |dp4a| <= 4 * 32 * 128 and |scale| <= 128 fit 16 bits - one mul.wide.s16 for the 32-bit multiply;
+//   the product to float: |p| <= 2^21 < 2^22, so 0x4B400000 + p is the float 1.5 * 2^23 + p exactly and subtracting
+//     1.5 * 2^23 is exact - an add and an FADD for the conversion (the same float as (float) p).
+#if GLMF_SM60
+__device__ __forceinline__ int q6_m32(int q) { return (q + 0x60606060) ^ (int) 0x80808080; }
+__device__ __forceinline__ int mul_s16(int a, int b) {
+    int r;
+    asm("mul.wide.s16 %0, %1, %2;" : "=r"(r) : "h"((short) a), "h"((short) b));
+    return r;
+}
+__device__ __forceinline__ float i2f_s22(int p) { return __int_as_float(p + 0x4B400000) - 12582912.0f; }
+#endif
+
 __device__ __forceinline__ float dot_q6_K(const void* vbq, const block_q8_1* bq8_1, const int& kbx, const int& iqs) {
     const block_q6_K* w = (const block_q6_K*) vbq + kbx;
     const int bq8_offset = 4 * (iqs / 16) + (iqs % 16) / 8;
@@ -217,8 +251,12 @@ __device__ __forceinline__ float dot_q6_K(const void* vbq, const block_q8_1* bq8
         const int sc = scales[4 * i];
         const int vil = (vl >> (4 * i)) & 0x0f0f0f0f;
         const int vih = ((vh >> (4 * i)) << 4) & 0x30303030;
+#if GLMF_SM60
+        sumf += d8 * i2f_s22(mul_s16(__dp4a(q6_m32(vil | vih), u, 0), sc));
+#else
         const int vi = __vsubss4(vil | vih, 0x20202020);
         sumf += d8 * (__dp4a(vi, u, 0) * sc);
+#endif
     }
     return __half2float(w->d) * sumf;
 }
@@ -344,7 +382,11 @@ template<> struct DecW<14> {
             sc[i] = scales[4 * i];
             const int vil = (vl >> (4 * i)) & 0x0f0f0f0f;
             const int vih = ((vh >> (4 * i)) << 4) & 0x30303030;
+#if GLMF_SM60
+            vi[i] = q6_m32(vil | vih);   // (dot_q6_K's sm_60 rewrites)
+#else
             vi[i] = __vsubss4(vil | vih, 0x20202020);
+#endif
         }
         d = __half2float(w->d);
     }
@@ -361,7 +403,12 @@ template<> struct DecW<14> {
     __device__ __forceinline__ float dot(const X& x) const {
         float sumf = 0.0f;
 #pragma unroll
-        for (int i = 0; i < 2; ++i) sumf += x.d8[i] * (__dp4a(vi[i], x.u[i], 0) * sc[i]);
+        for (int i = 0; i < 2; ++i)
+#if GLMF_SM60
+            sumf += x.d8[i] * i2f_s22(mul_s16(__dp4a(vi[i], x.u[i], 0), sc[i]));
+#else
+            sumf += x.d8[i] * (__dp4a(vi[i], x.u[i], 0) * sc[i]);
+#endif
         return d * sumf;
     }
 };
@@ -856,6 +903,118 @@ template<> __device__ __forceinline__ float dw<29>(const uint8_t* row, int kbx, 
     const int sc1 = 2 * ((tmp >> 3) & 0x07) + 1;
     return d * ((sumi[0] + sumf[0]) * sc0 + (sumi[1] + sumf[1]) * sc1);
 }
+// sm_60: the routed experts' i-quant sign decode through a table in shared memory (moe_gate_up_kernel /
+// moe_down_kernel).  dw<T> spreads a sign byte's bits over the four bytes with __vcmpne4 and negates with __vsub4 -
+// two SIMD-in-word ops that sm_60 emulates in ~10 instructions each.  The table holds each sign byte's byte masks
+// for its low and high four bits (0xff where the value is negated); (g ^ m) + (m & 0x01010101) is __vsub4(g ^ m, m)
+// because every IQ2_S / IQ3_XXS / IQ3_S grid byte is nonzero (negating a nonzero byte never carries into the next) -
+// the same bytes, so the same sums.  IQ3_XXS: 7 sign bits + their parity (unpack_ksigns), 128 entries; IQ2_S /
+// IQ3_S: the sign byte, 256.  On a PH402 die (8 experts, the decode shapes): IQ2_S gate/up 312 -> 273 us, IQ3_XXS
+// down 167 -> 156, IQ3_S down 195 -> 185; IQ2_S keeps the two masks (the +1s by an AND: less shared-memory traffic,
+// faster for it), IQ3_* the masks with their +1s.
+template<int T> constexpr bool sm60_sign_on = GLMF_SM60 && (T == 18 || T == 21 || T == 22);
+template<int T> constexpr int sm60_sign_n = T == 18 ? 128 : 256;
+template<int T> constexpr int sm60_sign_w = T == 22 ? 2 : 4;   // u32 words an entry
+#if GLMF_SM60
+template<int T>
+__device__ __forceinline__ void sm60_load_signs(uint32_t* t) {
+    for (int i = threadIdx.x; i < sm60_sign_n<T>; i += blockDim.x) {
+        unsigned b = i;
+        if constexpr (T == 18) b |= (__popc(b) & 1) << 7;
+        unsigned lo = 0, hi = 0;
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            lo |= (0u - ((b >> j) & 1u)) & (255u << (8 * j));
+            hi |= (0u - ((b >> (j + 4)) & 1u)) & (255u << (8 * j));
+        }
+        if constexpr (sm60_sign_w<T> == 4) ((uint4*) t)[i] = make_uint4(lo, lo & 0x01010101u, hi, hi & 0x01010101u);
+        else ((uint2*) t)[i] = make_uint2(lo, hi);
+    }
+}
+struct Sm60Sign {
+    uint32_t lm, lp, hm, hp;   // the low / high four values' masks and +1s
+};
+template<int T>
+__device__ __forceinline__ Sm60Sign sm60_sign(const uint32_t* t, uint32_t idx) {
+    Sm60Sign r;
+    if constexpr (sm60_sign_w<T> == 4) {
+        const uint4 v = ((const uint4*) t)[idx];
+        r.lm = v.x, r.lp = v.y, r.hm = v.z, r.hp = v.w;
+    } else {
+        const uint2 v = ((const uint2*) t)[idx];
+        r.lm = v.x, r.lp = v.x & 0x01010101u, r.hm = v.y, r.hp = v.y & 0x01010101u;
+    }
+    return r;
+}
+// dw<T> with the table's signs (st: sm60_load_signs<T>'s table)
+template<int T> __device__ __forceinline__ float dws(const uint8_t* row, int kbx, int iqs, const XV& x,
+                                                     const uint32_t* tab, const uint32_t* st);
+template<> __device__ __forceinline__ float dws<18>(const uint8_t* row, int kbx, int iqs, const XV& x,
+                                                    const uint32_t* tab, const uint32_t* st) {
+    const block_iq3_xxs* bq3 = (const block_iq3_xxs*) row + kbx;
+    const int2 q3_packed = make_int2(get_int_b2(bq3->qs, iqs), get_int_b2(bq3->qs, iqs + 1));
+    const uint8_t* q3 = (const uint8_t*) &q3_packed;
+    const uint32_t aux32 = get_int_b2(bq3->qs, QK_K / 16 + iqs / 2);
+    int sumi = 0;
+#pragma unroll
+    for (int l0 = 0; l0 < 8; l0 += 2) {
+        const int2 grid_pos = make_int2(tab[q3[l0 + 0]], tab[q3[l0 + 1]]);
+        const Sm60Sign sg = sm60_sign<18>(st, (aux32 >> (7 * l0 / 2)) & 127);
+        sumi = __dp4a((int) ((grid_pos.x ^ sg.lm) + sg.lp), x.u[l0 + 0], sumi);
+        sumi = __dp4a((int) ((grid_pos.y ^ sg.hm) + sg.hp), x.u[l0 + 1], sumi);
+    }
+    const int ls = aux32 >> 28;
+    sumi = (ls * sumi + sumi / 2) / 2;
+    return __half2float(bq3->d) * x.d * sumi;
+}
+template<> __device__ __forceinline__ float dws<22>(const uint8_t* row, int kbx, int iqs, const XV& x,
+                                                    const uint32_t* tab, const uint32_t* st) {
+    const block_iq2_s* bq2 = (const block_iq2_s*) row + kbx;
+    const int qs_packed = get_int_b2(bq2->qs, iqs / 2);
+    const uint8_t* qs = (const uint8_t*) &qs_packed;
+    const int qh = bq2->qh[iqs / 2];
+    const int signs_packed_32 = get_int_b2(bq2->qs, QK_K / 32 + iqs / 2);
+    const uint8_t* signs_packed_8 = (const uint8_t*) &signs_packed_32;
+    const int ls0 = bq2->scales[iqs / 2] & 0x0F;
+    const int ls1 = bq2->scales[iqs / 2] >> 4;
+    int sumi0 = 0, sumi1 = 0;
+#pragma unroll
+    for (int l0 = 0; l0 < 8; l0 += 2) {
+        const uint2 grid_pos = ((const uint2*) tab)[qs[l0 / 2] | ((qh << (8 - l0)) & 0x300)];
+        const Sm60Sign sg = sm60_sign<22>(st, signs_packed_8[l0 / 2]);
+        const int grid_l = (int) ((grid_pos.x ^ sg.lm) + sg.lp);
+        const int grid_h = (int) ((grid_pos.y ^ sg.hm) + sg.hp);
+        if (l0 < 4) {
+            sumi0 = __dp4a(grid_l, x.u[l0 + 0], sumi0);
+            sumi0 = __dp4a(grid_h, x.u[l0 + 1], sumi0);
+        } else {
+            sumi1 = __dp4a(grid_l, x.u[l0 + 0], sumi1);
+            sumi1 = __dp4a(grid_h, x.u[l0 + 1], sumi1);
+        }
+    }
+    const int sumi = (sumi0 * ls0 + sumi1 * ls1 + (sumi0 + sumi1) / 2) / 4;
+    return __half2float(bq2->d) * x.d * sumi;
+}
+template<> __device__ __forceinline__ float dws<21>(const uint8_t* row, int kbx, int iqs, const XV& x,
+                                                    const uint32_t* tab, const uint32_t* st) {
+    const block_iq3_s* bq3 = (const block_iq3_s*) row + kbx;
+    const int2 qs_packed = make_int2(get_int_b2(bq3->qs, iqs + 0), get_int_b2(bq3->qs, iqs + 1));
+    const uint8_t* qs = (const uint8_t*) &qs_packed;
+    const int qh = bq3->qh[iqs / 2];
+    const int signs_packed_32 = get_int_b2(bq3->signs, iqs / 2);
+    const uint8_t* signs_packed_8 = (const uint8_t*) &signs_packed_32;
+    int sumi = 0;
+#pragma unroll
+    for (int l0 = 0; l0 < 8; l0 += 2) {
+        const int2 grid_pos = make_int2(tab[qs[l0 + 0] | ((qh << (8 - l0)) & 0x100)], tab[qs[l0 + 1] | ((qh << (7 - l0)) & 0x100)]);
+        const Sm60Sign sg = sm60_sign<21>(st, signs_packed_8[l0 / 2]);
+        sumi = __dp4a((int) ((grid_pos.x ^ sg.lm) + sg.lp), x.u[l0 + 0], sumi);
+        sumi = __dp4a((int) ((grid_pos.y ^ sg.hm) + sg.hp), x.u[l0 + 1], sumi);
+    }
+    sumi *= 1 + 2 * ((bq3->scales[iqs / 4] >> ((iqs << 1) & 0x04)) & 0x0F);
+    return __half2float(bq3->d) * x.d * sumi;
+}
+#endif
 // HIP sign decode adapted from Strata src/prefill/moe_fused_iq.cu (MIT).
 // Every IQ2/IQ3 grid byte is nonzero and <= 62, so two's-complement negation
 // can use a whole-word add without carries across byte boundaries. Multiplying
@@ -1039,9 +1198,10 @@ template<> __device__ __forceinline__ float dwk<11>(const uint8_t* row, int kbx,
     }
     return __half2float(b->d) * sumf;
 }
-template<int T, int NR>
+// (SG: sm_60's sign table st - sm60_sign_on<T> types only)
+template<int T, int NR, bool SG = false>
 __device__ __forceinline__ void rows_dot(const uint8_t* const* rows, const block_q8_1* x, int n_in, int lane,
-                                         const uint32_t* tab, float* s) {
+                                         const uint32_t* tab, float* s, const uint32_t* st = nullptr) {
     using Fm = F<T>;
     const int nb = n_in / Fm::qk;
     float acc[NR];
@@ -1066,6 +1226,14 @@ __device__ __forceinline__ void rows_dot(const uint8_t* const* rows, const block
         for (int k = lane; k < nb * Fm::ipb; k += 32) {
             const int kbx = k / Fm::ipb, ki = k % Fm::ipb, iqs = Fm::step * ki;
             const XV xv = load_xv(x + kbx * (Fm::qk / 32) + ki);
+#if GLMF_SM60
+            if constexpr (SG && sm60_sign_on<T>) {
+#pragma unroll
+                for (int r = 0; r < NR; ++r) acc[r] += dws<T>(rows[r], kbx, iqs, xv, tab, st);
+                continue;
+            }
+#endif
+            (void) st;
 #pragma unroll
             for (int r = 0; r < NR; ++r) acc[r] += dw<T>(rows[r], kbx, iqs, xv, tab);
         }
@@ -1176,7 +1344,7 @@ __device__ __forceinline__ float mv_out(float alpha, float s, float bias) {
 #endif
 }
 
-__global__ void __launch_bounds__(256) mv_kernel(const __grid_constant__ MvBatch b) {
+__global__ void __launch_bounds__(256) mv_kernel(const STRATA_GRID_CONSTANT MvBatch b) {
     if (b.skip != nullptr && *b.skip) return;
     const int bid = blockIdx.x;
     int ji = 0;
@@ -1192,7 +1360,7 @@ __global__ void __launch_bounds__(256) mv_kernel(const __grid_constant__ MvBatch
 
 // ... several columns (a verify window's tokens) of a type the tiled kernels below do not take, or every type with
 // STRATA_GLM_MV_TILED=0: kernels of their own, so the one-column kernels keep their registers and their speed
-__global__ void __launch_bounds__(256) mv_kernel_cols(const __grid_constant__ MvBatch b) {
+__global__ void __launch_bounds__(256) mv_kernel_cols(const STRATA_GRID_CONSTANT MvBatch b) {
     if (b.skip != nullptr && *b.skip) return;
     const int bid = blockIdx.x;
     int ji = 0;
@@ -1221,7 +1389,7 @@ __global__ void __launch_bounds__(256) mv_kernel_cols(const __grid_constant__ Mv
 // ... the same for jobs of ONE quantized type: compiled for that type alone (the switch over every type costs the
 // generic kernel registers and occupancy - a Q6_K 8192 x 4096 GEMV on a V100: 53.4 -> 47.8 us, the same arithmetic)
 template<int T>
-__global__ void __launch_bounds__(256) mv_kernel_t(const __grid_constant__ MvBatch b) {
+__global__ void __launch_bounds__(256) mv_kernel_t(const STRATA_GRID_CONSTANT MvBatch b) {
     if (b.skip != nullptr && *b.skip) return;
     const int bid = blockIdx.x;
     int ji = 0;
@@ -1236,7 +1404,7 @@ __global__ void __launch_bounds__(256) mv_kernel_t(const __grid_constant__ MvBat
     if (lane == 0) J.y[row] = mv_out(J.alpha, s, J.bias ? J.bias[row] : 0.0f);
 }
 template<int T>
-__global__ void __launch_bounds__(256) mv_kernel_t_cols(const __grid_constant__ MvBatch b) {
+__global__ void __launch_bounds__(256) mv_kernel_t_cols(const STRATA_GRID_CONSTANT MvBatch b) {
     if (b.skip != nullptr && *b.skip) return;
     const int bid = blockIdx.x;
     int ji = 0;
@@ -1335,7 +1503,7 @@ __device__ __forceinline__ void any_row_dot_nt(int type, const void* w, int row,
     }
 }
 template<int NT>
-__global__ void __launch_bounds__(256) mv_kernel_nt(const __grid_constant__ MvBatch b) {
+__global__ void __launch_bounds__(256) mv_kernel_nt(const STRATA_GRID_CONSTANT MvBatch b) {
     const int bid = blockIdx.x;
     int ji = 0;
     while (ji < b.n - 1 && bid >= b.blk_end[ji]) ++ji;
@@ -1353,7 +1521,7 @@ __global__ void __launch_bounds__(256) mv_kernel_nt(const __grid_constant__ MvBa
     }
 }
 template<int T, int NT>
-__global__ void __launch_bounds__(256) mv_kernel_t_nt(const __grid_constant__ MvBatch b) {
+__global__ void __launch_bounds__(256) mv_kernel_t_nt(const STRATA_GRID_CONSTANT MvBatch b) {
     const int bid = blockIdx.x;
     int ji = 0;
     while (ji < b.n - 1 && bid >= b.blk_end[ji]) ++ji;
@@ -1380,7 +1548,7 @@ __global__ void __launch_bounds__(256) mv_kernel_t_nt(const __grid_constant__ Mv
 // column's bit for bit (the order differs) - the same value to float rounding.
 constexpr int MMA_W = 8;   // warps a block
 
-__global__ void __launch_bounds__(MMA_W * 32) mvc_mma_q8_0(const __grid_constant__ MvBatch b) {
+__global__ void __launch_bounds__(MMA_W * 32) mvc_mma_q8_0(const STRATA_GRID_CONSTANT MvBatch b) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800 && !defined(STRATA_USE_HIP)
     if (b.skip != nullptr && *b.skip) return;
     __shared__ float red[MMA_W][16][kMaxMvCols + 1];
@@ -1465,7 +1633,7 @@ __global__ void __launch_bounds__(MMA_W * 32) mvc_mma_q8_0(const __grid_constant
 // m16n8k32, then its scale and min in float (the min against the block's int8 sum, as the dp4a kernel).  A lane's eight k slots are eight
 // consecutive values - one 8-byte load of the packed pair of sub-blocks, the activations in the same order.  The
 // dp4a kernel re-reads every column's activations for each pair of rows (8 columns: ~half the memory's speed)
-__global__ void __launch_bounds__(MMA_W * 32) mvc_mma_q4_K(const __grid_constant__ MvBatch b) {
+__global__ void __launch_bounds__(MMA_W * 32) mvc_mma_q4_K(const STRATA_GRID_CONSTANT MvBatch b) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800 && !defined(STRATA_USE_HIP)
     if (b.skip != nullptr && *b.skip) return;
     __shared__ float red[MMA_W][16][kMaxMvCols + 1];
@@ -1569,7 +1737,7 @@ constexpr int MVC_R = 4;   // rows a warp - 2 for Q8_0 / Q4_K from 8 columns (fo
 constexpr int mvc_rows(int type, int nc) { return nc >= 8 && type != 14 ? 2 : MVC_R; }
 
 template<int T, int NC, int R = mvc_rows(T, NC)>
-__global__ void __launch_bounds__(256) mvc_kernel_t(const __grid_constant__ MvBatch b) {
+__global__ void __launch_bounds__(256) mvc_kernel_t(const STRATA_GRID_CONSTANT MvBatch b) {
     if (b.skip != nullptr && *b.skip) return;
     using Fm = F<T>;
     using D = DecW<T>;
@@ -1663,10 +1831,146 @@ bool mma_ok() {
 #endif
 }
 
+// cc 6.0 (Tesla P100 / PH402, GP100 - no dp4a, the VMAD emulation): the one-column Q6_K GEMV (the KDA / DSA
+// projections, the shared experts' gate/up, the dense FFN, the head - ~2/3 of a decode token's bytes) runs at
+// 135-150 GB/s of the 732 in mv_kernel_t, bound by its loads: a lane's call reads its weights in seven 8- and 16-bit
+// pieces (the 210-byte blocks are only 2-aligned), the instructions' arithmetic does not matter (an exact rewrite of
+// the integer work, 66 -> 52 SASS a row and call, changed nothing).  mv_q6_p100_kernel: a warp takes R rows, reads
+// each row's block as 53 aligned words (two coalesced loads a lane) and hands every lane its call's fields with six
+// shuffles; the activation is staged in shared memory once per block.  Each lane then makes dot_q6_K's calls in
+// row_dot's order with the same ints and floats (DecW<14>), so every row's sum is mv_kernel_t's bit for bit.  On a
+// PH402 die, us (mv_kernel_t -> this): the KDA q/k/v 24576 x 4096 561 -> 389, attn_output 4096 x 16384 406 -> 279,
+// q_b 16384 x 1536 142 -> 105, the shared expert's gate/up 4096 x 4096 106 -> 79, q_a + kv_a 2048 x 4096 59 -> 48
+// (R = 2), the FFN 12288 x 4096 287 -> 204, the head 154880 x 4096 3466 -> 2362.
+// p100_mv_mode: 0 off (mv_kernel_t; STRATA_GLM_MV_P100=0), else R by the launch's rows (STRATA_GLM_MV_P100_R=2 / 4
+// forces one), asked once per device
+#if !defined(STRATA_USE_HIP)
+// a Q6_K block's 53 words, two a lane: w0 = word lane, w1 = word 32 + lane (lanes 0-20) of the words starting sh = the
+// block's address mod 4 (0 or 2) bytes before it; its first / last half word read as a half, so nothing outside the
+// block is read
+__device__ __forceinline__ void q6_words(const uint8_t* s, int lane, uint32_t& w0, uint32_t& w1, int& sh) {
+    sh = (int) ((uintptr_t) s & 3);
+    const uint32_t* a = (const uint32_t*) (s - sh);
+    w0 = (lane == 0 && sh) ? (uint32_t) (*(const uint16_t*) s) << 16 : a[lane];
+    w1 = lane > 20 ? 0u : (lane == 20 && !sh) ? (uint32_t) * (const uint16_t*) (s + 208) : a[32 + lane];
+}
+// DecW<14>::load's fields for iqs = lane from the block's words (q6_words; the whole warp, the same block)
+__device__ __forceinline__ void q6_fields(DecW<14>& D, uint32_t w0, uint32_t w1, int sh, int lane) {
+    const int f = 8 * sh;
+    const uint32_t nx = __shfl_sync(0xffffffffu, lane == 0 ? w1 : w0, (lane + 1) & 31);
+    const int vl = (int) __funnelshift_r(w0, nx, f);   // ql int lane
+    const int qi = 8 * (lane / 16) + lane % 8;          // qh int qi
+    const uint32_t h0 = __shfl_sync(0xffffffffu, w1, qi), h1 = __shfl_sync(0xffffffffu, w1, qi + 1);
+    const int vh = (int) __funnelshift_r(h0, h1, f) >> (2 * ((lane % 16) / 8));
+    const int sb = 8 * (lane / 16) + (lane % 16) / 4 + sh;   // scales[so] and [so + 4] (bytes 192 +)
+    const uint32_t s0 = __shfl_sync(0xffffffffu, w1, 16 + (sb >> 2)), s1 = __shfl_sync(0xffffffffu, w1, 17 + (sb >> 2));
+    D.sc[0] = (int) (int8_t) (s0 >> (8 * (sb & 3)));
+    D.sc[1] = (int) (int8_t) (s1 >> (8 * (sb & 3)));
+    const uint32_t dw = __shfl_sync(0xffffffffu, w1, 20);   // d (bytes 208-209)
+    D.d = __half2float(__ushort_as_half((unsigned short) (dw >> f)));
+#pragma unroll
+    for (int i = 0; i < 2; ++i) {
+        const int vil = (vl >> (4 * i)) & 0x0f0f0f0f;
+        const int vih = ((vh >> (4 * i)) << 4) & 0x30303030;
+#if GLMF_SM60
+        D.vi[i] = q6_m32(vil | vih);   // (as DecW<14>::load)
+#else
+        D.vi[i] = __vsubss4(vil | vih, 0x20202020);
+#endif
+    }
+}
+// R rows a warp (MV_ROWS warps a block); dynamic shared memory: the largest job's n_in / 32 q8_1 blocks
+template<int R>
+__global__ void __launch_bounds__(256) mv_q6_p100_kernel(const STRATA_GRID_CONSTANT MvBatch b) {
+    if (b.skip != nullptr && *b.skip) return;
+    extern __shared__ int mvq6_xs[];
+    const int bid = blockIdx.x;
+    int ji = 0;
+    while (ji < b.n - 1 && bid >= b.blk_end[ji]) ++ji;
+    const MvJob& J = b.j[ji];
+    const int blk0 = ji ? b.blk_end[ji - 1] : 0;
+    {
+        const int nw = (J.n_in / 32) * (int) (sizeof(block_q8_1) / 4);
+        for (int i = threadIdx.x; i < nw; i += blockDim.x) mvq6_xs[i] = ((const int*) J.xq)[i];
+        __syncthreads();
+    }
+    const block_q8_1* xq = (const block_q8_1*) mvq6_xs;
+    const int row0 = ((bid - blk0) * MV_ROWS + (threadIdx.x >> 5)) * R;
+    const int lane = threadIdx.x & 31;
+    if (row0 >= J.n_out) return;
+    const size_t rb = rbytes<14>(J.n_in);
+    const uint8_t* w[R];
+#pragma unroll
+    for (int r = 0; r < R; ++r) w[r] = (const uint8_t*) J.w + (size_t) min(row0 + r, J.n_out - 1) * rb;
+    float s[R];
+#pragma unroll
+    for (int r = 0; r < R; ++r) s[r] = 0.0f;
+    const int nk = (J.n_in / 256) * 32;   // (a multiple of 32: every lane makes the same trips, the shuffles' warp whole)
+    for (int k = lane; k < nk; k += 32) {
+        const int kbx = k / 32, iqs = k % 32;
+        uint32_t w0[R], w1[R];
+        int sh[R];
+#pragma unroll
+        for (int r = 0; r < R; ++r) q6_words(w[r] + (size_t) kbx * sizeof(block_q6_K), lane, w0[r], w1[r], sh[r]);
+        DecW<14> dw[R];
+#pragma unroll
+        for (int r = 0; r < R; ++r) q6_fields(dw[r], w0[r], w1[r], sh[r], lane);
+        const DecW<14>::X xv = DecW<14>::load_x(xq + kbx * 8, iqs);
+#pragma unroll
+        for (int r = 0; r < R; ++r) s[r] += dw[r].dot(xv);
+    }
+#pragma unroll
+    for (int r = 0; r < R; ++r) {
+        const float v = warp_sum(s[r]);
+        if (lane == 0 && row0 + r < J.n_out) J.y[row0 + r] = mv_out(J.alpha, v, J.bias ? J.bias[row0 + r] : 0.0f);
+    }
+}
+#endif
+// moe_gate_up on cc 6.0 stages the layer input in shared memory (STRATA_GLM_GU_STAGE=0: it reads it from global)
+bool sm60_gu_stage() {
+#if defined(STRATA_USE_HIP)
+    return false;
+#else
+    static int cache[64];
+    int dev = 0;
+    cudaGetDevice(&dev);
+    if (dev < 0 || dev >= 64) return false;
+    if (cache[dev] == 0) {
+        int major = 0, minor = 0;
+        cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev);
+        cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, dev);
+        const char* v = getenv("STRATA_GLM_GU_STAGE");
+        cache[dev] = major == 6 && minor == 0 && (v == nullptr || std::atoi(v) != 0) ? 1 : 2;
+    }
+    return cache[dev] == 1;
+#endif
+}
+int p100_mv_mode() {
+#if defined(STRATA_USE_HIP)
+    return 0;
+#else
+    static int cache[64];
+    int dev = 0;
+    cudaGetDevice(&dev);
+    if (dev < 0 || dev >= 64) return 0;
+    if (cache[dev] == 0) {
+        int major = 0, minor = 0;
+        cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev);
+        cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, dev);
+        const char* v = getenv("STRATA_GLM_MV_P100");
+        const char* rv = getenv("STRATA_GLM_MV_P100_R");
+        const int r = rv != nullptr ? std::atoi(rv) : 0;
+        const bool on = major == 6 && minor == 0 && (v == nullptr || std::atoi(v) != 0);
+        cache[dev] = on ? (r == 2 || r == 4 ? r : 1) : -1;   // 1: by the rows
+    }
+    return cache[dev] > 0 ? cache[dev] : 0;
+#endif
+}
+
 // ... BF16 weights against float activations (the routers, the indexer's projections): the same staging, in floats
 constexpr int MVC_FTILE = 512;   // floats of every column per tile
 
-__global__ void __launch_bounds__(256) mvc_kernel_bf16(const __grid_constant__ MvBatch b) {
+__global__ void __launch_bounds__(256) mvc_kernel_bf16(const STRATA_GRID_CONSTANT MvBatch b) {
     if (b.skip != nullptr && *b.skip) return;
     extern __shared__ __align__(16) uint8_t mvc_smem[];
     float* sx = (float*) mvc_smem;   // [ncol][MVC_FTILE]
@@ -1840,7 +2144,7 @@ __device__ __forceinline__ void bf16_rows_rdna(const uint16_t* row, const float*
 // big Q6_K GEMVs instead of a second, 36-block launch behind them).  A Q6_K job's block holds WPB waves of R rows, a
 // BF16 job's WPB waves of one row; the dispatcher puts the BF16 jobs first so their long-K rows start early.
 template<int R, int NT, int U, int WPB, bool XL>
-__global__ void __launch_bounds__(WPB * 32) mv_rdna_kernel(const __grid_constant__ MvBatch b) {
+__global__ void __launch_bounds__(WPB * 32) mv_rdna_kernel(const STRATA_GRID_CONSTANT MvBatch b) {
     const int bid = blockIdx.x;
     int ji = 0;
     while (ji < b.n - 1 && bid >= b.blk_end[ji]) ++ji;
@@ -1908,7 +2212,7 @@ constexpr int HC_CHUNK = 512;
 constexpr int HC_THREADS = 256;
 constexpr int HC_MIX = 24;      // (2 + hc) * hc for hc = 4
 
-__global__ void __launch_bounds__(HC_THREADS) hc_kernel(const __grid_constant__ HcArgs a) {
+__global__ void __launch_bounds__(HC_THREADS) hc_kernel(const STRATA_GRID_CONSTANT HcArgs a) {
     const int hc = 4;
     const int n_embd = a.n_embd;
     const int hc_dim = hc * n_embd;
@@ -2034,7 +2338,7 @@ __device__ __forceinline__ void grid_barrier(unsigned long long* ctr, unsigned i
     __syncthreads();
 }
 
-__global__ void __launch_bounds__(HC_THREADS) hc2_kernel(const __grid_constant__ HcArgs a) {
+__global__ void __launch_bounds__(HC_THREADS) hc2_kernel(const STRATA_GRID_CONSTANT HcArgs a) {
     const int hc = 4;
     const int n_embd = a.n_embd;
     const int hc_dim = hc * n_embd;
@@ -2150,7 +2454,7 @@ __global__ void __launch_bounds__(HC_THREADS) hc2_kernel(const __grid_constant__
 // (8 bf16 per lane per stream segment, uint4) BEFORE it computes its R values, the partial sums are reduced by whole
 // warps (lane = block) instead of one thread walking 32 of them, and the second barrier's total likewise.
 // 32 blocks of 128 embedding values; n_embd == 4096 only.
-__global__ void __launch_bounds__(HC_THREADS) hc3_kernel(const __grid_constant__ HcArgs a) {
+__global__ void __launch_bounds__(HC_THREADS) hc3_kernel(const STRATA_GRID_CONSTANT HcArgs a) {
     const int hc = 4;
     const int n_embd = a.n_embd;
     const unsigned int nb = gridDim.x;   // 32
@@ -2363,13 +2667,13 @@ __device__ __forceinline__ void kda_prep_block(const KdaPrepArgs& a, int h, int 
     }
 }
 
-__global__ void __launch_bounds__(128) kda_prep_kernel(const __grid_constant__ KdaPrepArgs a) {
+__global__ void __launch_bounds__(128) kda_prep_kernel(const STRATA_GRID_CONSTANT KdaPrepArgs a) {
     kda_prep_block(a, blockIdx.x, blockIdx.y);
 }
 struct KdaPrepBatch {
     KdaPrepArgs a[kKdaLayers];
 };
-__global__ void __launch_bounds__(128) kda_prep_layers_kernel(const __grid_constant__ KdaPrepBatch b) {
+__global__ void __launch_bounds__(128) kda_prep_layers_kernel(const STRATA_GRID_CONSTANT KdaPrepBatch b) {
     kda_prep_block(b.a[blockIdx.z], blockIdx.x, blockIdx.y);
 }
 
@@ -2440,7 +2744,7 @@ struct KdaRecBatch {
     KdaRecArgs a[kKdaLayers];
     float eps;
 };
-__global__ void __launch_bounds__(256) kda_rec_layers_kernel(const __grid_constant__ KdaRecBatch b) {
+__global__ void __launch_bounds__(256) kda_rec_layers_kernel(const STRATA_GRID_CONSTANT KdaRecBatch b) {
     const KdaRecArgs& r = b.a[blockIdx.y];
     kda_rec_block(r.q, r.k, r.v, r.g1, r.beta_raw, r.state, r.g2, r.norm_w, b.eps, nullptr, blockIdx.x);
 }
@@ -2476,7 +2780,7 @@ __device__ __forceinline__ void lat_put(uint16_t* lat, int64_t row, float y, boo
         lat[(size_t) kv_lora * row + c] = lat_h(y);
 }
 // ---------------------------------------------------------------- DSA
-__global__ void __launch_bounds__(512) dsa_prep_kernel(const __grid_constant__ DsaPrepArgs a) {
+__global__ void __launch_bounds__(512) dsa_prep_kernel(const STRATA_GRID_CONSTANT DsaPrepArgs a) {
     __shared__ float sred[32];
     const int tid = threadIdx.x, lane = tid & 31;
     if (blockIdx.x == 0) {
@@ -3254,7 +3558,7 @@ struct RouteArgs {
                                 // weight stays its own probability) - LOSSY, it changes which experts run (0: off)
 };
 
-__global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const __grid_constant__ RouteArgs a) {
+__global__ void __launch_bounds__(ROUTE_THREADS) moe_route_kernel(const STRATA_GRID_CONSTANT RouteArgs a) {
     const int tid = threadIdx.x, lane = tid & 31;
     // a token past a wrong draft (set_skip): every expert not in VRAM is left out - no fetch, no CPU work, no counts
     const bool skipped = a.skip != nullptr && *a.skip;
@@ -3781,6 +4085,23 @@ moe_gate_up_kernel(MoeDev d, int k, int n_embd, int n_ff, float limit,
     if (ptr == 0ull) return;
     __shared__ float sg[GU_ROWS], su[GU_ROWS];
     __shared__ uint32_t s_tab[TabWords<TG>::n > 0 ? TabWords<TG>::n : 1];
+    const block_q8_1* xg = xq;
+#if GLMF_SM60
+    __shared__ __align__(16) uint32_t s_sg[sm60_sign_on<TG> ? sm60_sign_n<TG> * sm60_sign_w<TG> : 1];
+    if constexpr (sm60_sign_on<TG>) sm60_load_signs<TG>(s_sg);
+    // the layer input staged in shared memory when the launch gives it the room (moe_gate_up on cc 6.0: every block
+    // reads the same 4.6 KB, the calls' activation loads then hit shared memory - IQ2_S 274 -> 256 us on a PH402 die)
+    {
+        extern __shared__ int s_gx[];
+        uint32_t dyn;
+        asm("mov.u32 %0, %%dynamic_smem_size;" : "=r"(dyn));
+        const int nxw = (n_embd / 32) * (int) (sizeof(block_q8_1) / 4);
+        if (dyn >= (uint32_t) nxw * 4u) {
+            for (int i = threadIdx.x; i < nxw; i += blockDim.x) s_gx[i] = ((const int*) xq)[i];
+            xg = (const block_q8_1*) s_gx;
+        }
+    }
+#endif
 #if defined(STRATA_USE_HIP)
     __shared__ uint4 s_sign[LUT && !DIRECT ? sign_count<TG> : 1];
     if constexpr (LUT && !DIRECT) load_signs<TG>(s_sign);
@@ -3808,7 +4129,10 @@ moe_gate_up_kernel(MoeDev d, int k, int n_embd, int n_ff, float limit,
         rows_dot_rdna<TG, 2 * RPW>(rows, xq, n_embd, lane, tab, s_sign, s, DIRECT, WIDE);
     } else
 #endif
-    rows_dot<TG, 2 * RPW>(rows, xq, n_embd, lane, tab, s);
+#if GLMF_SM60
+    if constexpr (sm60_sign_on<TG>) rows_dot<TG, 2 * RPW, true>(rows, xg, n_embd, lane, tab, s, s_sg); else
+#endif
+    rows_dot<TG, 2 * RPW>(rows, xg, n_embd, lane, tab, s);
     if (lane == 0) {
 #pragma unroll
         for (int j = 0; j < RPW; ++j) {
@@ -3861,6 +4185,10 @@ __global__ void __launch_bounds__(256) moe_down_kernel(MoeDev d, int k, int n_em
     __shared__ float s_w[8];
     __shared__ float s_part[8][NR];
     __shared__ uint32_t s_tab[TabWords<TD>::n > 0 ? TabWords<TD>::n : 1];
+#if GLMF_SM60
+    __shared__ __align__(16) uint32_t s_sg[sm60_sign_on<TD> ? sm60_sign_n<TD> * sm60_sign_w<TD> : 1];
+    if constexpr (sm60_sign_on<TD>) sm60_load_signs<TD>(s_sg);
+#endif
 #if defined(STRATA_USE_HIP)
     __shared__ uint4 s_sign[LUT && !DIRECT ? sign_count<TD> : 1];
     if constexpr (LUT && !DIRECT) load_signs<TD>(s_sign);
@@ -3888,6 +4216,9 @@ __global__ void __launch_bounds__(256) moe_down_kernel(MoeDev d, int k, int n_em
             if constexpr (LUT) {
                 rows_dot_rdna<TD, NR>(rows, hq + (size_t) warp * (n_ff / 32), n_ff, lane, tab, s_sign, s, DIRECT, WIDE);
             } else
+#endif
+#if GLMF_SM60
+            if constexpr (sm60_sign_on<TD>) rows_dot<TD, NR, true>(rows, hq + (size_t) warp * (n_ff / 32), n_ff, lane, tab, s, s_sg); else
 #endif
             rows_dot<TD, NR>(rows, hq + (size_t) warp * (n_ff / 32), n_ff, lane, tab, s);
         } else {
@@ -4739,15 +5070,41 @@ bool mv(const MvJob* jobs, int n, cudaStream_t s) {
             MvBatch b{};
             b.skip = g_skip;
             int acc = 0, m = 0;
+            // cc 6.0: Q6_K through mv_q6_p100_kernel - R = 2 rows a warp below 4096 rows in the launch, else 4 (a
+            // launch of fewer than 1024 rows, and an activation over 48 KB, keep mv_kernel_t)
+            int pr = 0;
+            size_t xs_bytes = 0;
+#if !defined(STRATA_USE_HIP)
+            if (T == 14) {
+                if (const int mode = p100_mv_mode(); mode > 0) {
+                    int rows = 0, max_in = 0;
+                    for (int i = 0; i < n; ++i)
+                        if (!done[i] && jobs[i].type == T) {
+                            rows += jobs[i].n_out;
+                            max_in = std::max(max_in, jobs[i].n_in);
+                        }
+                    xs_bytes = (size_t) (max_in / 32) * sizeof(block_q8_1);
+                    if (rows >= 1024 && xs_bytes <= 48 * 1024) pr = mode > 1 ? mode : rows < 4096 ? 2 : 4;
+                }
+            }
+#endif
+            const int per = MV_ROWS * (pr > 0 ? pr : 1);
             for (int i = 0; i < n; ++i)
                 if (!done[i] && jobs[i].type == T) {
                     b.j[m] = jobs[i];
-                    acc += (jobs[i].n_out + MV_ROWS - 1) / MV_ROWS;
+                    acc += (jobs[i].n_out + per - 1) / per;
                     b.blk_end[m++] = acc;
                     done[i] = true;
                 }
             if (m == 0) continue;
             b.n = m;
+#if !defined(STRATA_USE_HIP)
+            if (pr > 0) {
+                if (pr == 2) mv_q6_p100_kernel<2><<<acc, 256, xs_bytes, s>>>(b);
+                else mv_q6_p100_kernel<4><<<acc, 256, xs_bytes, s>>>(b);
+                continue;
+            }
+#endif
             switch (T) {
                 case 14: mv_kernel_t<14><<<acc, 256, 0, s>>>(b); break;
                 case 8: mv_kernel_t<8><<<acc, 256, 0, s>>>(b); break;
@@ -5284,10 +5641,12 @@ void moe_gate_up(int gu_type, const MoeDev& d_in, int k, int n_embd, int n_ff, f
     const auto* SD = (const uint8_t*) sh_down;
     const auto* SH = (const block_q8_1*) sh_hq;
     const int kk = sh ? k : k + 1;   // no shared expert: no block has blockIdx.y == kk
+    // cc 6.0: the room to stage the layer input in shared memory (moe_gate_up_kernel takes it when given)
+    const size_t gx = sm60_gu_stage() && n_embd <= 4 * 4096 ? (size_t) (n_embd / 32) * sizeof(block_q8_1) : 0;
     switch (gu_type) {
 #define GLMF_GU(T) \
-        case T: moe_gate_up_kernel<T><<<grid, GU_WARPS * 32, 0, s>>>(d, kk, n_embd, n_ff, limit, X, H, SD, sh_type, SH, \
-                                                                     n_ff_sh, sh_out); break;
+        case T: moe_gate_up_kernel<T><<<grid, GU_WARPS * 32, gx, s>>>(d, kk, n_embd, n_ff, limit, X, H, SD, sh_type, SH, \
+                                                                      n_ff_sh, sh_out); break;
         GLMF_GU(16) GLMF_GU(18) GLMF_GU(19) GLMF_GU(23) GLMF_GU(10) GLMF_GU(11) GLMF_GU(17) GLMF_GU(22) GLMF_GU(21) GLMF_GU(29)
         GLMF_GU(12) GLMF_GU(13) GLMF_GU(14) GLMF_GU(8)
 #undef GLMF_GU
@@ -5472,7 +5831,7 @@ constexpr int kWinEnt = kMaxWinTokens * 8;
 // the entries grouped by expert slot (in order of first appearance), each group's members in entry order (t * 8 + i)
 // (the tables in shared memory: as locals they were a 2.6 KB stack a thread, which the driver reserves for every thread
 // the device can hold - ~420 MB on a V100 - and a launch failed "out of memory" once the expert pool had the rest)
-__global__ void moe_win_group_kernel(const __grid_constant__ MoeWin w) {
+__global__ void moe_win_group_kernel(const STRATA_GRID_CONSTANT MoeWin w) {
     __shared__ unsigned long long gp[kWinEnt];
     __shared__ int cnt[kWinEnt], gof[kWinEnt], fill[kWinEnt + 1];
     if (threadIdx.x != 0) return;
@@ -5507,7 +5866,7 @@ __global__ void moe_win_group_kernel(const __grid_constant__ MoeWin w) {
 // grid (n_ff / GU_ROWS, groups): a group's expert's gate / up rows of this chunk against each member's FFN input, the
 // clamped swiglu into the member's h (moe_gate_up_kernel's rows, arithmetic and layout per member)
 template<int TG>
-__global__ void __launch_bounds__(GU_WARPS * 32) moe_win_gu_kernel(const __grid_constant__ MoeWin w) {
+__global__ void __launch_bounds__(GU_WARPS * 32) moe_win_gu_kernel(const STRATA_GRID_CONSTANT MoeWin w) {
     const int g = blockIdx.y, chunk = blockIdx.x;
     if (g >= *w.n_groups) return;
     constexpr int NW = GU_WARPS;
@@ -5551,7 +5910,7 @@ __global__ void __launch_bounds__(GU_WARPS * 32) moe_win_gu_kernel(const __grid_
 // grid (n_embd / DOWN_ROWS, groups): a group's expert's down rows of this chunk against each member's h (a warp a
 // member, moe_down_kernel's rows and arithmetic) into the member's partial rows
 template<int TD>
-__global__ void __launch_bounds__(256) moe_win_down_kernel(const __grid_constant__ MoeWin w) {
+__global__ void __launch_bounds__(256) moe_win_down_kernel(const STRATA_GRID_CONSTANT MoeWin w) {
     const int g = blockIdx.y;
     if (g >= *w.n_groups) return;
     constexpr int NR = DOWN_ROWS;
@@ -5577,7 +5936,7 @@ __global__ void __launch_bounds__(256) moe_win_down_kernel(const __grid_constant
 
 // each token's output rows: its entries' partials in plan order, the host's disk answer, the shared expert (moe_down's
 // combine)
-__global__ void moe_win_combine_kernel(const __grid_constant__ MoeWin w) {
+__global__ void moe_win_combine_kernel(const STRATA_GRID_CONSTANT MoeWin w) {
     const int t = blockIdx.y;
     const int r = blockIdx.x * blockDim.x + threadIdx.x;
     if (r >= w.n_embd) return;
