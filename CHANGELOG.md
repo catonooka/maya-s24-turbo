@@ -6,13 +6,14 @@ only what changed and starts; the model is not downloaded again.
 
 ## v1.1.19 - 2026-10-20
 
-DeepSeek-V4.1-Flash reads long prompts faster with the same answers, its prompts follow DeepSeek's own format for
-agents and tools, and a round of community work.
+DeepSeek-V4.1-Flash reads long prompts up to ~1.5x faster with the same answers, its prompts follow DeepSeek's own
+format for agents and tools, and a round of community work.
 
-- **DeepSeek: long prompts skip work the answer does not need.** DeepSeek-V4.1-Flash's layers 20-39 see a prompt's
+- **DeepSeek: long prompts up to ~1.5x faster, same answers.** DeepSeek-V4.1-Flash's layers 20-39 see a prompt's
   earlier tokens only through what layer 20 keeps of them, so they need their full work only on the last ~2,700 tokens
   of a prompt. A long prompt now skips the rest: on one GPU, prompts of ~3,700 new tokens or more are read faster -
-  the longer the prompt, the more it saves - with the same answers. `MAYA_DS4_PROMPT_SKIP=2` goes further, as
+  the longer the prompt, the more it saves (+30% on a 32K prompt on one GPU, +43-54% on 8-16K prompts on a Strix
+  Halo) - with the same answers. `MAYA_DS4_PROMPT_SKIP=2` goes further, as
   DeepSeek's own serving does (the last 128 tokens only; the answers shift a little); `0` turns it off. Learned from
   DeepSeek's DeepInfer.
 - **DeepSeek: prompts in DeepSeek's reference format** (#300 by @Gazelle221B, fixes #299). Conversations are rendered
