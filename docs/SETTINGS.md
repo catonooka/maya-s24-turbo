@@ -7,6 +7,11 @@ The settings below are environment variables named `MAYA_*`: set them before a s
 with `./maya.sh --setup --env MAYA_NAME=value`. Their earlier `STRATA_*` spellings still work; where both are set, the
 `MAYA_` one counts.
 
+Responses API cache, background queue, event/reader limits and owner quotas are
+server settings under `MAYA_GLM_RESPONSES_*`, with defaults and units in
+[Responses settings](RESPONSES.md#settings-and-metrics). They can be set in the same
+config `env` block; response storage and background work remain request opt-ins.
+
 The engine sizes itself: it splits the layers across the GPUs it is given (up to 16; with more than two, each GPU
 takes layers in proportion to its free VRAM), fills each GPU's free VRAM with experts, sizes its RAM tier from the
 free RAM, and measures the CPU against the PCIe link at start to decide how many RAM experts the CPU computes itself.
