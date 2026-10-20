@@ -461,7 +461,7 @@ bool Glm5Model::rows_head(const RowSeq* rw, const strata::kernels::SamplerParams
         if (sps[i].greedy || sps[i].temperature <= 0.0f)
             gf::argmax(lg, g.n_vocab, S->tok + i, s);
         else
-            strata::kernels::sample_tokens(lg, 1, (int) g.n_vocab, nullptr, 0, sps[i], S->tok + i, s);
+            pick_tokens(lg, 1, sps[i], nullptr, 0, S->tok + i, s);
     }
     return true;
 }

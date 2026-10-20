@@ -203,7 +203,12 @@ bool moe_wmma_on(int gu_type, int d_type, int E, int nff) {
     int dev = 0;
     if (cudaGetDevice(&dev) != cudaSuccess) return false;
     if (dev != probed) {
-        ok = strata::kernels::gemm_iq_f16_grouped_supported(dev);
+        // Volta (sm_70) only, as the Qwen pack's path (prefill.cpp's wmma_buffers): Turing and newer run MMQ on the
+        // int8 tensor cores, where the FP16 tiles are not measured
+        int major = 0, minor = 0;
+        cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev);
+        cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, dev);
+        ok = major == 7 && minor == 0 && strata::kernels::gemm_iq_f16_grouped_supported(dev);
         probed = dev;
         if (ok) std::fprintf(stderr, "glm prefill: Volta grouped-WMMA prompt experts on (CUDA%d)\n", dev);
     }
@@ -2730,16 +2735,27 @@ bool Glm5Model::prefill_half(int64_t p0, int T, std::string& err, const int32_t*
         // rounds: 27K prompt 39.7 / 39.9 -> 31.7 / 31.8 s, 8K 623 / 621 -> 764 / 764 tok/s, 2K 549 / 548 -> 581 / 568;
         // KL against MMQ 0.015 (MMQ against itself 0), the target token's log-prob +0.025 (FP16 activations, not q8_1).
         // Default 128 rows on sm_70 (Turing+ run MMQ on int8 tensor cores: 0 there); 0 = MMQ only.
-        static const int blas_rows = [] {
-            if (const char* v = getenv("STRATA_GLM_PREFILL_BLAS")) return std::max(0, std::atoi(v));
+        // (per device: a split over a V100 and a newer card keeps MMQ on the newer one)
+        const int blas_rows = [] {
+            static const int env = [] {
+                const char* v = getenv("STRATA_GLM_PREFILL_BLAS");
+                return v ? std::max(0, std::atoi(v)) : -1;
+            }();
+            if (env >= 0) return env;
 #if defined(STRATA_USE_HIP)
             return 0;   // (MMQ only: the FP16 path is measured on Volta)
 #else
-            int dev = 0, major = 0, minor = 0;
+            static int blas_dev[16] = {};   // rows + 1 per device, 0: not looked at yet
+            int dev = 0;
             cudaGetDevice(&dev);
-            cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev);
-            cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, dev);
-            return major == 7 && minor == 0 ? 128 : 0;
+            if (dev < 0 || dev >= 16) dev = 0;
+            if (blas_dev[dev] == 0) {
+                int major = 0, minor = 0;
+                cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev);
+                cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, dev);
+                blas_dev[dev] = (major == 7 && minor == 0 ? 128 : 0) + 1;
+            }
+            return blas_dev[dev] - 1;
 #endif
         }();
         const bool use_blas = blas_rows > 0 && !Ly.exl3 && mmq::to_f16_supported(Ly.gu_type) &&

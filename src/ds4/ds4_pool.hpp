@@ -142,6 +142,7 @@ public:
         std::atomic<bool>* bad = nullptr;
         const uint8_t* mem = nullptr;   // non-null: a copy of len bytes from memory to dst instead of a read
         const void* map = nullptr;      // the range in the file's mapping: all in the page cache, it is read buffered
+        uint8_t* keep = nullptr;        // non-null (a read): the len bytes read copied here as well
     };
     explicit IoQueue(int n) {
         for (int i = 0; i < n; ++i) th_.emplace_back([this] { loop(); });
@@ -196,6 +197,7 @@ private:
                 ok = true;
                 buffered_.fetch_add(j.len, std::memory_order_relaxed);
             }
+            if (ok && j.keep != nullptr && j.mem == nullptr) std::memcpy(j.keep, j.dst + lead, (size_t) j.len);
             busy_us_.fetch_add((uint64_t) std::chrono::duration_cast<std::chrono::microseconds>(
                                    std::chrono::steady_clock::now() - t0).count(),
                                std::memory_order_relaxed);

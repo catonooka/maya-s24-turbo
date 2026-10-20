@@ -303,6 +303,16 @@ inline void prefetch_cold(const std::vector<std::pair<const void*, size_t>>& ran
 #endif
 }
 
+/// Whether [p, p + n) of a file's mapping is in RAM now: every page (Linux, one mincore), sampled pages of the working
+/// set (Windows; a page on the standby list counts as not in RAM)
+inline bool in_ram(const void* p, size_t n) {
+#if defined(_WIN32)
+    return resident_sampled(p, n, 8);
+#else
+    return resident(p, n);
+#endif
+}
+
 /// Anonymous memory on NUMA node `node` of `nodes` (node < 0 or nodes < 2: wherever the first touch puts it), on huge
 /// pages where the OS gives them; nullptr if it cannot be had.
 inline void* anon_alloc(size_t bytes, int node, int nodes) {

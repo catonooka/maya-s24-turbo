@@ -2070,6 +2070,9 @@ constexpr size_t dsa_tc_smem() {
 __global__ void __launch_bounds__(256) dsa_score_tc_kernel(const float* __restrict__ iq, const float* __restrict__ pooled,
                                                            const float* __restrict__ iw, int p0, int kpool, int T,
                                                            int max_vis, float* __restrict__ score, int score_ld) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
+    // Pascal (sm_6x): no tensor cores - dsa_score takes the FP32 tiled kernel there (major < 7), never this one
+#else
     using namespace nvcuda;
     constexpr int H = 32, K = 128;
     extern __shared__ __align__(32) unsigned char sm_raw[];
@@ -2123,6 +2126,7 @@ __global__ void __launch_bounds__(256) dsa_score_tc_kernel(const float* __restri
             score[(size_t) tok * score_ld + p] = sum;
         }
     }
+#endif
 }
 #endif
 
@@ -2139,9 +2143,22 @@ void dsa_score(const float* iq, const float* pooled, const float* iw, int key_di
     // 826 / 826 -> 495 / 495 ms, prompt 36.9 / 37.0 -> 36.6 / 36.6 s, the needle answered
     static const bool tc = getenv("STRATA_GLM_DSA_SCORE") == nullptr || std::atoi(getenv("STRATA_GLM_DSA_SCORE")) == 2;
     if (tc && idx_heads == 32 && key_dim == 128) {
-        static const bool attr = cudaFuncSetAttribute(dsa_score_tc_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                                      (int) dsa_tc_smem()) == cudaSuccess;
-        if (attr) {
+        // per device (a split's cards each need the shared-memory opt-in; Pascal has no tensor cores): 0 not looked
+        // at yet, 1 the tensor-core kernel, -1 the FP32 tiled one
+        static int tc_dev[16] = {};
+        int dev = 0;
+        cudaGetDevice(&dev);
+        if (dev < 0 || dev >= 16) dev = 0;
+        if (tc_dev[dev] == 0) {
+            int major = 0;
+            cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev);
+            tc_dev[dev] = major >= 7 && cudaFuncSetAttribute(dsa_score_tc_kernel,
+                                                             cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                                             (int) dsa_tc_smem()) == cudaSuccess
+                              ? 1 : -1;
+            cudaGetLastError();
+        }
+        if (tc_dev[dev] > 0) {
             dsa_score_tc_kernel<<<dim3((unsigned) ((max_vis + TS_P - 1) / TS_P), (unsigned) ((T + TS_T - 1) / TS_T)), 256,
                                   dsa_tc_smem(), s>>>(iq, pooled, iw, p0, kpool, T, max_vis, score, score_ld);
             check("dsa_score_tc");

@@ -160,6 +160,9 @@ public:
         int64_t fixed = 0;
     };
     std::vector<PoolVram> pool_vram() const;
+    /// Windows on an APU (AMD's Strix / Gorgon Halo): the bytes of experts the commit (RAM + page file) kept off the
+    /// GPU over every part, and the page file (GiB) that keeps them on it - {0, 0} elsewhere (pool_check)
+    std::pair<size_t, size_t> commit_capped() const;
     /// The CPU LANE (a decode's RAM-tier experts): the share of them copied over PCIe to the GPU instead of computed
     /// on the CPU - 0: the CPU takes every one, 1: none (of f such experts in a route, f - round(share f) go to the
     /// CPU).  pcie_share(): the split in use, as a share; set_pcie_share(s): this split from the next token on, s < 0
@@ -238,6 +241,15 @@ public:
     /// sampler's device (the tail half's): one table per conversation slot (0 .. seq_count()-1), rewritten for each
     /// request that names one.  nullptr for an empty list (and nullptr + err on failure).
     const float* logit_bias_table(int slot, const std::vector<std::pair<int32_t, float>>& bias, std::string& err);
+    /// EVERY pick of the engine's sampler (sample_token, the windows, the several-conversation steps): T rows of
+    /// `logits` (n_vocab each, this part's device) -> out[0..T) on stream s.  A request with penalties (#273) gets each
+    /// row's history: row t counts the last penalty_last_n tokens of *sp.host_history (what the state was fed, the
+    /// window's first token last) followed by win[1 .. n0 + t] - the drafts before that row's position (win: the
+    /// window's tokens, nullptr for a lone pick; n0: the drafts before row 0, a pipelined window's token).  So a draft
+    /// stands only where it is the penalized pick: drafting counts exactly the history plain decode counts.  Without
+    /// penalties it is exactly the sample_tokens call the sites made before.
+    void pick_tokens(const float* logits, int T, const strata::kernels::SamplerParams& sp, const int32_t* win, int n0,
+                     int* out, cudaStream_t s);
     /// Zeroes R, every KDA state and every DSA cache: the next `forward` starts a fresh sequence.
     void reset();
 
@@ -508,6 +520,18 @@ public:
     int last_tok_ = -1;                                    // the greedy argmax of the last fast forward
     const strata::kernels::SamplerParams* mtp_sample_ = nullptr;   // decode_spec, STRATA_GLM_SPEC_SAMPLE: fast_mtp DRAWS
     int32_t force_tok_ = -1;                               // force_next()
+    // pick_tokens' penalty rows (this part's, allocated with the first request that has penalties): a ring of
+    // kPenRows rows of pen_w_ tokens, pinned + device, each row's event recorded behind the pick that read it (the
+    // picks of several conversations, a pipelined window's tokens, can be in flight at once)
+    static constexpr int kPenCap = 4096;                   // the penalty window at most (penalty_last_n beyond it: 4096)
+    static constexpr int kPenRows = 64;
+    int32_t* pen_h_ = nullptr;
+    int32_t* pen_d_ = nullptr;
+    int pen_w_ = 0, pen_next_ = 0;
+    cudaEvent_t pen_ev_[kPenRows] = {};
+    std::mutex pen_mu_;                                    // (a pipelined window picks from its last part's thread)
+    bool pen_alloc(int w, std::string& err);
+    void pen_free();
     std::map<std::string, const uint16_t*> w16_;           // the pack's big BF16 rows, kept BF16 (fast mode)
     bool fast_setup(std::string& err);
     bool fast_setup_finish(std::string& err);
@@ -893,6 +917,7 @@ public:
     PoolBudget part_budget(size_t free_b, size_t total_b, size_t floor_b, size_t slot_b) const;   // ... less pool_short_
     void pool_check(size_t floor_b, size_t slot_b, size_t all_b);   // auto: the budget written once, free VRAM read again
     size_t pool_short_ = 0;                                // what that check found short of the reserve
+    size_t commit_kept_ = 0, commit_limit_ = 0, commit_ram_ = 0;   // (a Windows APU: what the commit kept off, as read)
     PoolBudget pool_b_;                                    // the budget the pool was carved from
     bool lend_tail(size_t limit, uint64_t& moved, uint64_t& dropped, std::string& err);
     bool vis_lend_ok_ = false;                             // this half's tail can go to the vision encoder

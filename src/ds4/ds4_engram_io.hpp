@@ -88,7 +88,8 @@ private:
 };
 
 /// One row to fetch: its codes to dst, its scales to scales.  mx8: n bytes at off of a file, [scale, 32 codes] blocks
-/// (a GGUF's MXFP8 row); else n code bytes at off and n2 scale bytes at off2 of file2 (two reads).
+/// (a GGUF's MXFP8 row); else n code bytes at off and n2 scale bytes at off2 of file2 (two reads; n2 0: none - a
+/// GGUF's Q6_K row, its scales inside its n bytes).
 struct EgRead {
     int file = -1;
     uint64_t off = 0;
@@ -202,6 +203,7 @@ private:
         if (f == os::kBadFd) return false;
         if (!r.mx8) {
             if (!os::pread_full(f, r.dst, r.n, r.off)) return false;
+            if (r.n2 == 0) return true;
             const os::fd_t f2 = fd(r.file2);
             return f2 != os::kBadFd && os::pread_full(f2, r.scales, r.n2, r.off2);
         }

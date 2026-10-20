@@ -1,7 +1,8 @@
 """tools/test_ds4_vision_pack.py - DeepSeek's vision tower for a GGUF install (tools/ds4/vision_pack.py, pack_gguf.py):
 the picture markers read with range requests only (a server that sends the whole file is cut off, tried once more, then
-a clear error), vision.bin equal to the checkpoint bit for bit, and the pack's entries pointing at exactly those bytes.
-Small made-up files and a local HTTP server: no GPU, no internet.
+a clear error), vision.bin equal to the checkpoint bit for bit, and the pack's entries pointing at exactly those bytes;
+and which Engram set pack_gguf takes for a quant without the tables.  Small made-up files and a local HTTP server: no
+GPU, no internet.
 
     python -m unittest tools.test_ds4_vision_pack -v
 """
@@ -202,6 +203,82 @@ class Pack(unittest.TestCase):
             with open(os.path.join(str(q), files[fi]), "rb") as f:
                 f.seek(off)
                 self.assertEqual(f.read(nb), b, name)
+
+
+class EngramSet(unittest.TestCase):
+    """pack_gguf's Engram set for a quant without the tables (v1.1.16's Maya-S): unsloth's MXFP8 shard in Engram/ beside
+    it, passed over while it is not whole (its download still running); --engram: that folder (any type of the
+    tables), whole, or a clear error."""
+
+    def setUp(self):
+        import pack_gguf
+        self.pg = pack_gguf
+        self.base = pathlib.Path(tempfile.mkdtemp())
+        self.model = self.base / "Maya-S"
+        self.model.mkdir()
+
+    def table(self, folder: str, typ: int, cut: int = 0) -> pathlib.Path:
+        """<base>/<folder>/t.gguf: one Engram table blk.1.engram_embd of two rows of 256 values in ggml type typ,
+        its last `cut` bytes missing."""
+        def s(x: str) -> bytes:
+            b = x.encode()
+            return struct.pack("<Q", len(b)) + b
+        _, per, bpb = self.pg.TYPES[typ]
+        kv = [s("general.architecture") + struct.pack("<I", 8) + s("deepseek41")]
+        info = s("blk.1.engram_embd.weight") + struct.pack("<I", 2) + struct.pack("<2Q", 256, 2) + struct.pack("<IQ", typ, 0)
+        head = b"GGUF" + struct.pack("<IQQ", 3, 1, len(kv)) + b"".join(kv) + info
+        head += b"\0" * ((-len(head)) % 32)
+        d = self.base / folder
+        d.mkdir(exist_ok=True)
+        body = head + bytes(2 * 256 // per * bpb)
+        (d / "t.gguf").write_bytes(body[:len(body) - cut])
+        return d
+
+    def test_whole(self):
+        old = self.table("Engram", 43, cut=100)        # (downloading)
+        self.assertEqual(self.pg.engram_set(self.model, None), (None, []))
+        self.table("Engram", 43)
+        d, egs = self.pg.engram_set(self.model, None)
+        self.assertEqual((d, egs[0].tensors[0][1]), (old, 43))
+        self.assertIsNone(self.pg.short(egs[0]))
+
+    def test_explicit(self):
+        old = self.table("Engram", 67)
+        q6 = self.table("Engram-Q6_K", 14)
+        d, egs = self.pg.engram_set(self.model, str(q6))
+        self.assertEqual((d, egs[0].tensors[0][1]), (q6, 14))
+        self.assertEqual(self.pg.engram_set(self.model, str(old))[0], old)
+        self.table("Engram", 67, cut=1)
+        with self.assertRaises(SystemExit) as e:
+            self.pg.engram_set(self.model, str(old))
+        self.assertIn("not whole", str(e.exception))
+        with self.assertRaises(SystemExit):
+            self.pg.engram_set(self.model, str(self.base / "nowhere"))
+
+    def test_none(self):
+        self.assertEqual(self.pg.engram_set(self.model, None), (None, []))
+        (self.base / "Engram").mkdir()
+        (self.base / "Engram" / "t.gguf").write_bytes(b"GGU")   # (a header cut short: not whole, passed over)
+        self.assertEqual(self.pg.engram_set(self.model, None), (None, []))
+
+
+class Shards(unittest.TestCase):
+    def test_a_folder_with_an_earlier_layout_too(self):
+        """A folder that holds two layouts of a model (an earlier one beside the one in use): a clear error, and
+        --shards names the files to pack."""
+        q = pathlib.Path(tempfile.mkdtemp()) / "Q"
+        q.mkdir()
+        gguf(q / "m-00001-of-00001.gguf")
+        gguf(q / "m-00001-of-00002.gguf")
+        cmd = [sys.executable, str(HERE / "ds4" / "pack_gguf.py"), "--model", str(q)]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("more than one GGUF split (-of-00001, -of-00002)", r.stderr)
+        r = subprocess.run(cmd + ["--shards", "m-00001-of-00001.gguf"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        files = [line.split()[2] for line in (q / "maya-ds4" / "tensors.txt").read_text().splitlines()
+                 if line.startswith("file ")]
+        self.assertEqual(files, ["m-00001-of-00001.gguf"])
 
 
 def gguf(path: pathlib.Path):

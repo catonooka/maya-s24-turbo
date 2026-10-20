@@ -520,6 +520,23 @@ class SamplingKeys(unittest.TestCase):
         self.assertIn("penalty_last_n=4096", self.keys(repetition_penalty=1.1, penalty_last_n=4096))
         self.assertFalse([k for k in self.keys(temperature=0.7) if k.startswith("penalty")])
 
+    def test_penalties_greedy(self):
+        # #273: a greedy request keeps its penalties (they used to be dropped with every other sampler key there)
+        k = self.keys(temperature=0, repetition_penalty=1.3, penalty_last_n=128, frequency_penalty=0.5)
+        self.assertEqual(k[0], "temperature=0")
+        for want in ("penalty_repeat=1.3", "penalty_freq=0.5", "penalty_last_n=128"):
+            self.assertIn(want, k)
+        self.assertIn("penalty_last_n=64", self.keys(temperature=0, presence_penalty=0.4))
+        # neutral penalties, or none: the greedy line is the one it always was
+        plain = StrataEngine.sampling_keys({"temperature": 0, "top_p": 0.9})
+        self.assertEqual(plain, " temperature=0")
+        for neutral in ({"repetition_penalty": 1.0}, {"frequency_penalty": 0, "presence_penalty": 0.0},
+                        {"penalty_last_n": 64}):
+            self.assertEqual(StrataEngine.sampling_keys({"temperature": 0, "top_p": 0.9, **neutral}), plain, neutral)
+        # a sampled request's line is unchanged by the move
+        self.assertEqual(StrataEngine.sampling_keys({"temperature": 0.7, "repetition_penalty": 1.1, "seed": 5}),
+                         " temperature=0.7 penalty_repeat=1.1 penalty_last_n=64 seed=5")
+
     def test_logit_bias_key(self):
         self.assertIn("logit_bias=7:-100,42:2.5", self.keys(temperature=0.7, logit_bias={42: 2.5, 7: -100.0}))
         self.assertIn("logit_bias=3:1", self.keys(temperature=0, logit_bias={3: 1.0}))     # greedy keeps it too
@@ -1409,7 +1426,7 @@ class UsageAndStatus(unittest.TestCase):
             self.engine.multi = 0
         self.assertFalse(s["vision"]["available"])
         self.assertIsNone(s["memory_note"])
-        old_info = getattr(self.engine, "info", None)   # (DeepSeek on a Windows APU: the page file kept experts off)
+        old_info = getattr(self.engine, "info", None)   # (a Windows APU: the page file kept experts off)
         self.engine.info = {**(old_info or {}), "gpu_commit_capped_gb": 12, "pagefile_hint_gb": 190}
         try:
             self.assertIn("a page file of 190 GB", self.svc.v1_status()["memory_note"])
@@ -1690,6 +1707,21 @@ class IdleUnload(unittest.TestCase):
         svc = Service(MockEngine(self.tok, "ok", max_context=CTX), self.tok,
                       ChatTemplate(ROOT / "serve/chat_template.jinja"))
         self.assertEqual(svc.unload(), "unsupported")
+
+    def test_parallel_requests_start_the_engine_once(self):
+        self.assertEqual(self.svc.unload(), "unloaded")
+        slow = self.engine.restart
+
+        def restart():                                              # a start takes a while
+            time.sleep(0.3)
+            slow()
+        self.engine.restart = restart
+        ts = [threading.Thread(target=self.svc.ensure_engine) for _ in range(3)]   # --parallel: a place each
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual((self.engine.restarts, self.engine.running, self.svc.unloaded), (1, True, False))
 
 
 if __name__ == "__main__":

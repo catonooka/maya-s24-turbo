@@ -22,18 +22,14 @@ The first setup downloads about 96.5 GB of weights and verifies the SHA-256
 hash of each shard. `--gguf-dir DIR` uses existing files instead. GPU numbers
 are the kernel KFD topology order shown by `--check`; on the test machine the
 7900 XT is GPU 0, an R9700 is GPU 1, and the integrated GPU is GPU 2. This
-installer accepts `gfx1100`, `gfx1201` and `gfx1151` and compiles one binary for
-`gfx1100;gfx1201;gfx1151`.
+installer accepts `gfx1100`, `gfx1201` and `gfx1151` and compiles the binary for the
+architectures of the chosen cards only (`gfx1100;gfx1201` for that 7900 XT + R9700).
 
 RDNA 2 (`gfx1030`: RX 6800 / 6800 XT / 6900 XT / 6950 XT, Radeon PRO V620 / W6800) is accepted too, as experimental:
-Validated on a Radeon PRO V620 (30 GB, gfx1030), Threadripper PRO 3975WX, 208 GB RAM,
-Maya-L (156.3 GB) fully resident (VRAM + 129.5 GB pinned RAM, zero disk reads): decode 13.0 tok/s, prefill 216-224
-tokens/s (`maya.py --bench`, context 131072). ROCm 7 no longer ships rocWMMA, and the RDNA 2 build does not need it:
-the installer compiles only the detected archs (this PR).
-
-These cards have no matrix cores (WMMA), so the engine uses
-its portable kernels there (the prompt attention on the F32 kernel), and the binary also gets `gfx1030` only when such
-a card is chosen. The ROCm installation needs its library kernels (hipBLAS) for `gfx1030`.
+it has been run on a Radeon PRO V620 with ROCm 7 - please report how it goes on other RDNA 2 cards in an issue. These
+cards have no matrix cores (WMMA), so the engine uses its portable kernels there (the prompt attention on the F32
+kernel), and a build for RDNA 2 cards alone needs no rocWMMA headers (ROCm 7 no longer ships them). The ROCm
+installation needs its library kernels (hipBLAS) for `gfx1030`.
 
 Configs are named `maya-<quant>-hip.json` and
 select the AMD device through `HIP_VISIBLE_DEVICES`.
@@ -237,9 +233,9 @@ and GPU memory together are at least 96 GiB (4096 MiB otherwise).
 file - although it does not count the carve-out as RAM: on the PC below, the free commit fell by each of the engine's
 GPU allocations, whatever their size. So the page file must be at least about the GPU's share. With less, either the
 experts that do not fit the commit stay off the GPU (slower answers), or other programs run out of memory while the
-model runs. DeepSeek's engine keeps max(8 GB, 10% of the RAM) of the commit free for the other programs and says how
-many GB of experts that left off the GPU, and the page file that keeps them on it, in its log, the dashboard's
-Monitor and `/v1/status`. `--check` and the setup ask for the GPU's share plus max(8 GB, 10% of the RAM) - the RAM
+model runs. Both engines (GLM-5.3-Flash's and DeepSeek's) keep their GPU experts within what Windows can still
+commit, less max(8 GB, 10% of the RAM) for the other programs, and say how many GB of experts that left off the GPU,
+and the page file that keeps them on it, in their log, the dashboard's Monitor and `/v1/status`. `--check` and the setup ask for the GPU's share plus max(8 GB, 10% of the RAM) - the RAM
 holds Windows and the other programs - and warn when the page file is smaller: set a custom size (initial and maximum,
 in MB) of at least that under System > About > Advanced system settings > Performance > Settings > Advanced > Virtual
 memory > Change, then restart Windows. It is a reserve more than a file in use: the PC below ran with 160 GB of page

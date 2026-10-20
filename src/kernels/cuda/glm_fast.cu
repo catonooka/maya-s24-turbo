@@ -4557,6 +4557,22 @@ static bool exl3_jobs(const MvJob* jobs, int n, int nt, bool* done, cudaStream_t
     return nx == 0 || exl3::mv(xj, nx, s);
 }
 
+// A job without the activations its weight type reads - F32 / BF16 the floats (xf), the quantized types the q8_1
+// (xq), EXL3 either - is refused: its kernel would read from address 0 (issue #173: a BF16 DFlash2 drafter's GEMVs
+// carried no xf, and its first draft faulted the device for good)
+static bool mv_inputs_ok(const MvJob* jobs, int n, const char* who) {
+    for (int i = 0; i < n; ++i) {
+        const MvJob& j = jobs[i];
+        const bool fl = j.type == kTypeF32 || j.type == kTypeBF16;
+        if (j.type == exl3::kTypeEXL3 ? j.xf != nullptr || j.xq != nullptr : fl ? j.xf != nullptr : j.xq != nullptr)
+            continue;
+        std::fprintf(stderr, "glm_fast %s: a type %d job without its %s activations\n", who, j.type,
+                     fl ? "float" : "q8_1");
+        return false;
+    }
+    return true;
+}
+
 bool mv(const MvJob* jobs, int n, cudaStream_t s) {
     if (n <= 0 || n > kMaxMvJobs) return false;
     for (int i = 0; i < n; ++i)
@@ -4569,6 +4585,7 @@ bool mv(const MvJob* jobs, int n, cudaStream_t s) {
             std::fprintf(stderr, "glm_fast mv: type %d unsupported\n", jobs[i].type);
             return false;
         }
+    if (!mv_inputs_ok(jobs, n, "mv")) return false;
     // the jobs of the common dense types go to a kernel compiled for their type (one launch per type present), the
     // rest to the generic one; the jobs are independent, so their order does not matter
     static const bool typed = getenv("STRATA_GLM_MV_GENERIC") == nullptr;
@@ -4804,6 +4821,7 @@ bool mv_nt(const MvJob* jobs, int n, int nt, cudaStream_t s) {
             std::fprintf(stderr, "glm_fast mv_nt: type %d / %d columns unsupported\n", jobs[i].type, jobs[i].ncol);
             return false;
         }
+    if (!mv_inputs_ok(jobs, n, "mv_nt")) return false;
     static const bool typed = getenv("STRATA_GLM_MV_GENERIC") == nullptr;
     bool done[kMaxMvJobs] = {};
     if (!exl3_jobs(jobs, n, nt, done, s)) return false;   // (EXL3: one EXL3 job an activation)

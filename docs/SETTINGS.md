@@ -57,7 +57,7 @@ These settings change what the engine chooses (put them in the config with `--en
 | `MAYA_GLM_PREFILL_TAIL_SKIP` | on | single-device prompts without a loaded NextN/MTP block: skip the last layer's attention output projection and FFN after updating all its caches; `0` restores the full computation. Splits and `GLM_CB_DIR` seam dumps keep the full path |
 | `MAYA_GLM_PREFILL_WINDOW` | the chunk's tokens | prompts: the expert output rows kept on the GPU at once - each expert set's rows are added into the layer's output as the window fills, instead of every routed row waiting for one combine (~40 KB a token instead of ~185, so a chunk holds ~2x the tokens); `0` = every row (the old layout) |
 | `MAYA_GLM_PREFILL_FUSED` | on for gfx1151 only | HIP with MMQ built: fused int8 WMMA gate/up, clipped SwiGLU and down for GLM routed experts (4096/2048 geometry and covered IQ types). `0` retains MMQ and its scratch layout. Strix Halo measured +13.2/+7.5/+4.8% prompt speed at 4K/8K/16K on the v1.0.16-based prototype; with the wmma2 attention on a Radeon 8065S (Windows, Maya-S), 3K / 8K-token prompts 233 / 253 -> 271 / 278 tokens/s. Other AMD architectures retain MMQ. |
-| `MAYA_PF_WMMA` | off | NVIDIA, Volta (sm_70) and newer: the prompt path's routed-expert GEMMs run as a grouped WMMA kernel - weights dequantized to FP16 in shared memory, FP16 tensor-core tiles with FP32 accumulators - instead of MMQ's dp4a on the CUDA cores; decode is unchanged. The launcher checks each shape and falls back to MMQ whole-path from the first one it cannot run, so a device or format outside the covered set (the native packs' IQ3_XXS / IQ3_S / IQ2_S gate-up and IQ4_NL / Q2_0 down products, K a whole 256 values) costs nothing. Maya-M on 2x Tesla V100-32GB: prompt 2.6K tokens 8.18 -> 7.30 s (+11.6%), 7.8K 12.63 -> 11.90 s (+5.8%), 20K 26.14 -> 24.3 s (+7%); decode unchanged (~50 ms/token either way). The outputs differ from MMQ's within FP16 weight rounding and FP32 accumulation order (checked against a double reference over the same FP16 weights by the `pf_wmma_parity` test, max error <= 2e-5 of the matrix's max magnitude) |
+| `MAYA_PF_WMMA` | off | NVIDIA Volta (sm_70; other cards keep MMQ): the prompt path's routed-expert GEMMs run as a grouped WMMA kernel - weights dequantized to FP16 in shared memory, FP16 tensor-core tiles with FP32 accumulators - instead of MMQ's dp4a on the CUDA cores; decode is unchanged. The launcher checks each shape and falls back to MMQ whole-path from the first one it cannot run, so a device or format outside the covered set (the native packs' IQ3_XXS / IQ3_S / IQ2_S gate-up and IQ4_NL / Q2_0 down products, K a whole 256 values) costs nothing. Maya-M on 2x Tesla V100-32GB: prompt 2.6K tokens 8.18 -> 7.30 s (+11.6%), 7.8K 12.63 -> 11.90 s (+5.8%), 20K 26.14 -> 24.3 s (+7%); decode unchanged (~50 ms/token either way). The outputs differ from MMQ's within FP16 weight rounding and FP32 accumulation order (checked against a double reference over the same FP16 weights by the `pf_wmma_parity` test, max error <= 2e-5 of the matrix's max magnitude) |
 | `MAYA_GLM_USAGE` | off | a file to keep your expert usage in between starts (written after every request; the warm-up then loads your experts ahead of the expert profile's). Off, a start goes by the expert profile alone (below); a pack's old `expert_usage.txt` is no longer read unless this names it |
 | `MAYA_GLM_SLOTS` | 4 | conversations kept aside on the SSD, so switching back to one doesn't re-read its prompt; `0` = off |
 | `MAYA_GLM_CKPTS`, `MAYA_GLM_CKPT_EVERY` | 4, 16384 | checkpoints of the conversation in the model at earlier positions than the one the next turn continues from, in RAM (~150 MB each for GLM-5.3-Flash): at the end of the system prompt (the first user turn), at the start of the prompt's last turn, and every `_EVERY` freshly read prompt tokens (`0` = none of these), where at least 512 fresh tokens lie before. A prompt that leaves the conversation earlier - an edited or replaced last message, another chat with the same system prompt and tools, a client that rewrote an older turn - restores the longest checkpoint it starts with and reads only the rest, where it read everything from token 0 (`glm checkpoints` in the engine log). At most `MAYA_GLM_CKPTS` (up to 16; `0` = off), the least recently used replaced; one conversation at a time (not with `--parallel`), text prompts only |
@@ -220,6 +220,21 @@ tokens are the same after every restart and with any RAM tier (identical for 26 
 different, equally valid tokens, and so does another build or driver. Measured on one PC; DFlash2, MTP, several GPUs, Linux
 and AMD were not tried.
 
+## Repetition penalties
+
+A request's `repeat_penalty` (or `repetition_penalty`), `frequency_penalty` and `presence_penalty` work as in
+llama.cpp, over the last `repeat_last_n` (or `penalty_last_n`) tokens - 64 when the request names no window, at most
+4096 - counted over the prompt's end and then what the answer has written so far. A token among them has its logit
+divided by the repeat penalty (multiplied when the logit is negative), lowered by `frequency_penalty` for each time it
+occurs there and by `presence_penalty` once. A run config's `sampling` block can set them for every request.
+
+GLM applies them on every decode path: greedy requests too (`temperature` 0 picks the best token after the
+penalties; the loop guard only catches a stretch repeated word for word, a penalty also pushes back on an answer that
+keeps rewording itself), with drafting (MTP, DFlash2: each pick of a verify window counts the tokens before it, the
+drafts among them, so a draft is kept only where it is the penalized pick - drafting does not change what is
+penalized) and with several requests at once. A repeat penalty of 1 and frequency and presence penalties of 0 are off:
+such a request decodes exactly as one without them.
+
 ## Several requests at once
 
 `--parallel N` (1-8, default 1). `./maya.sh --parallel 4` (Windows:
@@ -313,3 +328,20 @@ tokens are written. The sustained speed - all those tokens over all the time spe
 stays only when it is more than 5% faster. It takes 5-20 minutes and shows each step as it goes. The result is kept in
 the config (`installer.speed_calibration`); `./maya.sh --speed-calibration` measures again (new GPUs, more RAM), and
 `--draft dflash2 --no-speed-calibration` keeps DFlash2 without measuring.
+
+## DeepSeek: skipping light experts the SSD would read (experimental)
+
+When DeepSeek-V4.1-Flash's experts do not fit in VRAM and RAM, a token waits for the SSD to read the experts it was
+routed to. `MAYA_DS4_DISK_SKIP_W` lets a token go without a routed expert that weighs little in its route **and** is
+not in RAM at that moment; experts already in VRAM or RAM are always computed. **It changes the answers**, is off by
+default and is experimental. It applies while answering (and to a draft's check), never while reading the prompt.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `MAYA_DS4_DISK_SKIP_W` | off (0) | leave out a routed expert below this share of its token's route weights when its pages are not in RAM (the page cache or the RAM tier; on Windows: sampled pages of the engine's working set). The weight it carried is lost. `0.10` changes the answers less, `0.14` leaves out more |
+| `MAYA_DS4_DISK_SKIP_FROM` | 0 | the first layer it applies to |
+
+It helps where answering waits on the SSD - a PC whose RAM holds only part of the experts, most on a first answer
+about a topic - and does nothing where the experts sit in VRAM and RAM. Where the RAM cannot hold the experts a
+conversation uses, it keeps skipping on later answers too. The engine's decode summary (`decode left out ...`) and
+the `skipped=` key of its STAT lines show how many experts a token went without.

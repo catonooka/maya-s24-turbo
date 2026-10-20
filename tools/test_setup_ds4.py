@@ -72,6 +72,97 @@ class Manifest(unittest.TestCase):
         self.assertTrue(u.endswith("/model-00047-of-00048.safetensors"))
 
 
+class Quant35(unittest.TestCase):
+    """LibertAIDAI's 3.5-bit quant: its own pinned manifest, the Engram tables linked from the 2.9-bit folder rather
+    than downloaded again."""
+
+    def test_every_file_pinned(self):
+        m = maya.ds4_model("exl3-3.5")
+        for n in ["config.json", "model.safetensors.index.json", "tokenizer.json"] + \
+                 [f"model-{i:05d}-of-00044.safetensors" for i in range(1, 45)] + \
+                 ["model-00047-of-00048.safetensors", "model-00048-of-00048.safetensors"]:
+            self.assertIn(n, m["files"])
+        for n, size in m["files"].items():
+            self.assertNotIn("/", n)
+            self.assertGreater(size, 0)
+            self.assertRegex(m["sha256"][n], r"^[0-9a-f]{64}$")
+        self.assertAlmostEqual(m["download_gb"], 460.7, delta=0.5)
+        self.assertIn("3.5 bits", m["about"])
+        rev = re.compile(r"/resolve/[0-9a-f]{40}/")
+        u = maya.file_url(m, "model-00001-of-00044.safetensors")
+        self.assertTrue(u.startswith("https://huggingface.co/LibertAIDAI/DeepSeek-V4.1-Flash-1017-EXL3-3.5bpw/"))
+        self.assertRegex(u, rev)
+        u = maya.file_url(m, "model-00048-of-00048.safetensors")
+        self.assertTrue(u.startswith("https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017/"))
+        e29 = maya.ds4_model("exl3")   # (the same Engram tables as the 2.9-bit quant's, pinned alike)
+        for n in m["sources"]:
+            self.assertEqual((m["files"][n], m["sha256"][n], m["sources"][n]),
+                             (e29["files"][n], e29["sha256"][n], e29["sources"][n]))
+
+    def test_offered_only_where_exl3_runs(self):
+        """--ds4-quant exl3-3.5, or the menu's row - only on NVIDIA compute capability 8.0+ (not AMD, not a PC whose
+        GPUs are all older)."""
+        self.assertIn("exl3-3.5", maya.DS4_QUANTS)
+        def offered(gpus, backend="cuda"):
+            rows = []
+            def pick(title, intro, opts, default, yes, *x):
+                rows.extend(o[0] for o in opts)
+                return default
+            with patch.object(maya.S, "gpus", return_value=gpus), patch.object(maya, "choose", pick), \
+                    patch.object(maya.S, "UI", None):
+                maya.choose_ds4_quant(args(backend=backend), {})
+            return [r for r in rows if r.startswith("EXL3")]
+        self.assertEqual(len(offered([{"arch": 86}, {"arch": 70}])), 2)
+        self.assertEqual(offered([{"arch": 70}, {"arch": 70}]), [])            # (Volta: the GGUFs only)
+        self.assertEqual(offered([], backend="hip"), [])
+        self.assertRegex(offered([{"arch": 89}])[1], r"^EXL3 3\.5 bits \(461 GB\)$")
+        self.assertEqual(maya.choose_ds4_quant(args(ds4_quant="exl3-3.5"), {}), "exl3-3.5")
+
+    def test_own_folder_and_config(self):
+        models = Path("/models")
+        self.assertEqual(maya.ds4_dir(args(), models, {}, "exl3-3.5"), models / "DeepSeek-V4.1-Flash-1017-3.5bpw")
+        self.assertEqual(maya.ds4_dir(args(), models, {}, "exl3"), models / "DeepSeek-V4.1-Flash-1017")
+        d = Path(tempfile.mkdtemp())
+        quiet = [patch.object(maya, "ROOT", d), patch.object(maya, "say", lambda *a: None),
+                 patch.object(maya, "ok", lambda *a: None), patch.object(maya, "step", lambda *a: None)]
+        for q in quiet:
+            q.start()
+        try:
+            p = maya.write_config_ds4(args(), {"gpus": [{"index": 0}]}, {}, d / "maya-ds4", 65536, models, d, "exl3-3.5")
+        finally:
+            for q in quiet:
+                q.stop()
+        c = json.loads(p.read_text())
+        self.assertEqual(c["installer"]["ds4_quant"], "exl3-3.5")
+        self.assertNotIn("--vision", c["args"])                # (its own vision tower, as the 2.9-bit quant's)
+
+    def test_engram_linked(self):
+        tmp = Path(tempfile.mkdtemp())
+        man = json.loads(maya.DS4_EXL3["exl3-3.5"]["manifest"].read_text(encoding="utf-8"))
+        for i, k in enumerate(sorted(man["engram"]["files"])):
+            man["engram"]["files"][k][0] = 3 + i               # (tiny stand-ins for the 101 GB tables)
+        p = tmp / "download-3.5bpw.json"
+        p.write_text(json.dumps(man), encoding="utf-8")
+        models = tmp / "models"
+        with patch.dict(maya.DS4_EXL3, {"exl3-3.5": dict(maya.DS4_EXL3["exl3-3.5"], manifest=p)}):
+            m = maya.ds4_model("exl3-3.5")
+            have = models / maya.DS4
+            have.mkdir(parents=True)
+            book = {}
+            for n in m["sources"]:
+                (have / n).write_bytes(b"x" * m["files"][n])
+                st = (have / n).stat()
+                book[n] = {"size": st.st_size, "mtime_ns": st.st_mtime_ns}
+            (have / maya.VERIFIED).write_text(json.dumps(book))
+            d = models / maya.DS4_35
+            with patch.object(maya, "ok", lambda *x: None), patch.object(maya, "configs", return_value=[]):
+                maya.ds4_link_engram(d, m, models, {})
+            for n in m["sources"]:
+                self.assertTrue(Path.samefile(d / n, have / n))   # (a hard link, not a copy)
+                self.assertIsNone(maya.file_incomplete(m, d / n))
+            self.assertEqual(json.loads((d / maya.VERIFIED).read_text()), book)
+
+
 class Config(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
@@ -147,6 +238,51 @@ class Gguf(unittest.TestCase):
             self.assertRegex(u, rev)
             self.assertIn("/%s/" % maya.DS4_QUANTS[q], u)
 
+    def test_earlier_layout_pinned(self):
+        """unsloth's layout before its 2026-10-19 re-shard: 10 shards at dc788bdb, each with its size and sha256."""
+        for q, gb in (("gguf-q8", 508.4), ("gguf-q4", 500.7)):
+            m = maya.ds4_gguf_model(q)
+            (e,) = m["earlier"]
+            self.assertEqual(e["revision"], "dc788bdb683b0af7a6e5315a7d98e9d082faf5e5")
+            self.assertEqual(sorted(e["files"]), ["DeepSeek-V4.1-Flash-1017-%s-%05d-of-00010.gguf" %
+                                                  (maya.DS4_QUANTS[q], i) for i in range(1, 11)])
+            self.assertTrue(all(re.match(r"^[0-9a-f]{64}$", s) for s in e["sha256"].values()))
+            self.assertAlmostEqual(e["download_gb"], gb, delta=0.5)
+            self.assertEqual((e["folder"], e["engram"]), (maya.DS4_QUANTS[q], []))
+
+    def test_earlier_layout_used_when_whole(self):
+        """A folder that holds unsloth's earlier layout whole is used as it is (nothing downloaded again); not whole,
+        or the current layout whole: the current one."""
+        man = json.loads(maya.DS4_GGUF_MANIFEST.read_text(encoding="utf-8"))
+        q8 = man["quants"]["UD-Q8_K_XL"]
+        for files in [q8["files"]] + [e["files"] for e in q8["earlier"]]:
+            for i, k in enumerate(sorted(files)):
+                files[k][0] = i + 1
+        tmp = Path(tempfile.mkdtemp())
+        p = tmp / "download_gguf.json"
+        p.write_text(json.dumps(man), encoding="utf-8")
+        d = tmp / "UD-Q8_K_XL"
+        d.mkdir()
+        with patch.object(maya, "DS4_GGUF_MANIFEST", p):
+            m = maya.ds4_gguf_model("gguf-q8")
+            self.assertIsNone(maya.ds4_earlier(m, d))  # (nothing there: the current layout is downloaded)
+            old = sorted(m["earlier"][0]["files"])
+            for i, n in enumerate(old):
+                (d / n).write_bytes(b"x" * (i + 1))
+            e = maya.ds4_earlier(m, d)
+            self.assertEqual((sorted(e["files"]), e["revision"], e["engram"], e["layout"]),
+                             (old, "dc788bdb683b0af7a6e5315a7d98e9d082faf5e5", None, "earlier"))
+            (d / old[-1]).write_bytes(b"x")            # (one cut short)
+            self.assertIsNone(maya.ds4_earlier(m, d))
+            (d / old[-1]).write_bytes(b"x" * len(old))
+            for i, n in enumerate(sorted(m["files"])):   # (the current layout too, whole: that one)
+                (d / n).write_bytes(b"x" * (i + 1))
+            self.assertIsNone(maya.ds4_earlier(m, d))
+            warned = []
+            with patch.object(maya, "warn", warned.append):
+                maya.ds4_unused(m, d)
+            self.assertIn("10 files of an earlier layout of the model, not used", warned[0])
+
     def test_gguf_config_with_the_vision_tower(self):
         pc = {"gpus": [{"index": 0}]}
         d = Path(tempfile.mkdtemp())
@@ -165,7 +301,8 @@ class Gguf(unittest.TestCase):
                 q.stop()
 
     def test_choice_and_folder(self):
-        with patch.object(maya, "say", lambda *a: None), patch.object(maya.S, "UI", None):
+        with patch.object(maya, "say", lambda *a: None), patch.object(maya.S, "UI", None), \
+                patch.object(maya.S, "gpus", return_value=[{"arch": 86}]):   # (EXL3 offered: an RTX 30)
             self.assertEqual(maya.choose_ds4_quant(args(ds4_quant="gguf-q4"), {}), "gguf-q4")
             self.assertEqual(maya.choose_ds4_quant(args(ds4_quant=None), {"installer": {"ds4_quant": "exl3"}}), "exl3")
             self.assertEqual(maya.choose_ds4_quant(args(ds4_quant=None), {}), "maya-s")   # (published: the default)
@@ -293,8 +430,8 @@ class Vision(unittest.TestCase):
 
 class MayaQuants(unittest.TestCase):
     """Maya's quants of DeepSeek: offered once download_gguf.json lists their files, downloaded into
-    <...-GGUF>/Maya-S, their Engram tables from unsloth's Engram-only shard into <...-GGUF>/Engram (hard-linked
-    from an unsloth folder that already holds them)."""
+    <...-GGUF>/Maya-S, their Engram tables Maya's own in Q6_K from the same repo into <...-GGUF>/Engram-Q6_K - or
+    unsloth's MXFP8 shard of them in <...-GGUF>/Engram, kept while it is whole (a setup before v1.1.17 put it there)."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -317,11 +454,11 @@ class MayaQuants(unittest.TestCase):
 
     def test_pinned_maya_s(self):
         m = maya.ds4_gguf_model("maya-s")
-        self.assertEqual((m["folder"], len(m["files"])), ("Maya-S", 4))
+        self.assertEqual((m["folder"], len(m["files"])), ("Maya-S", 6))
         self.assertRegex(m["revision"], r"^[0-9a-f]{40}$")
-        self.assertAlmostEqual(m["download_gb"], 178.19, delta=0.01)
+        self.assertAlmostEqual(m["download_gb"], 339.48, delta=0.01)
         for n in m["files"]:
-            self.assertRegex(n, r"^DeepSeek-V4\.1-Flash-1017-Maya-S-IQ2_XXS-0000[1-4]-of-00004\.gguf$")
+            self.assertRegex(n, r"^DeepSeek-V4\.1-Flash-1017-Maya-S-IQ2_XXS-0000[1-6]-of-00006\.gguf$")
             self.assertRegex(m["sha256"][n], r"^[0-9a-f]{64}$")
         self.assertFalse(maya.ds4_maya_published("maya-m"))
         d = maya.ds4_maya_drafter_model()
@@ -375,39 +512,129 @@ class MayaQuants(unittest.TestCase):
                 self.assertTrue(maya.ds4_drafter_step(args(), d))
             self.assertEqual(dl.call_count, 1)
 
-    def test_engram_model(self):
-        m = maya.ds4_engram_model()
-        self.assertEqual(sorted(m["files"]), ["DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00008-of-00009.gguf"])
-        self.assertAlmostEqual(m["download_gb"], 202.8, delta=0.1)
-        u = maya.file_url(m, sorted(m["files"])[0])
-        self.assertRegex(u, r"^https://huggingface.co/unsloth/DeepSeek-V4.1-Flash-1017-GGUF/resolve/[0-9a-f]{40}/"
-                            r"UD-Q8_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00008-of-00009\.gguf$")
+    def test_maya_s_one_split(self):
+        """Maya-S is one GGUF split of 6 shards with its Engram tables (Q6_K, shards 5 and 6), from Maya's repo."""
+        m = maya.ds4_gguf_model("maya-s")
+        self.assertEqual(sorted(m["files"]), ["DeepSeek-V4.1-Flash-1017-Maya-S-IQ2_XXS-%05d-of-00006.gguf" % i
+                                              for i in range(1, 7)])
+        self.assertAlmostEqual(m["download_gb"], 339.5, delta=0.1)
+        self.assertEqual(m["repo"], "peasantsmith/DeepSeek-V4.1-Flash-1017-Maya-GGUF")
+        man = json.loads(maya.DS4_GGUF_MANIFEST.read_text(encoding="utf-8"))
+        self.assertNotIn("engram", man["maya"])        # (nothing apart: the tables are in the quant's own shards)
 
-    def test_engram_linked_from_an_unsloth_folder(self):
-        import hashlib
+    def test_v1116_layout_pinned(self):
+        """v1.1.16's Maya-S (4 shards at 26c6aea) and unsloth's MXFP8 Engram shard beside it, in either of its
+        layouts, are the earlier layout the setup keeps."""
+        (e,) = maya.ds4_gguf_model("maya-s")["earlier"]
+        self.assertEqual(e["revision"], "26c6aeaf5ecce88fe47103f780279bcc6f1f0d9b")
+        self.assertEqual(sorted(e["files"]), ["DeepSeek-V4.1-Flash-1017-Maya-S-IQ2_XXS-%05d-of-00004.gguf" % i
+                                              for i in range(1, 5)])
+        self.assertAlmostEqual(e["download_gb"], 178.19, delta=0.01)
+        self.assertEqual([sorted(s["files"]) for s in e["engram"]],
+                         [["DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00008-of-00009.gguf"],
+                          ["DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00008-of-00010.gguf",
+                           "DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00009-of-00010.gguf"]])
+        self.assertEqual([round(s["download_gb"], 1) for s in e["engram"]], [202.8, 202.8])
+
+    def tiny(self):
+        """download_gguf.json with tiny files (a file's size: its place in its list + 1)."""
+        man = json.loads(maya.DS4_GGUF_MANIFEST.read_text(encoding="utf-8"))
+        q = man["maya"]["quants"]["Maya-S"]
+        e = q["earlier"][0]
+        for files in [q["files"], e["files"]] + e["engram"]:
+            for i, k in enumerate(sorted(files)):
+                files[k][0] = i + 1
+        p = self.tmp / "download_gguf_tiny.json"
+        p.write_text(json.dumps(man), encoding="utf-8")
+        self.base = self.tmp / "DeepSeek-V4.1-Flash-1017-GGUF"
+        self.d = self.base / "Maya-S"
+        self.d.mkdir(parents=True)
+        return patch.object(maya, "DS4_GGUF_MANIFEST", p)
+
+    def put(self, d: Path, names):
+        d.mkdir(parents=True, exist_ok=True)
+        for i, n in enumerate(sorted(names)):
+            (d / n).write_bytes(b"x" * (i + 1))
+
+    def test_v1116_install_kept(self):
+        """v1.1.16's Maya-S with its Engram shard whole: used as it is, nothing downloaded again - whichever layout of
+        unsloth's shard it has."""
+        with self.tiny():
+            m = maya.ds4_gguf_model("maya-s")
+            e = m["earlier"][0]
+            self.put(self.d, e["files"])
+            self.assertIsNone(maya.ds4_earlier(m, self.d))   # (no Engram tables beside it: the 6-shard set)
+            for s in e["engram"]:
+                eg = self.base / "Engram"
+                if eg.exists():
+                    for f in eg.iterdir():
+                        f.unlink()
+                self.put(eg, s["files"])
+                old = maya.ds4_earlier(m, self.d)
+                self.assertEqual((sorted(old["files"]), old["engram"], old["revision"]),
+                                 (sorted(e["files"]), eg, "26c6aeaf5ecce88fe47103f780279bcc6f1f0d9b"))
+            first = sorted(e["engram"][1]["files"])[0]
+            (eg / first).write_bytes(b"")              # (the Engram shard cut short: the 6-shard set)
+            self.assertIsNone(maya.ds4_earlier(m, self.d))
+            (eg / first).write_bytes(b"x")
+            self.put(self.d, m["files"])               # (the 6-shard set whole too: that one)
+            self.assertIsNone(maya.ds4_earlier(m, self.d))
+            warned = []
+            with patch.object(maya, "warn", warned.append):
+                maya.ds4_unused(m, self.d)             # (the earlier files: the user's to delete)
+            self.assertEqual(len(warned), 2)
+            self.assertTrue(warned[0].startswith("%s: 4 files of an earlier layout" % self.d))
+            self.assertTrue(warned[1].startswith("%s: 2 files of an earlier layout" % eg))
+
+    def test_v1116_install_kept_by_the_setup(self):
+        """set_up_ds4 with v1.1.16's Maya-S whole: no download, the pack indexes its 4 shards and Engram/ (--shards,
+        --engram)."""
+        with self.tiny():
+            m = maya.ds4_gguf_model("maya-s")
+            e = m["earlier"][0]
+            self.put(self.d, e["files"])
+            self.put(self.base / "Engram", e["engram"][0]["files"])
+            packs = []
+            with patch.object(maya, "check_pc", return_value={"gpus": [{"index": 0}]}), \
+                    patch.object(maya, "choose_context", return_value=65536), \
+                    patch.object(maya, "tools_step", return_value=None), patch.object(maya, "build_step", return_value={}), \
+                    patch.object(maya, "offer_download", side_effect=AssertionError("asked to download")), \
+                    patch.object(maya, "ds4_drafter_step", return_value=False), \
+                    patch.object(maya, "ds4_vision_step", return_value=False), \
+                    patch.object(maya, "ds4_pack_step", lambda *a, **k: packs.append((a, k)) or self.d / "maya-ds4"), \
+                    patch.object(maya, "write_config_ds4", return_value=self.tmp / "maya-ds4.json"), \
+                    patch.object(maya.CDS, "has_drafter", return_value=False):
+                maya.set_up_ds4(args(ds4_quant="maya-s", model_dir=str(self.d), models_dir=str(self.tmp)), {})
+            (a, k), = packs
+            self.assertEqual(sorted(f.name for f in k["files"]), sorted(e["files"]))
+            self.assertEqual(k["engram"], self.base / "Engram")
+
+    def test_pack_follows_the_engram_folder(self):
+        """The pack indexes the files and the Engram folder the setup picked (--shards, --engram), and is built again
+        when they change (v1.1.16's 4 shards + Engram/ -> the 6-shard set)."""
+        old = ["m-00001-of-00002.gguf", "m-00002-of-00002.gguf"]
+        new = ["m-00001-of-00001.gguf"]
         base = self.tmp / "DeepSeek-V4.1-Flash-1017-GGUF"
-        (base / "UD-Q4_K_XL").mkdir(parents=True)
-        names = ["DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00008-of-00010.gguf",
-                 "DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00009-of-00010.gguf"]
-        body = {n: n.encode() * 3 for n in names}
-        for n in names:                                # (UD-Q4_K_XL's names, the same bytes)
-            (base / "UD-Q4_K_XL" / n.replace("UD-Q8_K_XL", "UD-Q4_K_XL")).write_bytes(body[n])
-        m = {"about": "x", "format": "ds4-engram", "repo": "r", "revision": "v", "folder": "UD-Q8_K_XL",
-             "files": {n: len(body[n]) for n in names},
-             "sha256": {n: hashlib.sha256(body[n]).hexdigest() for n in names}, "download_gb": 0.0}
-        with patch.object(maya, "ds4_engram_model", return_value=m), \
-                patch.object(maya, "offer_download", side_effect=AssertionError("asked")):
-            self.assertTrue(maya.ds4_engram_step(args(), base / "Engram"))
-        for n in names:
-            self.assertTrue(Path.samefile(base / "Engram" / n, base / "UD-Q4_K_XL" / n.replace("UD-Q8_K_XL", "UD-Q4_K_XL")))
-
-    def test_engram_downloaded_when_nowhere(self):
-        m = {"about": "x", "format": "ds4-engram", "repo": "r", "revision": "v", "folder": "UD-Q8_K_XL",
-             "files": {"e-00008.gguf": 4}, "sha256": {"e-00008.gguf": "0" * 64}, "download_gb": 0.0}
-        with patch.object(maya, "ds4_engram_model", return_value=m), \
-                patch.object(maya, "offer_download", return_value=False) as dl:
-            self.assertFalse(maya.ds4_engram_step(args(), self.tmp / "Engram"))
-        self.assertEqual(dl.call_count, 1)
+        d = base / "Maya-S"
+        for n in old + new:
+            self.put(d, [n])
+        self.put(base / "Engram", ["u-00008-of-00009.gguf"])
+        pack = d / "maya-ds4"
+        (pack / "tokenizer").mkdir(parents=True)
+        for f in ("ds4.txt", "tensors.txt", "engram.bin", "tokenizer/vocab.json", "tokenizer/chat_template.jinja"):
+            (pack / f).write_text("hidden_size 4096\n")
+        maya.stamp_pack(pack, [d / n for n in old] + sorted((base / "Engram").glob("*.gguf")))
+        rec = json.loads((pack / maya.PACK_SOURCES).read_text())
+        rec["tools"] = maya.S.source_hash(maya.DS4_GGUF_PACK_TOOLS)
+        (pack / maya.PACK_SOURCES).write_text(json.dumps(rec))
+        calls = []
+        with patch.object(maya, "run", lambda cmd, **k: calls.append(cmd)):
+            maya.ds4_pack_step(args(repack=False), d, gguf=True, engram=base / "Engram", files=[d / n for n in old])
+            self.assertEqual(calls, [])                # (built with these files)
+            maya.ds4_pack_step(args(repack=False), d, gguf=True, files=[d / n for n in new])
+        self.assertEqual(len(calls), 1)                # (built again: the 6-shard set now)
+        self.assertNotIn("--engram", calls[0])
+        self.assertEqual(calls[0][calls[0].index("--shards") + 1:], new)
 
 
 class Rename(unittest.TestCase):

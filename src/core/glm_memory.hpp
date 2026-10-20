@@ -83,6 +83,29 @@ inline int complete_pool_slots(size_t avail, size_t stride_sum, int experts, int
     return stride_sum > 0 && experts > 0 && avail / stride_sum >= per ? (int) per : 0;
 }
 
+// Windows' commit on an APU: Windows charges every allocation of an integrated GPU to its commit (RAM + page file),
+// though it does not count the carve-out as RAM (DeepSeek's engine measured it on a Radeon 8065S: src/ds4/ds4_model.cu,
+// commit_room).  The other programs keep max(8 GiB, 10% of the RAM) of it, as there.
+inline size_t commit_margin(size_t ram_total) {
+    return std::max(size_t{8} << 30, ram_total / 10);
+}
+// The expert pool's budget within what Windows can still commit (commit_avail) beside that margin - never below its
+// floor (a route's experts and the spares in every layer: the least a decode runs with), nor above `budget`.  `all`:
+// the most the pool can ever take (0: no such bound).  {the budget, the bytes of experts that keeps off the GPU}
+inline std::pair<size_t, size_t> commit_pool_cap(size_t budget, size_t floor, size_t all, size_t commit_avail,
+                                                 size_t ram_total) {
+    const size_t margin = commit_margin(ram_total);
+    const size_t room = commit_avail > margin ? commit_avail - margin : 0;
+    const size_t cap = std::min(budget, std::max(room, floor));
+    const size_t top = all > 0 ? all : budget;
+    return {cap, std::min(budget, top) - std::min(cap, top)};
+}
+// The page file (GiB, rounded up) that holds `kept` bytes more: today's - the commit limit less the RAM - and those
+inline size_t pagefile_hint_gib(size_t commit_limit, size_t ram_total, size_t kept) {
+    const size_t pf = commit_limit > ram_total ? commit_limit - ram_total : 0;
+    return (pf + kept + (size_t{1} << 30) - 1) >> 30;
+}
+
 // The slots the warm-up fills: every expert where a unified pool holds them all, else all but the spares - and never
 // more than there are experts (a complete pool has more slots than experts: the warm-up's order lists each once)
 inline int warm_pool_slots(bool unified, int slots, int experts, int spares) {

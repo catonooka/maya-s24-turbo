@@ -44,7 +44,55 @@
      "df33722d1dcf5ffe0347ed8406f7acb3b18061f4ded2c13c2b0a184b8d41c9ea"
     ]
    },
-   "bytes": 508376763197
+   "bytes": 508376763197,
+   "earlier": [
+    {
+     "_": "unsloth's layout before it re-sharded the GGUFs on 2026-10-19 (10 shards, the Engram tables in 00008 and 00009): used as it is when the folder holds it whole - nothing downloaded again",
+     "revision": "dc788bdb683b0af7a6e5315a7d98e9d082faf5e5",
+     "files": {
+      "UD-Q8_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00001-of-00010.gguf": [
+       5781234,
+       "e88691700c4778890cfa845bc21242cf101faa014c8a44d1315402e3f64e701a"
+      ],
+      "UD-Q8_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00002-of-00010.gguf": [
+       48129640000,
+       "8b9e24ae7322af960c6cceb3cc79623ac79c173fba860da2b10fe5de04e763e2"
+      ],
+      "UD-Q8_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00003-of-00010.gguf": [
+       48129640000,
+       "9b5047e0f84d64f673d638a6d85282bae16b53f39cf12559c4b8605b127baeca"
+      ],
+      "UD-Q8_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00004-of-00010.gguf": [
+       48129640000,
+       "83a630d0dd9f2dc6e1d1223b265e78523a51ba6483ab70e3ae3f188978df2491"
+      ],
+      "UD-Q8_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00005-of-00010.gguf": [
+       48129640000,
+       "90ecd6d773dd0eab5ce1a7bdff626617f8b59360ae53a2cd5d763bde0088b2e8"
+      ],
+      "UD-Q8_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00006-of-00010.gguf": [
+       48129640000,
+       "e688bfa9a31f00ac33ac7cd739fbc0a903ae0d1601e85c485c23147c57a282fd"
+      ],
+      "UD-Q8_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00007-of-00010.gguf": [
+       48129640000,
+       "daf02b75c0ad3562c8ccc505fcd94ce08584f967f485b9e9e3ebdbfcafcaf286"
+      ],
+      "UD-Q8_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00008-of-00010.gguf": [
+       101377628544,
+       "b9a5d8344f60c87bf8e8b2f56f89074e22c3a148342455129fd2a6f65bc6a612"
+      ],
+      "UD-Q8_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00009-of-00010.gguf": [
+       101380404256,
+       "0dc8cda974060d492b147a0e3fa074a892bddb0c8b8d6322dc2367c6c6a72fbf"
+      ],
+      "UD-Q8_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00010-of-00010.gguf": [
+       16835109952,
+       "93749d36aa1d2a73dba2bbaf903cc366e694769bc16c216ec2e0dff846e74cac"
+      ]
+     }
+    }
+   ]
   },
   "UD-Q4_K_XL": {
    "files": {
@@ -85,37 +133,132 @@
      "c21ad6105a780bc2f44eb7dd41f9b1a1efb4e8ec87618f60b733bc2652bd2ffe"
     ]
    },
-   "bytes": 500707576573
+   "bytes": 500707576573,
+   "earlier": [
+    {
+     "_": "unsloth's layout before it re-sharded the GGUFs on 2026-10-19 (10 shards, the Engram tables in 00008 and 00009): used as it is when the folder holds it whole - nothing downloaded again",
+     "revision": "dc788bdb683b0af7a6e5315a7d98e9d082faf5e5",
+     "files": {
+      "UD-Q4_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q4_K_XL-00001-of-00010.gguf": [
+       5781234,
+       "e88691700c4778890cfa845bc21242cf101faa014c8a44d1315402e3f64e701a"
+      ],
+      "UD-Q4_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q4_K_XL-00002-of-00010.gguf": [
+       48129640000,
+       "8b9e24ae7322af960c6cceb3cc79623ac79c173fba860da2b10fe5de04e763e2"
+      ],
+      "UD-Q4_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q4_K_XL-00003-of-00010.gguf": [
+       48129640000,
+       "9b5047e0f84d64f673d638a6d85282bae16b53f39cf12559c4b8605b127baeca"
+      ],
+      "UD-Q4_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q4_K_XL-00004-of-00010.gguf": [
+       48129640000,
+       "83a630d0dd9f2dc6e1d1223b265e78523a51ba6483ab70e3ae3f188978df2491"
+      ],
+      "UD-Q4_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q4_K_XL-00005-of-00010.gguf": [
+       48129640000,
+       "90ecd6d773dd0eab5ce1a7bdff626617f8b59360ae53a2cd5d763bde0088b2e8"
+      ],
+      "UD-Q4_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q4_K_XL-00006-of-00010.gguf": [
+       48129640000,
+       "e688bfa9a31f00ac33ac7cd739fbc0a903ae0d1601e85c485c23147c57a282fd"
+      ],
+      "UD-Q4_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q4_K_XL-00007-of-00010.gguf": [
+       48129640000,
+       "daf02b75c0ad3562c8ccc505fcd94ce08584f967f485b9e9e3ebdbfcafcaf286"
+      ],
+      "UD-Q4_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q4_K_XL-00008-of-00010.gguf": [
+       101377628544,
+       "b9a5d8344f60c87bf8e8b2f56f89074e22c3a148342455129fd2a6f65bc6a612"
+      ],
+      "UD-Q4_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q4_K_XL-00009-of-00010.gguf": [
+       101380404256,
+       "0dc8cda974060d492b147a0e3fa074a892bddb0c8b8d6322dc2367c6c6a72fbf"
+      ],
+      "UD-Q4_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q4_K_XL-00010-of-00010.gguf": [
+       9165923392,
+       "82a3958d47e2c220f49d7235256a54c3a93a08f9c1bbf90c7a0c552a64c90d9a"
+      ]
+     }
+    }
+   ]
   }
  },
  "maya": {
-  "_": "Maya's quants of DeepSeek-V4.1-Flash-1017 (tools/maya_quant: per-expert statistics from the model itself, error-feedback rounding of the experts, calibrated toward tool calls, coding and front-end code): every tensor but the two Engram tables, which come from unsloth's two Engram-only shards (\"engram\": their names in UD-Q8_K_XL above; UD-Q4_K_XL's are the same bytes) into <...-GGUF>/Engram. The files are listed here once they are uploaded, with the commit they were uploaded at.",
+  "_": "Maya's quants of DeepSeek-V4.1-Flash-1017 (tools/maya_quant: per-expert statistics from the model itself, error-feedback rounding of the experts), each one GGUF split with everything in it - the Engram tables too, in Q6_K (made from DeepSeek's released weights). The files are listed here once they are uploaded, with the commit they were uploaded at.",
   "repo": "peasantsmith/DeepSeek-V4.1-Flash-1017-Maya-GGUF",
-  "revision": "26c6aeaf5ecce88fe47103f780279bcc6f1f0d9b",
-  "engram": [
-   "UD-Q8_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00008-of-00009.gguf"
-  ],
+  "revision": "276e0badcfb4a6d8f6c2b9d4da1b468cd339c221",
   "quants": {
    "Maya-S": {
-    "about": "experts IQ2_XXS / IQ3_XXS, the first and last four layers IQ2_S / IQ3_S, dense weights Q8_0",
+    "about": "experts IQ2_XXS / IQ3_XXS, the first and last four layers IQ2_S / IQ3_S, dense weights Q8_0, the Engram tables Q6_K",
     "files": {
-     "Maya-S/DeepSeek-V4.1-Flash-1017-Maya-S-IQ2_XXS-00001-of-00004.gguf": [
-      47887697280,
-      "b33d91333b463414fd91fbeb14a0939e3064a1abd820fa06310992da611eeb2e"
+     "Maya-S/DeepSeek-V4.1-Flash-1017-Maya-S-IQ2_XXS-00001-of-00006.gguf": [
+      47887697312,
+      "1f3437f57042e69f94c141ffbcba0d5610dab63feb07244fb468be4940d6763f"
      ],
-     "Maya-S/DeepSeek-V4.1-Flash-1017-Maya-S-IQ2_XXS-00002-of-00004.gguf": [
+     "Maya-S/DeepSeek-V4.1-Flash-1017-Maya-S-IQ2_XXS-00002-of-00006.gguf": [
       47669578400,
-      "8198c1a5b9e2f964affacc1141627e2f0715711571c1fe04cb81702f232c5c39"
+      "66501fee8702ffd54e6f065323ab54bb3150d20b10b01922c589e7462c7b5ba6"
      ],
-     "Maya-S/DeepSeek-V4.1-Flash-1017-Maya-S-IQ2_XXS-00003-of-00004.gguf": [
+     "Maya-S/DeepSeek-V4.1-Flash-1017-Maya-S-IQ2_XXS-00003-of-00006.gguf": [
       47103347360,
-      "96b9b5e22ed60825794c377301cf2671a7a2ec463c7580b57e101f222c8ee516"
+      "3195b23f33337c46a07c48583946d99147c3635412bc4adc6acdc4cf42bf30ad"
      ],
-     "Maya-S/DeepSeek-V4.1-Flash-1017-Maya-S-IQ2_XXS-00004-of-00004.gguf": [
+     "Maya-S/DeepSeek-V4.1-Flash-1017-Maya-S-IQ2_XXS-00004-of-00006.gguf": [
       35532532032,
-      "506dd95a2ea4f17c933534d730ec72b2ef1b82eec4847770f4f23c38344f96ca"
+      "d60dba35fac9601cd5c6026439dd980c457a5bb1c009192ea539b220108ea0db"
+     ],
+     "Maya-S/DeepSeek-V4.1-Flash-1017-Maya-S-IQ2_XXS-00005-of-00006.gguf": [
+      80641295472,
+      "c98d46f96a25d17c4c54da5a60782c130255c364a22e621ea28d5c98a692ceb2"
+     ],
+     "Maya-S/DeepSeek-V4.1-Flash-1017-Maya-S-IQ2_XXS-00006-of-00006.gguf": [
+      80643503412,
+      "98d65ef4f36e0b193935d44c3586241ca09b1b47e90f118e85332cfdb5860263"
      ]
-    }
+    },
+    "earlier": [
+     {
+      "_": "v1.1.16's Maya-S: 4 shards without the Engram tables, which came from unsloth's MXFP8 shard of them beside it in <...-GGUF>/Engram (\"engram\": either of its layouts) - used as they are when both are whole, nothing downloaded again",
+      "revision": "26c6aeaf5ecce88fe47103f780279bcc6f1f0d9b",
+      "files": {
+       "Maya-S/DeepSeek-V4.1-Flash-1017-Maya-S-IQ2_XXS-00001-of-00004.gguf": [
+        47887697280,
+        "b33d91333b463414fd91fbeb14a0939e3064a1abd820fa06310992da611eeb2e"
+       ],
+       "Maya-S/DeepSeek-V4.1-Flash-1017-Maya-S-IQ2_XXS-00002-of-00004.gguf": [
+        47669578400,
+        "8198c1a5b9e2f964affacc1141627e2f0715711571c1fe04cb81702f232c5c39"
+       ],
+       "Maya-S/DeepSeek-V4.1-Flash-1017-Maya-S-IQ2_XXS-00003-of-00004.gguf": [
+        47103347360,
+        "96b9b5e22ed60825794c377301cf2671a7a2ec463c7580b57e101f222c8ee516"
+       ],
+       "Maya-S/DeepSeek-V4.1-Flash-1017-Maya-S-IQ2_XXS-00004-of-00004.gguf": [
+        35532532032,
+        "506dd95a2ea4f17c933534d730ec72b2ef1b82eec4847770f4f23c38344f96ca"
+       ]
+      },
+      "engram": [
+       {
+        "UD-Q8_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00008-of-00009.gguf": [
+         202758032592,
+         "12df293355efbd104b088a77e13ee22410fb1ec3f7ab3863947f09896e64bec7"
+        ]
+       },
+       {
+        "UD-Q8_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00008-of-00010.gguf": [
+         101377628544,
+         "b9a5d8344f60c87bf8e8b2f56f89074e22c3a148342455129fd2a6f65bc6a612"
+        ],
+        "UD-Q8_K_XL/DeepSeek-V4.1-Flash-1017-UD-Q8_K_XL-00009-of-00010.gguf": [
+         101380404256,
+         "0dc8cda974060d492b147a0e3fa074a892bddb0c8b8d6322dc2367c6c6a72fbf"
+        ]
+       }
+      ]
+     }
+    ]
    },
    "Maya-M": {
     "about": "experts IQ3_S, dense weights Q8_0",

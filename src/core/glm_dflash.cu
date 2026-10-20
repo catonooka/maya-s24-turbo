@@ -1087,6 +1087,13 @@ void GlmDflash::reset(int64_t from) {
     cudaSetDevice(cur);
 }
 
+// The float rows a GEMV of these weights reads besides the q8_1 ones: F32 / BF16 weights read the floats (gf::MvJob's
+// xf), the quantized types only the q8_1 (xf stays nullptr there).  The drafter's GEMVs gave none, so a BF16 drafter
+// (the published GLM-5.3-Flash-DFlash2-bf16.gguf) read from address 0 at its first draft (issue #173).
+static const float* xf_for(int type, const float* x) {
+    return type == gf::kTypeF32 || type == gf::kTypeBF16 ? x : nullptr;
+}
+
 // mv over `cols` columns in pieces of kMaxMvCols
 static bool mv_cols(gf::MvJob j, int cols, size_t xq_s, size_t xf_s, size_t y_s, cudaStream_t s) {
     for (int c0 = 0; c0 < cols; c0 += gf::kMaxMvCols) {
@@ -1094,7 +1101,7 @@ static bool mv_cols(gf::MvJob j, int cols, size_t xq_s, size_t xf_s, size_t y_s,
         jj.approx = true;   // the drafter's ring: float rounding may differ (tensor-core GEMVs)
         jj.ncol = std::min(gf::kMaxMvCols, cols - c0);
         jj.xq_cstride = (int64_t) xq_s;
-        jj.xf_cstride = (int64_t) xf_s;
+        jj.xf_cstride = j.xf ? (int64_t) xf_s : 0;
         jj.y_cstride = (int64_t) y_s;
         if (jj.xq) jj.xq = (const uint8_t*) j.xq + (size_t) c0 * xq_s;
         if (jj.xf) jj.xf = j.xf + (size_t) c0 * xf_s;
@@ -1165,7 +1172,8 @@ bool GlmDflash::inject(int64_t lo, int64_t hi, cudaStream_t s, std::string& err)
         // (the positions first: a draft's attention of a layer reads them once that layer's rows are in)
         kv_pos_kernel<<<(n + 127) / 128, 128, 0, s>>>(p0, n, m.ring, m.kv_pos);
         gf::quantize_q8_1(m.feat, m.fq, n * KE, s);
-        if (!mv_cols({m.fc.w, m.fq, nullptr, m.g, nullptr, 1.0f, m.fc.type, KE, m.E}, n, m.q8(KE), 0, m.E, s)) {
+        if (!mv_cols({m.fc.w, m.fq, xf_for(m.fc.type, m.feat), m.g, nullptr, 1.0f, m.fc.type, KE, m.E}, n, m.q8(KE),
+                     KE, m.E, s)) {
             err = "glm dflash: fc";
             return false;
         }
@@ -1173,8 +1181,10 @@ bool GlmDflash::inject(int64_t lo, int64_t hi, cudaStream_t s, std::string& err)
         gf::quantize_q8_1(m.gn, m.gq, n * m.E, s);
         for (int il = 0; il < m.n_layer; ++il) {
             const auto& Ly = m.L[(size_t) il];
-            if (!mv_cols({Ly.k.w, m.gq, nullptr, m.kc, nullptr, 1.0f, Ly.k.type, m.E, kvd}, n, m.q8(m.E), 0, kvd, s) ||
-                !mv_cols({Ly.v.w, m.gq, nullptr, m.vc, nullptr, 1.0f, Ly.v.type, m.E, kvd}, n, m.q8(m.E), 0, kvd, s)) {
+            if (!mv_cols({Ly.k.w, m.gq, xf_for(Ly.k.type, m.gn), m.kc, nullptr, 1.0f, Ly.k.type, m.E, kvd}, n,
+                         m.q8(m.E), m.E, kvd, s) ||
+                !mv_cols({Ly.v.w, m.gq, xf_for(Ly.v.type, m.gn), m.vc, nullptr, 1.0f, Ly.v.type, m.E, kvd}, n,
+                         m.q8(m.E), m.E, kvd, s)) {
                 err = "glm dflash: context K / V";
                 return false;
             }
@@ -1217,14 +1227,16 @@ bool GlmDflash::draft_start(int32_t anchor, int64_t n_past, int n_max, float p_m
     for (int t = 1; t < B; ++t) std::memcpy(m.emb_h + (size_t) t * E, m.mask_row.data(), (size_t) E * sizeof(float));
     cudaMemcpyAsync(m.h, m.emb_h, (size_t) B * E * sizeof(float), cudaMemcpyHostToDevice, s);
     cudaEventRecord(m.emb_ev, s);
-    const auto job = [](const Impl::Mat& w, const void* xq, float* y) {
-        gf::MvJob j{w.w, xq, nullptr, y, nullptr, 1.0f, w.type, w.n_in, w.n_out};
+    // (x: the float rows xq was quantized from, w.n_in apart - what F32 / BF16 weights read: xf_for)
+    const auto job = [](const Impl::Mat& w, const void* xq, const float* x, float* y) {
+        gf::MvJob j{w.w, xq, xf_for(w.type, x), y, nullptr, 1.0f, w.type, w.n_in, w.n_out};
         j.approx = true;   // drafts are proposals: float rounding may differ (tensor-core GEMVs)
         return j;
     };
     const auto cols = [&](gf::MvJob j, int n, size_t xs, size_t ys) {
         j.ncol = n;
         j.xq_cstride = (int64_t) xs;
+        if (j.xf) j.xf_cstride = j.n_in;
         j.y_cstride = (int64_t) ys;
         return j;
     };
@@ -1259,13 +1271,14 @@ bool GlmDflash::draft_start(int32_t anchor, int64_t n_past, int n_max, float p_m
         rms_rows_kernel<<<B, 256, 0, s>>>(m.h, E, Ly.attn_norm, m.eps, E, m.x, E);
         if (il == 0) dump("h0", m.h, (size_t) B * E, s), dump("x0", m.x, (size_t) B * E, s);
         gf::quantize_q8_1(m.x, m.xq, B * E, s);
-        gf::MvJob jc = cols(job(Ly.attn_conv, m.xq, m.cbuf), B, m.q8(E), cd);
+        gf::MvJob jc = cols(job(Ly.attn_conv, m.xq, m.x, m.cbuf), B, m.q8(E), cd);
         if (!gf::mv(&jc, 1, s)) { err = "glm dflash: attn conv proj"; return false; }
         conv_kernel<<<B, 256, 0, s>>>(m.x, m.cbuf, cd, Ly.attn_base, 0, E, m.taps, m.group, m.xc);
         if (il == 0) dump("c0", m.cbuf, (size_t) B * cd, s), dump("xc0", m.xc, (size_t) B * E, s);
         gf::quantize_q8_1(m.xc, m.xq, B * E, s);
-        gf::MvJob j3[3] = {cols(job(Ly.q, m.xq, m.q), B, m.q8(E), qd), cols(job(Ly.k, m.xq, m.kb), B, m.q8(E), kvd),
-                           cols(job(Ly.v, m.xq, m.vb), B, m.q8(E), kvd)};
+        gf::MvJob j3[3] = {cols(job(Ly.q, m.xq, m.xc, m.q), B, m.q8(E), qd),
+                           cols(job(Ly.k, m.xq, m.xc, m.kb), B, m.q8(E), kvd),
+                           cols(job(Ly.v, m.xq, m.xc, m.vb), B, m.q8(E), kvd)};
         if (!gf::mv(j3, 3, s)) { err = "glm dflash: q / k / v"; return false; }
         head_norm_rope_kernel<<<dim3(m.n_head, B), kHeadDim / 2, 0, s>>>(m.q, m.n_head, Ly.q_norm, m.eps, n_past,
                                                                           m.rope_base);
@@ -1286,7 +1299,7 @@ bool GlmDflash::draft_start(int32_t anchor, int64_t n_past, int n_max, float p_m
         }
         if (il == 0) dump("a0", m.a, (size_t) B * qd, s);
         gf::quantize_q8_1(m.a, m.aq, B * qd, s);
-        gf::MvJob jo = cols(job(Ly.o, m.aq, m.o), B, m.q8(qd), E);
+        gf::MvJob jo = cols(job(Ly.o, m.aq, m.a, m.o), B, m.q8(qd), E);
         if (!gf::mv(&jo, 1, s)) { err = "glm dflash: attn output"; return false; }
         conv_kernel<<<B, 256, 0, s>>>(m.o, m.cbuf, cd, Ly.attn_base, 1, E, m.taps, m.group, m.xc);
         if (il == 0) dump("o0", m.o, (size_t) B * E, s), dump("oc0", m.xc, (size_t) B * E, s);
@@ -1294,16 +1307,16 @@ bool GlmDflash::draft_start(int32_t anchor, int64_t n_past, int n_max, float p_m
         // feed-forward
         rms_rows_kernel<<<B, 256, 0, s>>>(m.h, E, Ly.ffn_norm, m.eps, E, m.x, E);
         gf::quantize_q8_1(m.x, m.xq, B * E, s);
-        gf::MvJob jf = cols(job(Ly.ffn_conv, m.xq, m.cbuf), B, m.q8(E), cd);
+        gf::MvJob jf = cols(job(Ly.ffn_conv, m.xq, m.x, m.cbuf), B, m.q8(E), cd);
         if (!gf::mv(&jf, 1, s)) { err = "glm dflash: ffn conv proj"; return false; }
         conv_kernel<<<B, 256, 0, s>>>(m.x, m.cbuf, cd, Ly.ffn_base, 0, E, m.taps, m.group, m.xc);
         gf::quantize_q8_1(m.xc, m.xq, B * E, s);
-        gf::MvJob j2[2] = {cols(job(Ly.gate, m.xq, m.gt), B, m.q8(E), m.n_ff),
-                           cols(job(Ly.up, m.xq, m.up), B, m.q8(E), m.n_ff)};
+        gf::MvJob j2[2] = {cols(job(Ly.gate, m.xq, m.xc, m.gt), B, m.q8(E), m.n_ff),
+                           cols(job(Ly.up, m.xq, m.xc, m.up), B, m.q8(E), m.n_ff)};
         if (!gf::mv(j2, 2, s)) { err = "glm dflash: ffn gate / up"; return false; }
         silu_mul_kernel<<<(B * m.n_ff + 255) / 256, 256, 0, s>>>(m.gt, m.up, B * m.n_ff, m.act);
         gf::quantize_q8_1(m.act, m.actq, B * m.n_ff, s);
-        gf::MvJob jd = cols(job(Ly.down, m.actq, m.o), B, m.q8(m.n_ff), E);
+        gf::MvJob jd = cols(job(Ly.down, m.actq, m.act, m.o), B, m.q8(m.n_ff), E);
         if (!gf::mv(&jd, 1, s)) { err = "glm dflash: ffn down"; return false; }
         conv_kernel<<<B, 256, 0, s>>>(m.o, m.cbuf, cd, Ly.ffn_base, 1, E, m.taps, m.group, m.xc);
         add_kernel<<<(B * E + 255) / 256, 256, 0, s>>>(m.h, m.xc, B * E);
@@ -1381,7 +1394,7 @@ bool GlmDflash::draft_start(int32_t anchor, int64_t n_past, int n_max, float p_m
     const bool head_ok = gf::mv(&jh, 1, s) && hi_ok;
     if (timed) cudaEventRecord(m.head_ev[1], s);
     m.head_timed = timed;
-    gf::MvJob jg = cols(job(m.sel_hidden, m.xq, m.sg), n, m.q8(E), m.rank);
+    gf::MvJob jg = cols(job(m.sel_hidden, m.xq, m.x, m.sg), n, m.q8(E), m.rank);
     if (!head_ok || !gf::mv(&jg, 1, s)) {
         err = "glm dflash: the head / the selector gate (head type " + std::to_string(head.type) + ")";
         return false;

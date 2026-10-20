@@ -85,23 +85,27 @@ def dequant(p: Pack, name: str, dev) -> torch.Tensor:
         b = r.view(-1, 33)
         s = torch.ldexp(torch.ones(1, device=dev), b[:, :1].int() - 127)
         v = (b[:, 1:].contiguous().view(torch.float8_e4m3fn).float() * s).reshape(-1)
-    else:   # the low-bit expert types (IQ2_XXS .. Q4_K): gguf-py's numpy dequantisers (ggml's dequantize_row_*) - the
-        # installed package, else a llama.cpp checkout's ($GGUF_PY, ~/llama.cpp/gguf-py)
-        try:
-            try:
-                import gguf
-            except ImportError:
-                for d in (os.environ.get("GGUF_PY", ""), os.path.expanduser("~/llama.cpp/gguf-py")):
-                    if d and os.path.isdir(d):
-                        sys.path.insert(0, d)
-                import gguf
-            from gguf.quants import dequantize as gq_dequant
-            qt = gguf.GGMLQuantizationType[dt]
-        except (ImportError, KeyError):
-            raise SystemExit("%s: dtype %s (no gguf-py with a dequantiser for it: GGUF_PY=<llama.cpp>/gguf-py)" % (name, dt))
-        v = torch.from_numpy(np.ascontiguousarray(gq_dequant(np.array(p.raw(name)), qt), dtype=np.float32)
-                             .reshape(-1)).to(dev)
+    else:   # the low-bit expert types (IQ2_XXS .. Q4_K): gguf-py's numpy dequantisers (ggml's dequantize_row_*)
+        v = torch.from_numpy(gq_values(np.array(p.raw(name)), dt, name)).to(dev)
     return v.reshape(shape)
+
+
+def gq_values(raw: np.ndarray, dt: str, name: str) -> np.ndarray:
+    """ggml blocks of type dt as F32 (flat) through gguf-py's dequantisers - the installed package, else a llama.cpp
+    checkout's ($GGUF_PY, ~/llama.cpp/gguf-py)."""
+    try:
+        try:
+            import gguf
+        except ImportError:
+            for d in (os.environ.get("GGUF_PY", ""), os.path.expanduser("~/llama.cpp/gguf-py")):
+                if d and os.path.isdir(d):
+                    sys.path.insert(0, d)
+            import gguf
+        from gguf.quants import dequantize as gq_dequant
+        qt = gguf.GGMLQuantizationType[dt]
+    except (ImportError, KeyError):
+        raise SystemExit("%s: dtype %s (no gguf-py with a dequantiser for it: GGUF_PY=<llama.cpp>/gguf-py)" % (name, dt))
+    return np.ascontiguousarray(gq_dequant(raw, qt), dtype=np.float32).reshape(-1)
 
 
 class Hasher:
@@ -137,6 +141,11 @@ class Hasher:
             rolling = np.bitwise_xor(rolling, prod[..., i])
             out.append(rolling[..., None] % self.primes[None, :, i - 1])
         return np.concatenate(out, axis=-1) + self.off[None]
+
+
+def q6k_rows(rows: np.ndarray, name: str) -> np.ndarray:
+    """Engram rows of Q6_K superblocks as F32 (ggml's dequantize_row_q6_K, through gguf-py)."""
+    return gq_values(rows.reshape(-1), "Q6_K", name)
 
 
 class RefGguf(R.Ref):
@@ -185,14 +194,19 @@ class RefGguf(R.Ref):
         P = "layers.%d.engram." % li
         T, cols = hash_ids.shape
         hd = self.lay.head_dim
-        tab = self.st.raw(P + "embed.weight").reshape(-1, hd // 32 * 33)
+        dt = self.st.t[P + "embed.weight"][0]
+        rb = hd // 256 * 210 if dt == "Q6_K" else hd // 32 * 33        # (a row's bytes: Q6_K or MXFP8 blocks)
+        tab = self.st.raw(P + "embed.weight").reshape(-1, rb)
         flat = hash_ids.reshape(-1)
         order = np.argsort(flat)
-        rows = np.empty((flat.size, hd // 32 * 33), np.uint8)
+        rows = np.empty((flat.size, rb), np.uint8)
         rows[order] = tab[flat[order]]
-        b = torch.from_numpy(rows).to(self.dev).view(-1, 33)
-        s = torch.ldexp(torch.ones(1, device=self.dev), b[:, :1].int() - 127)
-        e = (b[:, 1:].contiguous().view(torch.float8_e4m3fn).float() * s).view(T, cols * hd)
+        if dt == "Q6_K":
+            e = torch.from_numpy(q6k_rows(rows, P)).to(self.dev).view(T, cols * hd)
+        else:
+            b = torch.from_numpy(rows).to(self.dev).view(-1, 33)
+            s = torch.ldexp(torch.ones(1, device=self.dev), b[:, :1].int() - 127)
+            e = (b[:, 1:].contiguous().view(torch.float8_e4m3fn).float() * s).view(T, cols * hd)
         e = e.to(torch.bfloat16).float()
         kv = e @ self.W(P + "wkv").T
         d, hc = self.dim, self.hc

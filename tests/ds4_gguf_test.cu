@@ -8,6 +8,7 @@
 #include "../src/ds4/ds4_gguf_cpu.hpp"
 #include "../src/ds4/ds4_iq.cuh"
 #include "../src/ds4/ds4_kernels.cuh"
+#include "../src/ds4/ds4_q6k.cuh"
 
 #include "ggml.h"   // (the low-bit types' reference values: ggml's own dequantize_row_*)
 
@@ -1543,6 +1544,35 @@ void test_kv_pack(cudaStream_t s) {
 
 }  // namespace
 
+// ---------------------------------------------------------------- Engram rows in Q6_K
+__global__ void q6k_rows_kernel(const uint8_t* rows, int hd, float* out) {   // (engram_dequant's Q6_K branch)
+    const int r = blockIdx.x;
+    for (int e = threadIdx.x; e < hd; e += blockDim.x)
+        out[(size_t) r * hd + e] =
+            strata::ds4::q6k_value(rows + (size_t) r * hd + (size_t) (e / 256) * strata::ds4::kQ6kBytes, e % 256);
+}
+void test_engram_q6k(cudaStream_t s) {
+    const int n = 64, hd = 512, sb = hd / 256;   // rows of two superblocks, each row hd bytes apart (as the engine keeps)
+    std::vector<uint8_t> rows((size_t) n * hd, 0), packed((size_t) n * sb * 210);
+    for (auto& v : packed) v = (uint8_t) (rng() & 0xff);
+    for (size_t b = 0; b < (size_t) n * sb; ++b) {   // d: a small normal F16
+        const __half h = __float2half(0.0005f + 0.002f * std::fabs(frand()));
+        std::memcpy(&packed[b * 210 + 208], &h, 2);
+    }
+    for (int r = 0; r < n; ++r) std::memcpy(&rows[(size_t) r * hd], &packed[(size_t) r * sb * 210], (size_t) sb * 210);
+    std::vector<float> want((size_t) n * hd);
+    ggml_get_type_traits(GGML_TYPE_Q6_K)->to_float(packed.data(), want.data(), (int64_t) n * hd);
+    uint8_t* d_rows = dev(rows);
+    float* d_out = dev(std::vector<float>((size_t) n * hd));
+    q6k_rows_kernel<<<n, 256, 0, s>>>(d_rows, hd, d_out);
+    CU(cudaStreamSynchronize(s));
+    const std::vector<float> got = host(d_out, (size_t) n * hd);
+    const bool same = std::memcmp(got.data(), want.data(), got.size() * 4) == 0;
+    if (!same) ++g_fail;
+    std::printf("%-44s %s\n", "Engram Q6_K rows = ggml's, bit for bit", same ? "ok" : "FAIL");
+    cudaFree(d_rows), cudaFree(d_out);
+}
+
 int main(int argc, char** argv) {
     cudaStream_t s;
     CU(cudaStreamCreate(&s));
@@ -1567,6 +1597,7 @@ int main(int argc, char** argv) {
     }
     test_kv_pack(s);
     test_mv(s);
+    test_engram_q6k(s);
     test_experts(512, 256, s);
     for (int t : {gg::iq::kIQ2_XXS, gg::iq::kIQ2_S, gg::iq::kIQ3_XXS, gg::iq::kIQ3_S, gg::iq::kIQ4_XS, gg::iq::kQ2_K,
                   gg::iq::kQ3_K, gg::iq::kQ4_K})

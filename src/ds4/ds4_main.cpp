@@ -446,6 +446,10 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
                 std::snprintf(b, sizeof b, " drafts=%.3f", (double) d_acc / (double) d_off);
                 out += b;
             }
+            if (s.skipped > s_dec.skipped) {   // (STRATA_DS4_DISK_SKIP_W: experts left out a token)
+                std::snprintf(b, sizeof b, " skipped=%.3f", (double) (s.skipped - s_dec.skipped) / fed);
+                out += b;
+            }
             std::printf("%s\n", out.c_str());
         };
         for (;;) {
@@ -727,6 +731,10 @@ int main(int argc, char** argv) {
     const long long io1 = io_read_bytes();
     if (io0 >= 0 && io1 >= 0)
         std::fprintf(stderr, "decode reads from the disk: %.1f MB a token\n", (double) (io1 - io0) / 1e6 / nt);
+    if (s.skipped > s0.skipped)   // STRATA_DS4_DISK_SKIP_W
+        std::fprintf(stderr, "decode left out %.1f experts a token not in RAM (%.1f%% of the routed)\n",
+                     (double) (s.skipped - s0.skipped) / nt,
+                     100.0 * (double) (s.skipped - s0.skipped) / std::max<double>(1.0, (double) (s.experts - s0.experts)));
     if (s.ahead_picks > s0.ahead_picks) {   // lookahead
         const double p = (double) (s.ahead_picks - s0.ahead_picks), c = (double) (s.ahead_cold - s0.ahead_cold);
         std::fprintf(stderr, "lookahead: the guesses a layer before held %.1f%% of the picks (their top k %.1f%%, two layers "

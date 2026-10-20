@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace strata::kernels {
 
@@ -28,6 +29,10 @@ struct SamplerParams {
     // a request's logit_bias: a DEVICE array of n_vocab floats on the sampling device, added to every row's logits
     // before the penalties and the filters (-inf bans a token); nullptr = none
     const float* logit_bias = nullptr;
+    // the GLM engine's penalty history, on the HOST (never read by a kernel): every token the request's state has been
+    // fed so far, oldest first - its prompt, then each token it wrote.  Glm5Model::pick_tokens hands each pick the last
+    // penalty_last_n of them (a verify window's row t: these, then the window's drafts 1..t).  nullptr = none
+    const std::vector<int32_t>* host_history = nullptr;
 };
 
 // logits (n_tokens, n_vocab) -> one sampled token id per row in `out`.

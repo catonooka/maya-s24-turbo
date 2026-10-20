@@ -3529,6 +3529,7 @@ void Glm5Model::fast_destroy() {
     if (F->dcnt_d) cudaFree(F->dcnt_d);
     if (F->spec_live_h) cudaFreeHost(F->spec_live_h);   // (STRATA_GLM_SPEC_CANCEL)
     if (F->spec_skip_d) cudaFree(F->spec_skip_d);
+    if (F->defer_post) cudaFree(F->defer_post);   // (STRATA_GLM_DEFER_CPU)
     if (F->timing && F->ah_routes > 0) {
         std::string ov;
         for (int d = 0; d < F->n_ahead; ++d)
@@ -5669,7 +5670,7 @@ bool Glm5Model::fast_mtp(int64_t p, int32_t next_tok, std::string& err, int step
 int Glm5Model::fast_sample(strata::kernels::SamplerParams& sp, std::string& err) {
     FastState* F = fast_;
     cudaSetDevice(dev_);
-    strata::kernels::sample_tokens(sc_ + sc_logits, 1, (int) g_.n_vocab, nullptr, 0, sp, d_tok_, F->cs);
+    pick_tokens(sc_ + sc_logits, 1, sp, nullptr, 0, d_tok_, F->cs);
     cudaMemcpyAsync(F->tok_h, d_tok_, sizeof(int), cudaMemcpyDeviceToHost, F->cs);
     if (!glmfast::cuda_ok(cudaStreamSynchronize(F->cs), "glm sampler", err) || !F->route_ok(err)) return -1;
     return F->tok_h[0];
@@ -5816,6 +5817,44 @@ void Glm5Model::pool_check(size_t floor_b, size_t slot_b, size_t all_b) {
                          dev_, (double) ded / 1073741824.0, (double) total_b / 1073741824.0,
                          (double) give / 1073741824.0);
         }
+        // ... and within Windows' commit (RAM + page file), which every allocation on the APU's GPU is charged to
+        // (DeepSeek's engine measured it: ds4_model.cu, commit_room) - with a page file smaller than the GPU's share
+        // the pool took the commit the other programs need, or the driver refused it and the start failed.  The pool
+        // keeps within what may still be committed less max(8 GB, 10% of the RAM), never below its floor; the experts
+        // that keeps off the GPU are said here and to the server (commit_capped: NOTE / INFO gpu_commit_capped_gb, as
+        // DeepSeek's), with the page file that keeps them on it.  STRATA_GLM_COMMIT_CAP_GB=<n> (a test): at most n GB
+        // more may be committed.
+        MEMORYSTATUSEX ms{};
+        ms.dwLength = sizeof ms;
+        if (GlobalMemoryStatusEx(&ms)) {
+            size_t can = (size_t) ms.ullAvailPageFile;
+            if (const char* v = getenv("STRATA_GLM_COMMIT_CAP_GB")) can = std::min(can, (size_t) (std::atof(v) * 1e9));
+            const PoolBudget b2 = part_budget(free_b, total_b, floor_b, slot_b);   // (the dedicated cap's included)
+            const auto cap = glmfast::commit_pool_cap(b2.avail, floor_b, all_b, can, (size_t) ms.ullTotalPhys);
+            if (cap.first < b2.avail) {
+                pool_short_ += b2.avail - cap.first;
+                commit_kept_ = cap.second;
+                commit_limit_ = (size_t) ms.ullTotalPageFile;
+                commit_ram_ = (size_t) ms.ullTotalPhys;
+                const double gb = 1e9, margin = (double) glmfast::commit_margin(commit_ram_);
+                const double room = std::max(0.0, (double) can - margin);   // (what the experts may still commit)
+                if (cap.second > 0) {
+                    const size_t hint = glmfast::pagefile_hint_gib(commit_limit_, commit_ram_, commit_kept_);
+                    std::fprintf(stderr, "glm fast: CUDA%d WARNING: %.1f GB of experts stay off the GPU - Windows charges "
+                                         "the GPU's memory to its commit (RAM + page file) and can commit only %.1f GB "
+                                         "more for them (%.0f GB kept for the other programs). A page file of %zu GB "
+                                         "(%zu MB; now %.0f GB) keeps them on the GPU: System > About > Advanced system "
+                                         "settings > Performance > Advanced > Virtual memory, then restart\n",
+                                 dev_, (double) cap.second / gb, room / gb, margin / gb, hint, hint * 1024,
+                                 (double) (commit_limit_ > commit_ram_ ? commit_limit_ - commit_ram_ : 0) / 1073741824.0);
+                } else {
+                    std::fprintf(stderr, "glm fast: CUDA%d the expert pool stays within Windows' commit (%.1f GB more "
+                                         "for it, %.0f GB kept for the other programs): its budget %.2f GB less, every "
+                                         "expert still fits\n",
+                                 dev_, room / gb, margin / gb, (double) (b2.avail - cap.first) / 1073741824.0);
+                }
+            }
+        }
         return;
     }
 #else
@@ -5877,6 +5916,17 @@ std::vector<Glm5Model::PoolVram> Glm5Model::pool_vram() const {
         if (m->fast_ != nullptr)
             v.push_back({m->dev_, (int) (m->pool_b_.reserve >> 20), m->pool_b_.adapted, m->pool_b_.fixed});
     return v;
+}
+
+std::pair<size_t, size_t> Glm5Model::commit_capped() const {
+    size_t kept = 0, limit = 0, ram = 0;
+    for (const Glm5Model* m = this; m != nullptr; m = m->split_next_.get())
+        if (m->commit_kept_ > 0) {
+            kept += m->commit_kept_;
+            limit = m->commit_limit_;
+            ram = m->commit_ram_;
+        }
+    return {kept, kept > 0 ? glmfast::pagefile_hint_gib(limit, ram, kept) : 0};
 }
 
 bool Glm5Model::has_mtp() const {
@@ -6988,6 +7038,7 @@ uint64_t Glm5Model::slot_save(std::vector<uint8_t>& data, std::string& err) {
 }
 
 bool Glm5Model::slot_load(const std::vector<uint8_t>& data, int64_t n_pos, std::string& err) {
+    ckpt_join();   // (ckpt_save_snapshot reads snap_ / snap_pool_)
     dflash_reset();   // another conversation's state: the drafter's cached positions are not its
     size_t pos = 0;
     const auto get = [&](void* p, size_t bytes) {

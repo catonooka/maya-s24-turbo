@@ -681,6 +681,7 @@ struct Glm5Model::FastState {
         int* skip_d = nullptr;
         const volatile int* from = nullptr;
         strata::kernels::SamplerParams pick_sp;
+        int32_t pick_tok[32] = {};          // ... the tokens pushed, by slot (a pick's penalty rows count the drafts before it)
         int64_t p0 = 0;
         int T = 0;
         // STRATA_GLM_WIN_PROF=1: an event after each phase of the window's layers, the gaps summed per phase name

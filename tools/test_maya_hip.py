@@ -54,13 +54,13 @@ class HipSetupTests(unittest.TestCase):
         self.assertEqual(maya.EXE, self.root / "build-hip/maya")
 
     def test_rdna2_is_experimental_and_compiled_only_when_chosen(self):
-        pc = maya.check_pc(self.a)      # the RX 7900 XT: the three architectures, as before
-        self.assertEqual(pc["archs"], list(maya.HIP_ARCHS))
+        pc = maya.check_pc(self.a)      # the RX 7900 XT: its own architecture only (#255)
+        self.assertEqual(pc["archs"], ["gfx1100"])
         self.gpus.append({"index": 3, "arch": "gfx1030", "vendor": "amd", "name": "Radeon PRO V620", "vram_gb": 32})
         self.a.gpu = 3
         pc = maya.check_pc(self.a)
         self.assertEqual(pc["gpus"], [self.gpus[3]])
-        self.assertEqual(pc["archs"], list(maya.HIP_ARCHS) + ["gfx1030"])
+        self.assertEqual(pc["archs"], ["gfx1030"])     # no WMMA arch: no rocWMMA needed (ROCm 7 has none)
 
     def test_rejects_unsupported_card_and_bad_gpu_lists(self):
         self.a.gpu = 2
@@ -203,7 +203,7 @@ class HipSetupTests(unittest.TestCase):
         self.assertIn("-DSTRATA_ENABLE_HIP=ON", conf)
         self.assertIn("-DSTRATA_ENABLE_CUDA=OFF", conf)
         self.assertIn("-DSTRATA_PREFILL_MMQ=ON", conf)
-        self.assertIn("-DCMAKE_HIP_ARCHITECTURES=gfx1100;gfx1201;gfx1151", conf)
+        self.assertIn("-DCMAKE_HIP_ARCHITECTURES=gfx1100", conf)     # the chosen card's (#255)
         self.assertEqual(env["ROCM_PATH"], str(self.rocm))
         self.assertEqual(meta["backend"], "hip")
 
@@ -708,7 +708,7 @@ class WindowsHipSetupTests(unittest.TestCase):
                      f"-DCMAKE_HIP_COMPILER={root}/lib/llvm/bin/clang++.exe",
                      f"-DCMAKE_HIP_COMPILER_ROCM_ROOT={root}",
                      "-DSTRATA_ENABLE_HIP=ON", "-DSTRATA_ENABLE_CUDA=OFF", "-DSTRATA_PREFILL_MMQ=ON",
-                     "-DSTRATA_PORTABLE=ON", "-DCMAKE_HIP_ARCHITECTURES=gfx1100;gfx1201;gfx1151"):
+                     "-DSTRATA_PORTABLE=ON", "-DCMAKE_HIP_ARCHITECTURES=gfx1151"):
             self.assertIn(want, conf)
         if " " not in root:
             self.assertIn(f"-DCMAKE_HIP_FLAGS=--rocm-path={root} --rocm-device-lib-path={root}/lib/llvm/amdgcn/bitcode",

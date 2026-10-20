@@ -601,6 +601,7 @@ Glm5Model::~Glm5Model() {
     }
     rows_destroy();
     fast_destroy();
+    pen_free();
     if (!stage_workers_.empty()) {
         // stop the staging pool: without this the workers block in stage_cv_ forever and the
         // process hangs at exit (their std::thread destructors must see joined threads)
@@ -1036,8 +1037,7 @@ int Glm5Model::sample_token(strata::kernels::SamplerParams& sp, std::string& err
         return tok;
     }
     cudaSetDevice(tail->dev_);
-    strata::kernels::sample_tokens(tail->sc_ + tail->sc_logits, 1, (int) g_.n_vocab, nullptr, 0, sp,
-                                   tail->d_tok_, nullptr);
+    tail->pick_tokens(tail->sc_ + tail->sc_logits, 1, sp, nullptr, 0, tail->d_tok_, nullptr);
     int tok = -1;
     if (cudaMemcpy(&tok, tail->d_tok_, sizeof(int), cudaMemcpyDeviceToHost) != cudaSuccess) {
         err = std::string("glm5_model: sampler copy: ") + cudaGetErrorString(cudaGetLastError());
@@ -1046,6 +1046,103 @@ int Glm5Model::sample_token(strata::kernels::SamplerParams& sp, std::string& err
     }
     cudaSetDevice(dev_);
     return tok;
+}
+
+// PENALTIES (#273): see the header.  The rows are built on the host from the request's history and copied on the
+// pick's own stream right before it, from a ring of pinned rows: before a row is written again, the pick that read it
+// is waited for (its event) - 64 picks back, so in practice never.
+bool Glm5Model::pen_alloc(int w, std::string& err) {
+    for (cudaEvent_t& ev : pen_ev_)
+        if (ev != nullptr) cudaEventSynchronize(ev);   // (every pick that reads the old rows done)
+    int cur = 0;
+    cudaGetDevice(&cur);
+    cudaSetDevice(dev_);
+    pen_free();
+    const size_t bytes = (size_t) kPenRows * (size_t) w * sizeof(int32_t);
+    bool ok = cudaHostAlloc((void**) &pen_h_, bytes, cudaHostAllocPortable) == cudaSuccess &&
+              cudaMalloc((void**) &pen_d_, bytes) == cudaSuccess;
+    for (cudaEvent_t& ev : pen_ev_)
+        ok = ok && cudaEventCreateWithFlags(&ev, cudaEventDisableTiming) == cudaSuccess;
+    if (!ok) {
+        cudaGetLastError();
+        pen_free();
+        err = "the penalty rows did not allocate";
+    } else {
+        pen_w_ = w;
+        pen_next_ = 0;
+    }
+    cudaSetDevice(cur);
+    return ok;
+}
+
+void Glm5Model::pen_free() {   // (on this part's device)
+    if (pen_h_ != nullptr) cudaFreeHost(pen_h_);
+    if (pen_d_ != nullptr) cudaFree(pen_d_);
+    for (cudaEvent_t& ev : pen_ev_) {
+        if (ev != nullptr) cudaEventDestroy(ev);
+        ev = nullptr;
+    }
+    pen_h_ = nullptr;
+    pen_d_ = nullptr;
+    pen_w_ = 0;
+}
+
+void Glm5Model::pick_tokens(const float* logits, int T, const strata::kernels::SamplerParams& sp, const int32_t* win,
+                            int n0, int* out, cudaStream_t s) {
+    const int V = (int) g_.n_vocab;
+    if (sp.penalty_last_n <= 0) {   // no penalties: the call every site made before, nothing else
+        strata::kernels::sample_tokens(logits, T, V, nullptr, 0, sp, out, s);
+        return;
+    }
+    const std::vector<int32_t>* H = sp.host_history;
+    const int h = std::min(sp.penalty_last_n, kPenCap);
+    std::string why;
+    std::unique_lock<std::mutex> lk(pen_mu_);
+    if (H == nullptr || H->empty()) why = "no history was handed over";
+    else if (T < 1 || T > kPenRows || n0 < 0 || n0 + T > kWinMax || (win == nullptr && n0 + T > 1))
+        why = "rows that are not a window's";
+    else if (h > pen_w_) pen_alloc(std::max(h, 256), why);
+    if (!why.empty()) {   // (a bug, not a request's doing: said, and the pick made without them rather than none)
+        lk.unlock();
+        static std::atomic<bool> said{false};
+        if (!said.exchange(true))
+            std::fprintf(stderr, "glm penalties: %s - picks without the penalties (said once)\n", why.c_str());
+        strata::kernels::SamplerParams q = sp;
+        q.penalty_last_n = 0;
+        strata::kernels::sample_tokens(logits, T, V, nullptr, 0, q, out, s);
+        return;
+    }
+    // a window's first token is the history's last (what the state was fed last): a caller that lets them part would
+    // count the wrong tokens
+    if (win != nullptr && win[0] != H->back()) {
+        static std::atomic<bool> said{false};
+        if (!said.exchange(true))
+            std::fprintf(stderr, "glm penalties: a window starts with %d, the history ends with %d (said once)\n",
+                         (int) win[0], (int) H->back());
+    }
+    int r = pen_next_;
+    if (r + T > kPenRows) r = 0;
+    pen_next_ = r + T;
+    for (int i = r; i < r + T; ++i) cudaEventSynchronize(pen_ev_[i]);
+    // row t: the last h of (H, win[1 .. n0 + t]), -1 in the unused front slots (rows contiguous at stride h)
+    int32_t* host = pen_h_ + (size_t) r * (size_t) pen_w_;
+    const int64_t nH = (int64_t) H->size();
+    for (int t = 0; t < T; ++t) {
+        int32_t* row = host + (size_t) t * (size_t) h;
+        const int64_t avail = nH + n0 + t;
+        const int take = (int) std::min<int64_t>(h, avail);
+        std::fill(row, row + (h - take), -1);
+        for (int j = 0; j < take; ++j) {
+            const int64_t i = avail - take + j;
+            row[h - take + j] = i < nH ? (*H)[(size_t) i] : win[1 + (i - nH)];
+        }
+    }
+    int32_t* dev = pen_d_ + (size_t) r * (size_t) pen_w_;
+    cudaMemcpyAsync(dev, host, (size_t) T * (size_t) h * sizeof(int32_t), cudaMemcpyHostToDevice, s);
+    strata::kernels::SamplerParams q = sp;
+    q.penalty_last_n = h;
+    strata::kernels::sample_tokens(logits, T, V, dev, h, q, out, s);
+    for (int i = r; i < r + T; ++i) cudaEventRecord(pen_ev_[i], s);
 }
 
 // the last part's side of the head split: the helper and the pinned rows a pick crosses with

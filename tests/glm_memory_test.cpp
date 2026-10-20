@@ -80,5 +80,25 @@ int main() {
     assert(pool_give_back(20 * G, 18 * G, 2 * G, R, zr) == 2 * G);
     assert(pool_give_back(20 * G, 18 * G, 100 * M, R, zr) == 2 * G + 664 * M);
     assert(pool_give_back(G, 0, 0, R, zr) == G);   // never more than was asked
+    // Windows' commit on an APU (128 GiB RAM: 12.8 GiB kept for the other programs).  A 140 GiB budget, a pool that can
+    // take at most 120 GiB, 4 GiB its floor: 100 GiB of commit left caps it at 87.2 GiB and keeps 32.8 off the GPU;
+    // with 150 GiB left it is capped to 137.2, still above all the pool takes, so nothing stays off; with 130 it is
+    // capped to 117.2 and 2.8 GiB stay off; with no room at all the floor stays; a 16 GiB PC keeps 8 GiB for the others
+    using strata::core::glmfast::commit_margin;
+    using strata::core::glmfast::commit_pool_cap;
+    using strata::core::glmfast::pagefile_hint_gib;
+    assert(commit_margin(128 * G) == 128 * G / 10 && commit_margin(16 * G) == 8 * G);
+    const size_t mg = 128 * G / 10;
+    assert(commit_pool_cap(140 * G, 4 * G, 120 * G, 100 * G, 128 * G) == std::make_pair(100 * G - mg, 20 * G + mg));
+    assert(commit_pool_cap(140 * G, 4 * G, 120 * G, 150 * G, 128 * G) == std::make_pair(150 * G - mg, size_t{0}));
+    assert(commit_pool_cap(140 * G, 4 * G, 120 * G, 200 * G, 128 * G) == std::make_pair(140 * G, size_t{0}));
+    assert(commit_pool_cap(140 * G, 4 * G, 120 * G, 130 * G, 128 * G) == std::make_pair(130 * G - mg, mg - 10 * G));
+    assert(commit_pool_cap(140 * G, 4 * G, 120 * G, 5 * G, 128 * G) == std::make_pair(4 * G, 116 * G));
+    assert(commit_pool_cap(140 * G, 4 * G, 0, 100 * G, 128 * G) == std::make_pair(100 * G - mg, 40 * G + mg));
+    assert(commit_pool_cap(2 * G, 4 * G, 120 * G, 0, 128 * G) == std::make_pair(2 * G, size_t{0}));   // (<= budget)
+    assert(commit_pool_cap(10 * G, G, 0, 12 * G, 16 * G) == std::make_pair(4 * G, 6 * G));
+    // the page file that keeps 33 GiB more on the GPU, with 128 GiB of RAM and a 32 GiB page file now: 65 GiB
+    assert(pagefile_hint_gib(160 * G, 128 * G, 33 * G) == 65);
+    assert(pagefile_hint_gib(160 * G, 128 * G, 33 * G - 1) == 65 && pagefile_hint_gib(128 * G, 128 * G, 1) == 1);
     std::puts("GLM memory policy checks passed (CPU only)");
 }

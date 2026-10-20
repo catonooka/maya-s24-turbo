@@ -17,7 +17,8 @@ VRAM when `--gpu` is omitted. See [AMD_MAYA.md](AMD_MAYA.md) for model setup.
 
 ## One binary, three code targets
 
-Setup compiles `gfx1100;gfx1201;gfx1151`. CMake also accepts space-separated
+Setup compiles the architectures of the chosen cards (a 7900 XT + R9700: `gfx1100;gfx1201`); a manual build can
+name all three, `gfx1100;gfx1201;gfx1151`. CMake also accepts space-separated
 lists and architecture feature suffixes. The runtime strips the feature suffix
 and checks exact membership in the compiled list, then requires wave32.
 Its diagnostics print the actual architecture and the compiled targets.

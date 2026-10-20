@@ -691,10 +691,13 @@ class StrataEngine:
         bias = sampling.get("logit_bias")      # {id: bias}, checked by the handler (logit_bias_of)
         bias_key = (" logit_bias=" + ",".join(f"{int(i)}:{float(b):g}" for i, b in sorted(bias.items()))
                     if isinstance(bias, dict) and bias else "")
+        penalty_keys = StrataEngine.penalty_keys(sampling)
         if isinstance(t, (int, float)) and not isinstance(t, bool) and float(t) <= 0.0:
             # temperature 0 is greedy: the engine reads temperature=0 as that whatever else the line says, and no other
-            # sampler key goes (with only a config's top_p the engine took its sampled path: not deterministic)
-            return " temperature=0" + think + tune_keys + StrataEngine.projection_key(sampling) + bias_key
+            # sampler key goes (with only a config's top_p the engine took its sampled path: not deterministic) - but
+            # the penalties do: they change the logits greedy picks from (#273: a greedy answer's loops)
+            return (" temperature=0" + penalty_keys + think + tune_keys + StrataEngine.projection_key(sampling) +
+                    bias_key)
         if isinstance(t, (int, float)) and float(t) > 0.0:
             keys += f" temperature={float(t)!r}"
         tp = sampling.get("top_p")
@@ -707,6 +710,19 @@ class StrataEngine:
         mp = sampling.get("min_p")
         if isinstance(mp, (int, float)) and 0.0 < float(mp) <= 1.0:
             keys += f" min_p={float(mp)!r}"
+        keys += penalty_keys
+        seed = sampling.get("seed")
+        if isinstance(seed, int) and seed > 0:
+            keys += f" seed={seed}"
+        keys += think + tune_keys
+        return keys + StrataEngine.projection_key(sampling) + bias_key
+
+    @staticmethod
+    def penalty_keys(sampling: dict) -> str:
+        """The repetition / frequency / presence penalties (llama.cpp's repeat_penalty and repeat_last_n are read as
+        repetition_penalty and penalty_last_n): only the ones that change something, and their window with them.  ""
+        when none does - the GEN line is then the one it was without them."""
+        keys = ""
         rp = sampling.get("repetition_penalty")
         rp_on = isinstance(rp, (int, float)) and float(rp) != 1.0
         pf = sampling.get("frequency_penalty")
@@ -726,11 +742,7 @@ class StrataEngine:
                 keys += f" penalty_last_n={pln}"
             else:
                 keys += " penalty_last_n=64"
-        seed = sampling.get("seed")
-        if isinstance(seed, int) and seed > 0:
-            keys += f" seed={seed}"
-        keys += think + tune_keys
-        return keys + StrataEngine.projection_key(sampling) + bias_key
+        return keys
 
     @staticmethod
     def projection_key(sampling: dict) -> str:
@@ -1331,6 +1343,7 @@ class Service:
         # STRATA_GLM_SLOT_KEEP=1 the conversation in the model is kept on disk across it.
         self.idle_unload_s = 0.0
         self.unloaded = False                            # the engine was ended by the idle unload (not by a crash)
+        self._engine_start = threading.Lock()            # ensure_engine: one start, also with --parallel's requests
         self.updater = Updater(MAYA_VERSION)             # About > Updates: a newer release, and updating to it
         # The ids that end an answer server-side.  A string that is not a special token in this vocabulary
         # (GLM-5.3 has no <|im_end|>) encodes to its TEXT pieces, whose ids occur inside ordinary answers -
@@ -1429,18 +1442,22 @@ class Service:
 
     def ensure_engine(self):
         """The engine running (the caller holds the FIFO): started again after an idle unload, or after it died in an
-        earlier request (issue #27) instead of failing every request."""
+        earlier request (issue #27) instead of failing every request.  With --parallel several requests hold a place
+        each: the first one starts it, the others wait for that start."""
         if not hasattr(self.engine, "alive") or self.engine.alive():
             return
-        if self.unloaded:
-            print("[maya] loading the model again after an idle unload (a minute or so) ...", flush=True)
-        else:
-            code = self.engine.exit_code() if hasattr(self.engine, "exit_code") else None
-            print(f"[maya] the engine had stopped (exit code {code}); starting it again "
-                  "(a minute or two) ...", flush=True)
-        self.engine.restart()
-        self.unloaded = False
-        print("[maya] the engine is running again", flush=True)
+        with self._engine_start:
+            if self.engine.alive():                      # (another request started it meanwhile)
+                return
+            if self.unloaded:
+                print("[maya] loading the model again after an idle unload (a minute or so) ...", flush=True)
+            else:
+                code = self.engine.exit_code() if hasattr(self.engine, "exit_code") else None
+                print(f"[maya] the engine had stopped (exit code {code}); starting it again "
+                      "(a minute or two) ...", flush=True)
+            self.engine.restart()
+            self.unloaded = False
+            print("[maya] the engine is running again", flush=True)
 
     def unload(self, idle_for: float | None = None) -> str:
         """End the engine between requests: "unloaded", "not loaded", "busy" (a request is running or waiting, a context
@@ -1796,7 +1813,7 @@ class Service:
             "vision": {"enabled": images, "available": images,
                        "error": None if images or (getattr(self.engine, "info", {}) or {}).get("vision") != "off"
                        else "the model's vision tower did not load (the server's log says why)"},
-            # (DeepSeek on a Windows APU: Windows' commit - the page file - kept experts off the GPU; the NOTE says so)
+            # (a Windows APU: Windows' commit - the page file - kept experts off the GPU; either engine's NOTE says so)
             "memory_note": (lambda i: None if not i.get("gpu_commit_capped_gb") else
                             f"{i['gpu_commit_capped_gb']} GB of experts stay off the GPU: Windows' page file is too small; "
                             f"a page file of {i.get('pagefile_hint_gb')} GB keeps them on the GPU")(

@@ -970,10 +970,13 @@ double probe_pcie_h2d_gbps() {
 // summary at the end, and --serve reading `GEN <max_new> <id,id,...>` lines (QUIT ends).
 //
 // NOT wired here yet, and refused rather than approximated: prompt-prefix reuse and per-request
-// state continuity across GEN lines (each GEN starts a fresh sequence), drafts, penalty history,
+// state continuity across GEN lines (each GEN starts a fresh sequence), drafts,
 // the batched prompt path (the prompt runs one token at a time), images, control vectors and
 // layer splits.  Sampling is the engine's own sampler (strata::kernels::sample_tokens, greedy by
-// default), so the top-k/top-p/temperature chain behaves exactly as in the qwen4exp path.
+// default), so the top-k/top-p/temperature chain behaves exactly as in the qwen4exp path - the
+// penalties too (#273): the request's history (its prompt, then what it wrote) rides in
+// SamplerParams::host_history, and every pick counts its last penalty_last_n tokens
+// (Glm5Model::pick_tokens; a verify window's row t: those, then the drafts before it).
 // The stop set is GLM's own, from the GGUF metadata (the ids llama.cpp marks EOG): 154820
 // <|endoftext|> (eos), 154827 <|user|> (eot, the assistant yields the floor) and 154829 <|observation|> (a tool
 // call waits for its result); --eos-ids
@@ -1045,6 +1048,15 @@ static int glm_pack_generate(const Options& o) {
                         (unsigned long long) r.window, (unsigned long long) r.pool, (unsigned long long) r.tail,
                         (unsigned long long) r.borrow, (unsigned long long) r.vision, (long long) r.slots,
                         (long long) r.ctx, r.l0, r.l1);
+        // (Windows on an APU: the commit - the page file - kept experts off the GPU; the server's log, Monitor and
+        // /v1/status say so, as for DeepSeek's engine)
+        if (const auto cc = model.commit_capped(); cc.first > 0) {
+            std::printf("NOTE experts: %.0f GB stay off the GPU - Windows' page file is too small to hold them there; "
+                        "a page file of %zu GB keeps them on the GPU (System > About > Advanced system settings > "
+                        "Performance > Advanced > Virtual memory), then restart Maya\n", (double) cc.first / 1e9, cc.second);
+            std::printf("INFO gpu_commit_capped_gb=%.0f pagefile_hint_gb=%zu\n", std::ceil((double) cc.first / 1e9),
+                        cc.second);
+        }
     }
 
     strata::kernels::SamplerParams sp;
@@ -1859,6 +1871,12 @@ static int glm_pack_generate(const Options& o) {
             std::printf("ERR empty prompt or max_new\n");
             return 1;
         }
+        // the penalties' history (#273): what the state is fed - the prompt, then every token written (on_token)
+        std::vector<int32_t> pen_hist;
+        if (sp.penalty_last_n > 0) {
+            pen_hist = prompt;
+            sp.host_history = &pen_hist;
+        }
         size_t reuse = 0;
         const char* finish = "length";
         auto t0 = std::chrono::steady_clock::now();
@@ -1895,6 +1913,7 @@ static int glm_pack_generate(const Options& o) {
             std::printf("T %d\n", tok);
             ++produced;
             emitted.push_back((int32_t) tok);
+            if (sp.host_history != nullptr) pen_hist.push_back((int32_t) tok);   // (fed next: the picks after count it)
             strata::core::progress_at("decode: after token", produced);   // the watchdog's heartbeat (issue #40)
             strata::core::progress_beat();
             gen_hist.push_back(tok);
@@ -2132,6 +2151,7 @@ static int glm_pack_generate(const Options& o) {
         strata::kernels::SamplerParams sp;
         int64_t max_new = 0, produced = 0;
         std::vector<int32_t> prompt, emitted;
+        std::vector<int32_t> pen;   // the penalties' history (sp.host_history): the prompt, then every token written
         bool in_think = false;
         int64_t think_budget = 0;
         int32_t think_end = -1;
@@ -2206,6 +2226,7 @@ static int glm_pack_generate(const Options& o) {
         ++g.produced;
         ++multi_n;
         g.emitted.push_back((int32_t) tok);
+        if (g.sp.host_history != nullptr) g.pen.push_back((int32_t) tok);
         strata::core::progress_at("decode: after token", g.produced);
         strata::core::progress_beat();
         g.hist.push_back(tok);
@@ -2417,6 +2438,10 @@ static int glm_pack_generate(const Options& o) {
         if (g->prompt.empty() || max_new <= 0) {
             std::printf("ERR %d empty prompt or max_new\n", rid);
             return;
+        }
+        if (g->sp.penalty_last_n > 0) {   // its penalties' history (#273; the Gen lives behind a unique_ptr: it stays put)
+            g->pen = g->prompt;
+            g->sp.host_history = &g->pen;
         }
         // the context: an idle one that holds the prompt and the room after it, and whose snapshot this prompt
         // extends (the longest), else the least recently used of those
@@ -3240,6 +3265,8 @@ static int glm_pack_generate(const Options& o) {
             req_spec_cum = -1.0;
             req_bias.clear();
             std::string bias_err;
+            int pen_n = 0;
+            float pen_repeat = 1.0f, pen_freq = 0.0f, pen_present = 0.0f;
             std::string tok2, ids, emb_path;
             while (ss >> tok2) {
                 const size_t eq = tok2.find('=');
@@ -3288,20 +3315,39 @@ static int glm_pack_generate(const Options& o) {
                         at = end + 1;
                     }
                 }
-                // penalty_* need machinery this mode does not have (history rows): ignored rather than approximated
+                // the penalties (#273), llama.cpp's: over the last penalty_last_n tokens the request's state was fed
+                // (its prompt, then what it wrote).  They do not choose between greedy and sampled
+                else if (k == "penalty_last_n") { pen_n = std::atoi(v.c_str()); }
+                else if (k == "penalty_repeat") { pen_repeat = std::strtof(v.c_str(), nullptr); }
+                else if (k == "penalty_freq") { pen_freq = std::strtof(v.c_str(), nullptr); }
+                else if (k == "penalty_present") { pen_present = std::strtof(v.c_str(), nullptr); }
             }
             if (any_key) rq.greedy = false;   // any sampler key switches the request to the sampled path
             if (greedy_req) rq.greedy = true;
+            // a repeat penalty of 0 or below (some clients' "off"; the logits would be divided by it) or a value that is
+            // not a number counts as neutral
+            if (!std::isfinite(pen_repeat) || pen_repeat <= 0.0f) pen_repeat = 1.0f;
+            if (!std::isfinite(pen_freq)) pen_freq = 0.0f;
+            if (!std::isfinite(pen_present)) pen_present = 0.0f;
+            // as llama.cpp: no window, or every penalty neutral, is no penalty - the request's picks are exactly as
+            // without the keys (no history kept, nothing uploaded)
+            const bool pen_on = pen_n > 0 && (pen_repeat != 1.0f || pen_freq != 0.0f || pen_present != 0.0f);
+            if (pen_on) {
+                rq.penalty_last_n = pen_n;
+                rq.penalty_repeat = pen_repeat;
+                rq.penalty_freq = pen_freq;
+                rq.penalty_present = pen_present;
+            }
             if (!bias_err.empty()) {
                 if (multi && req_rid >= 0) std::printf("ERR %d %s\n", req_rid, bias_err.c_str());
                 else std::printf("ERR %s\n", bias_err.c_str());
                 std::fflush(stdout);
                 continue;
             }
-            if (!req_bias.empty() && (rq.greedy || rq.temperature <= 0.0f)) {
-                // greedy with a bias: the sampled path's top_k = 1 is the same argmax (ties to the lower id) over the
-                // biased logits - the greedy shortcuts (the argmax at the end of a forward, the windows' argmax) read
-                // the unbiased ones
+            if ((!req_bias.empty() || pen_on) && (rq.greedy || rq.temperature <= 0.0f)) {
+                // greedy with a bias or penalties: the sampled path's top_k = 1 is the same argmax (ties to the lower
+                // id) over the biased, penalized logits - the greedy shortcuts (the argmax at the end of a forward, the
+                // windows' argmax) read the plain ones
                 rq.greedy = false;
                 rq.temperature = 1.0f;
                 rq.top_k = 1;

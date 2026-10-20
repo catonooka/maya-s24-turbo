@@ -1,7 +1,7 @@
 """Agent-turn prompt time: a ~12K-token prompt and its answer, then the same session gets that history + a short user
 turn three times (the engine keeps the prefix); prints each later turn's DONE fields (field 4: the prompt ms).
 
-    python tools/glm_turns.py PACK_DIR [STRATA_BINARY]
+    python tools/glm_turns.py PACK_DIR [ENGINE (build/maya)]
 
 The engine's environment (STRATA_GLM_*) is passed through, e.g. STRATA_GLM_PREFILL_MIN=32 for the old token-path
 threshold."""
@@ -9,7 +9,7 @@ import os, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import strata_tokenizer as T
 pack = sys.argv[1]
-binary = sys.argv[2] if len(sys.argv) > 2 else "build/strata"
+binary = sys.argv[2] if len(sys.argv) > 2 else "build/maya"
 tk = T.Tokenizer.from_dir(os.path.join(pack, "tokenizer"))
 p = subprocess.Popen([binary, "--glm-pack", pack, "--serve", "--max-context", "16384"], stdin=subprocess.PIPE,
                      stdout=subprocess.PIPE, stderr=open("/tmp/glm_turns.err", "w"), text=True)
