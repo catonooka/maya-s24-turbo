@@ -135,7 +135,7 @@ These settings change what the engine chooses (put them in the config with `--en
 | `MAYA_ENGINE_STALL_S` | 90 | the server: an engine silent this long that also used no CPU, disk or GPU in that time is stuck - it is ended, the request gets an error and the next request starts it again (a silent engine that is working is never ended); `0` = off |
 | `MAYA_WATCHDOG_S` | 180 | the engine: a request that finishes no prompt layer and no token for this long has hung, even with a thread spinning (#40). The engine writes where it stopped to its log (on Windows also `maya-stall-<pid>.dmp`, every thread's stack: attach both to an issue) and ends; the request gets an error and the next request starts it again. `0` = off |
 | `MAYA_HTTP_BACKLOG`, `MAYA_MAX_BODY_MIB` | 256, 256 | the server: connections that may wait to be accepted, and the largest request body in MiB (a larger one gets a 413 before it is read) |
-| `MAYA_ENGINE_QUIT_S` | 50 | the server: how long the engine gets to end (and keep its conversation, with `MAYA_GLM_SLOT_KEEP`) after a stop - SIGTERM is handled like Ctrl+C, a second one is ignored; a supervisor's own grace (llama-swap's `unloadTimeout`) should exceed it |
+| `MAYA_ENGINE_QUIT_S` | 50 | the server: how long the engine gets to end (and keep its conversation, with `MAYA_GLM_SLOT_KEEP`) after a stop - SIGTERM and SIGHUP are handled like Ctrl+C, a second one is ignored (a second Ctrl+C ends the server at once); a supervisor's own grace (llama-swap's `unloadTimeout`) should exceed it |
 | `MAYA_ENGINE_WRAP_S` | 40 | the server: on a stop, a request in progress is wrapped up instead of dropped - its thinking is closed at once and it answers for up to this long (then it is cut), so the client gets an answer and the turn ends; requests still queued are refused. Keep it plus the engine's end inside the supervisor's grace (llama-swap's `unloadTimeout`); `0` = cut at once |
 | `MAYA_FAIR_SLICE_S` | 0 (off) | the server: an answer that has been decoding this many seconds while another request waits gives the engine to it and continues afterwards, from where it was (the engine keeps its state with what it wrote: one token is read again). Concurrent chats and an agent's side requests no longer wait for a whole answer (4x RTX 4090, a short question during a 3000-token answer: first token after 34 s -> 13-17 s at 15-20). Each switch sets a conversation aside on disk (0.1-1 s up to 100K tokens on a SATA SSD array), so a slow disk wants a longer slice |
 
@@ -230,11 +230,21 @@ tokens are the same after every restart and with any RAM tier (identical for 26 
 different, equally valid tokens, and so does another build or driver. Measured on one PC; DFlash2, MTP, several GPUs, Linux
 and AMD were not tried.
 
+Drafting itself does not change the tokens: with a drafter loaded, decoding with it (DFlash2, the MTP block) and
+without it (`"strata_tune": {"spec": 1}`) gave the same logits bit for bit - a verify window's rows are what the token
+path computes (one V100, Maya-L, `MAYA_GLM_CPU_LANE=0` and the tiers' moves off, 48 tokens with 8-10 DFlash2 and 46
+MTP verify rows; with penalties too). Loading a drafter does change them: it takes VRAM, so other experts sit in VRAM,
+and the prompt path computes a layer's experts in sets by where they sit - the resident ones in one product, the staged
+ones in groups, the rows summed as each set comes in - which rounds otherwise. With and without DFlash2 loaded the
+tokens parted after 17 of 48. The decode does not depend on where the experts sit: with the prompt read token by token
+(`MAYA_GLM_NO_PREFILL=1`, far slower prompts) both gave the same logits.
+
 ## Repetition penalties
 
 A request's `repeat_penalty` (or `repetition_penalty`), `frequency_penalty` and `presence_penalty` work as in
-llama.cpp, over the last `repeat_last_n` (or `penalty_last_n`) tokens - 64 when the request names no window, at most
-4096 - counted over the prompt's end and then what the answer has written so far. A token among them has its logit
+llama.cpp, over the last `repeat_last_n` (or `penalty_last_n`) tokens - 64 when the request names no window, 0 for no
+penalties at all, -1 for the whole context; at most 4096 tokens are counted, so -1 means the last 4096 on a longer
+context - counted over the prompt's end and then what the answer has written so far. A token among them has its logit
 divided by the repeat penalty (multiplied when the logit is negative), lowered by `frequency_penalty` for each time it
 occurs there and by `presence_penalty` once. A run config's `sampling` block can set them for every request.
 
@@ -242,8 +252,10 @@ GLM applies them on every decode path: greedy requests too (`temperature` 0 pick
 penalties; the loop guard only catches a stretch repeated word for word, a penalty also pushes back on an answer that
 keeps rewording itself), with drafting (MTP, DFlash2: each pick of a verify window counts the tokens before it, the
 drafts among them, so a draft is kept only where it is the penalized pick - drafting does not change what is
-penalized) and with several requests at once. A repeat penalty of 1 and frequency and presence penalties of 0 are off:
-such a request decodes exactly as one without them.
+penalized) and with several requests at once. DeepSeek-V4.1 applies them the same way, its DSpark drafts' verify
+included (a sampled request's drafts are then kept by the speculative-sampling rule over the penalized distribution). A
+repeat penalty of 1 and frequency and presence penalties of 0 are off: such a request decodes exactly as one without
+them.
 
 ## Several requests at once
 
@@ -339,6 +351,29 @@ stays only when it is more than 5% faster. It takes 5-20 minutes and shows each 
 the config (`installer.speed_calibration`); `./maya.sh --speed-calibration` measures again (new GPUs, more RAM), and
 `--draft dflash2 --no-speed-calibration` keeps DFlash2 without measuring.
 
+## DeepSeek: the PCIe lane
+
+While answering, a token's routed experts that VRAM does not hold were all computed on the CPU (the CPU lane). Now,
+as for GLM, some of them can go to the GPU instead: read into pinned memory, copied into a few staging slots on the
+GPU and computed there, while the CPU computes the rest - so both finish together. How many is decided for every token
+from this PC's own measured times: the CPU's time for an expert of the layer's format, the time to read and copy one
+to the GPU, the GPU's own time, and whether the experts are in RAM or must come from the SSD. A PC with a strong GPU
+link and a weaker CPU streams more; a fast CPU with a slow link streams little or nothing (its GPUs then keep their
+slots for experts). Each GPU streams its own layers' experts over its own link; an integrated GPU (Strix Halo) reads
+them from pinned memory where they lie when that measured faster. The times are measured at the first start and kept
+in `lane-times.txt` beside the model's pack; later starts check them in a few milliseconds, and decode times both lanes
+again under load. Both lanes share the PC's memory, SSD and cores, so while answering the first tokens it also checks
+that streaming really is faster here, taking turns with the CPU lane alone (separately for tokens whose experts are all
+in RAM and tokens that read some from the SSD); where it is not at least 3% faster, it stops streaming and the times
+file keeps that verdict. It applies while answering (one token at a time), not while reading the prompt.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `MAYA_DS4_STREAM` | on (1) | `0`: every expert VRAM does not hold on the CPU, as before |
+
+The engine's decode summary (`streamed to the GPU: N`) and the `pcie=` key of its STAT lines (experts a token
+streamed) show it at work; the start's log prints each format's times and how many of a token's experts it streams.
+
 ## DeepSeek: skipping light experts the SSD would read (experimental)
 
 When DeepSeek-V4.1-Flash's experts do not fit in VRAM and RAM, a token waits for the SSD to read the experts it was
@@ -350,8 +385,35 @@ default and is experimental. It applies while answering (and to a draft's check)
 | --- | --- | --- |
 | `MAYA_DS4_DISK_SKIP_W` | off (0) | leave out a routed expert below this share of its token's route weights when its pages are not in RAM (the page cache or the RAM tier; on Windows: sampled pages of the engine's working set). The weight it carried is lost. `0.10` changes the answers less, `0.14` leaves out more |
 | `MAYA_DS4_DISK_SKIP_FROM` | 0 | the first layer it applies to |
+| `MAYA_DS4_DISK_SKIP_AUTO` | 0 | `1` (with `MAYA_DS4_DISK_SKIP_W`): skip only while the model is cold, so warm answers are the unmodified model's. It starts on after a start, and switches off - in the middle of an answer too - once the share of experts read from the SSD stops falling (a level that depends on the PC), or after `MAYA_DS4_DISK_SKIP_BUDGET` (512) tokens. It switches on again only between requests, never during an answer and never just because a conversation moves to a new topic: when most of the experts the last answer left in RAM are gone (an idle while other programs took the RAM) |
 
 It helps where answering waits on the SSD - a PC whose RAM holds only part of the experts, most on a first answer
-about a topic - and does nothing where the experts sit in VRAM and RAM. Where the RAM cannot hold the experts a
-conversation uses, it keeps skipping on later answers too. The engine's decode summary (`decode left out ...`) and
-the `skipped=` key of its STAT lines show how many experts a token went without.
+about a topic - and does nothing where the experts sit in VRAM and RAM. Without `MAYA_DS4_DISK_SKIP_AUTO`, where the
+RAM cannot hold the experts a conversation uses, it keeps skipping on later answers too. The engine's decode summary
+(`decode left out ...`, `DISK_SKIP auto: ...`) and the `skipped=` / `skip_on=` keys of its STAT lines show what it
+did.
+
+## DeepSeek: the CPU lane's threads
+
+DeepSeek's engine computes the routed experts that are not in VRAM on the CPU (the CPU lane), a thread per physical
+core; a core's second thread (SMT) is left to the disk and Engram readers. Where the PC offers another way - the
+performance cores alone on a hybrid CPU (Intel's P- and E-cores), the first socket's cores alone on two sockets or
+more (the experts read in place) - a start times each, once the experts are placed, on the same calls a decode step
+makes (several rounds, in turns), and keeps another way only when it is more than 5% faster. The choice never changes
+an answer, only the speed; the log says what was measured (`ds4: CPU lane: node, 22 threads (measured, ...)`). It
+needs at least 8 experts of one layer on the lane (otherwise the lane hardly runs). Only the CPUs the engine may run
+on are used (`taskset`, a container's cpuset).
+
+| Setting | Default | |
+| --- | --- | --- |
+| `--cpu-threads N` (the config's engine `args`) | a thread per core | at most N threads, a thread per core; nothing is measured |
+| `MAYA_DS4_CPU_LANE` | measured | `cores`, `pcores`, `node` or `smt` (a thread per logical CPU): that way, nothing is measured |
+
+## DeepSeek: the starting expert profile
+
+The engine keeps how often each expert was routed in `<pack>/expert-profile.bin`: at a start the most-routed experts
+go into VRAM and are read ahead into RAM first, and the counts grow with every answer (saved after each one). A new
+pack has no counts yet, so the setup copies `data/expert-profile-ds4.bin` into it - DeepSeek's routing over a mix of
+chat, code, multilingual text, reasoning and tool calls (`tools/ds4/profile.py`). Its counts weigh as much as about
+2,000 tokens of answers, so what your PC routes soon outweighs them. A pack that already has a profile keeps its own;
+an `--expert-profile` in the config's `args` (a file, or `none`) is used instead.

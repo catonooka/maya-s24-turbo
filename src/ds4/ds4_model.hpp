@@ -24,7 +24,9 @@ struct Options {
     std::vector<int> gpus;            // empty: every visible GPU
     int64_t reserve_mib = 600;        // VRAM left free on each GPU
     double vram_experts = 1.0;        // the share of the expert budget to use (tests: less, so the CPU lane works)
-    int cpu_threads = 0;              // 0: the physical cores
+    // the CPU lane's threads: 0 a thread a physical core, or where the host offers it the performance cores or one
+    // NUMA node's cores when measured faster at load; n: at most n, a thread a core
+    int cpu_threads = 0;
     std::string profile;              // expert hit counts (read to place the hottest experts in VRAM, written back)
     bool expert_cache = true;         // experts move between VRAM and the CPU lane as they are used
     // the CPU lane's experts read in place from the model's files, the page cache keeping what fits, instead of
@@ -55,6 +57,7 @@ struct Image {
 struct Stats {
     int64_t tokens = 0;
     int64_t experts = 0, cpu_experts = 0;   // routed experts run, and how many of them on the CPU lane
+    int64_t stream_experts = 0;             // ... and how many of the others streamed to the GPU (the PCIe lane)
     double cpu_ms = 0.0, gpu_wait_ms = 0.0;   // the CPU lane's time; the host's waits for the routing
     double layer_ms = 0.0, head_ms = 0.0, engram_ms = 0.0;   // the layers' host time in all; the head's wait; Engram reads
     int64_t eg_rows = 0, eg_hits = 0, eg_reads = 0;   // Engram rows asked for, served without a read, read from the files
@@ -62,6 +65,9 @@ struct Stats {
     int64_t eg_cached = 0, eg_cache_cap = 0;          // the row cache's rows held, its capacity
     int64_t swaps = 0;                // experts the cache moved into VRAM
     int64_t skipped = 0;              // routed experts STRATA_DS4_DISK_SKIP_W left out (light, not in RAM)
+    int skip_on = -1;                 // DISK_SKIP_AUTO: 1 skipping, 0 off (warm), -1 not in use
+    int64_t skip_switches = 0;        // ... the times it switched
+    double skip_cold = 0.0;           // ... the cold share over its window (while skipping)
     int64_t ram_experts = 0, ram_moves = 0;   // CPU-lane experts read from the RAM tier; experts moved into it
     double prof_ms[6] = {};          // DS4_PROF: the GPU's time in decode by stage (between layers, attention, routing +
     int64_t prof_tokens = 0;         // shared expert, experts' gate / up, the wait for the CPU lane, down + post)
@@ -94,6 +100,10 @@ public:
     bool feed_mark(const int* tokens, int n, int logits_rows, int slot, std::string& err);
     /// The next token from the last feed's last logit row (greedy when temperature <= 0).
     int sample(float temperature, float top_p, int top_k, float min_p, uint64_t seed, uint64_t counter);
+    /// The request's repetition / frequency / presence penalties (llama.cpp's) for every pick after this - sample() and
+    /// verify() alike: over the last `last_n` tokens the state has consumed (at most 4096; a verify window's row counts
+    /// the drafts before it).  last_n 0 (or every penalty neutral): none, the picks exactly as without.
+    void set_penalties(int last_n, float repeat, float freq, float present);
     /// The last feed's logit rows on the host (rows x vocab floats).
     bool logits(std::vector<float>& out);
 
@@ -115,6 +125,8 @@ public:
     int feed_unit() const;
     /// Called from feed() while a run of chunks goes through the layers, with the tokens done so far.
     void set_progress(std::function<void(int64_t)> f);
+    /// A request starts (before its prompt): DISK_SKIP_AUTO may switch back on here, never mid-answer.
+    void begin_request();
     int64_t pos() const;
     int64_t max_context() const;
     int vocab() const;

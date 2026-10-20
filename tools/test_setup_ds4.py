@@ -219,6 +219,28 @@ class Config(unittest.TestCase):
         self.assertEqual(c["installer"]["ds4_quant"], "gguf-q8")
         self.assertEqual(maya.config_family(c), "deepseek")
 
+    def test_hip_reserve(self):
+        def reserve(gpu, old=None, **kw):
+            (self.root / "maya-ds4-hip.json").unlink(missing_ok=True)   # (a fresh setup, or the one before: `old`)
+            if old is not None:
+                (self.root / "maya-ds4-hip.json").write_text(json.dumps(old))
+            pc = {"backend": "hip", "gpus": [dict(gpu, index=0)]}
+            p = maya.write_config_ds4(args(**kw), pc, {}, Path("/m/G/maya-ds4"), 65536, Path("/models"), Path("/m/G"),
+                                      "maya-s")
+            a = json.loads(p.read_text())["args"]
+            return a[a.index("--reserve-mib") + 1] if "--reserve-mib" in a else None
+        card = {"arch": "gfx1100", "name": "Radeon RX 7900 XTX", "vram_gb": 24}
+        apu = {"arch": "gfx1151", "name": "Radeon 8060S", "vram_gb": 96}
+        self.assertEqual(reserve(card), "3072")                       # (the desktop allocates beside the engine)
+        with patch.object(maya, "WIN", False):
+            self.assertEqual(reserve(apu), "1024")
+        with patch.object(maya, "WIN", True):
+            self.assertEqual(reserve(apu), "3072")
+        self.assertEqual(reserve(card, vram_reserve_mib=500), "500")  # (asked for)
+        self.assertEqual(reserve(card, {"args": ["--reserve-mib", "2000"]}), "2000")   # (kept)
+        p, c = self.write(args())                                     # (NVIDIA: the engine's own 600)
+        self.assertNotIn("--reserve-mib", c["args"])
+
 
 class Gguf(unittest.TestCase):
     def test_manifest_and_urls(self):
@@ -736,6 +758,57 @@ class Start(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--port") + 1], "8099")
         self.assertEqual(info["context"], "65536")
         self.assertNotIn("--expert-profile", json.loads(p.read_text())["args"])   # (GLM's profile is not DeepSeek's)
+
+
+class StartingProfile(unittest.TestCase):
+    """DeepSeek's shipped expert profile: copied into a pack that has none (maya.ds4_seed_profile), and how
+    tools/ds4/profile.py makes it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.pack = self.root / "maya-ds4"
+        self.pack.mkdir()
+        (self.pack / "ds4.txt").write_text("num_hidden_layers 2\nn_routed_experts 4\nnum_experts_per_tok 2\n")
+        self.shipped = self.root / "expert-profile-ds4.bin"
+        self.shipped.write_bytes(bytes(range(32)))
+        self.p = patch.object(maya, "DS4_PROFILE", self.shipped)
+        self.p.start()
+
+    def tearDown(self):
+        self.p.stop()
+        self.tmp.cleanup()
+
+    def cfg(self, *extra):
+        return {"args": ["--pack", str(self.pack), "--max-context", "65536", *extra]}
+
+    def test_seeds_a_pack_without_one(self):
+        self.assertEqual(maya.ds4_seed_profile(self.cfg()), self.pack / "expert-profile.bin")
+        self.assertEqual((self.pack / "expert-profile.bin").read_bytes(), bytes(range(32)))
+
+    def test_leaves_a_learned_one_and_an_explicit_one(self):
+        (self.pack / "expert-profile.bin").write_bytes(b"\1" * 32)
+        self.assertIsNone(maya.ds4_seed_profile(self.cfg()))           # (what this PC learned stays)
+        self.assertEqual((self.pack / "expert-profile.bin").read_bytes(), b"\1" * 32)
+        (self.pack / "expert-profile.bin").unlink()
+        self.assertIsNone(maya.ds4_seed_profile(self.cfg("--expert-profile", "none")))
+        self.assertFalse((self.pack / "expert-profile.bin").exists())
+
+    def test_only_the_packs_geometry(self):
+        self.shipped.write_bytes(bytes(40))
+        self.assertIsNone(maya.ds4_seed_profile(self.cfg()))
+        self.assertFalse((self.pack / "expert-profile.bin").exists())
+
+    def test_make_and_compare(self):
+        import importlib
+        prof = importlib.import_module("ds4.profile")
+        a = [[10, 0, 30, 60], [1, 1, 1, 1]]
+        b = [[1, 0, 3, 6], [0, 0, 0, 4]]
+        out = prof.make([a, b], 2, 4, 2, tokens=100)
+        self.assertEqual(out[0], [20, 0, 60, 120])                     # (equal weights: the same shares; k x tokens)
+        self.assertEqual(sum(out[1]), 200)
+        self.assertEqual(out[1].index(max(out[1])), 3)
+        self.assertEqual(prof.agree(a, b, 2), [1.0, 0.5])
 
 
 if __name__ == "__main__":

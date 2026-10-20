@@ -70,6 +70,11 @@ void set_gate_up(const x3::SetArgs& a, const float* x, int ldx, const int* row_i
                  cudaStream_t s);
 void set_down(const x3::SetArgs& a, const uint16_t* h16, int ldh, float* y, int ldy, cudaStream_t s);
 
+/// (tests) rows of k values (k % 256 == 0, rows k apart) rounded as the CPU lane rounds a low-bit expert's activations
+/// (ggml's Q8_K): q[r][k] int8 and d[r][k / 32] (each 256's scale in its eight 32-blocks) - what the low-bit experts'
+/// kernels take (unless DS4_IQ_Q8K=0)
+void act_q8k(const float* x, int rows, int k, int8_t* q, float* d, cudaStream_t s);
+
 /// Launch failures of these kernels since the process started (each is also printed).
 int launch_errors();
 

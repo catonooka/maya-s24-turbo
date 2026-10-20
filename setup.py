@@ -124,6 +124,51 @@ def out(cmd):
         return ""
 
 
+_JOBS = []     # (Windows) the job objects of end_with_me: open while this process runs, closed by Windows when it ends
+
+
+def end_with_me(proc) -> bool:
+    """Windows: `proc` - and every process it starts (Maya's server: its engine, its vision encoder) - ends when this
+    process ends, however it ends: Task Manager or taskkill /F, the console window closed, a crash.  A job object
+    that kills its processes when its last handle - this process's, never closed here - closes.  Elsewhere nothing
+    to do (POSIX: the server's --parent-pipe).  False when it could not be set up."""
+    if not WIN:
+        return False
+    from ctypes import wintypes
+
+    class Basic(ctypes.Structure):                          # JOBOBJECT_BASIC_LIMIT_INFORMATION
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                    ("SchedulingClass", wintypes.DWORD)]
+
+    class Extended(ctypes.Structure):                       # JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+        _fields_ = [("Basic", Basic), ("Io", ctypes.c_uint64 * 6), ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t)]
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        job =k32.CreateJobObjectW(None, None)
+        if not job:
+            return False
+        info = Extended()
+        info.Basic.LimitFlags = 0x2000                      # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)) or \
+                not k32.AssignProcessToJobObject(job, int(proc._handle)):   # (9: JobObjectExtendedLimitInformation)
+            k32.CloseHandle(job)
+            return False
+        _JOBS.append(job)
+        return True
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+
+
 def done(path: Path) -> bool:
     """A step's finish mark: <path>.done exists (written only after the step completed)."""
     return path.with_name(path.name + ".done").exists()

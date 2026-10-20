@@ -267,7 +267,7 @@ bool Glm5Model::multi_issue(int s, int32_t token, const strata::kernels::Sampler
     }
     // the logits are the tail's shared scratch: the draw goes on the same stream right behind them, before the next
     // sequence's head can write them again
-    if (sp.greedy || sp.temperature <= 0.0f)
+    if ((sp.greedy || sp.temperature <= 0.0f) && sp.penalty_last_n <= 0)   // (penalties: the sampler's greedy pick)
         gf::argmax(tail->sc_ + tail->sc_logits, g.n_vocab, FT->tok, FT->cs);
     else
         tail->pick_tokens(tail->sc_ + tail->sc_logits, 1, sp, nullptr, 0, FT->tok, FT->cs);

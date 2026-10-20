@@ -450,6 +450,11 @@ GLM_ARCHS = ("glm5-next", "glm5next")             # llama.cpp's spelling and uns
 # the expert profile setup passes to every GLM config (tools/make_profile.py --glm):
 # its ranking of every (layer, expert) pair decides each layer's VRAM slots and which experts start there
 PROFILE = ROOT / "data" / "expert-profile-glm.bin"
+# DeepSeek's starting expert profile (tools/ds4/profile.py): a pack without a profile of its own starts from it - the
+# engine reads it to place the most-routed experts in VRAM and read the next ones ahead, then adds this PC's routing to
+# it and saves it in the pack (<pack>/expert-profile.bin); its counts are scaled to a few thousand tokens' worth, so
+# what this PC routes soon outweighs it
+DS4_PROFILE = ROOT / "data" / "expert-profile-ds4.bin"
 PACK_FILES = ("index.txt", "native_experts.txt", "dense.bin", "tokenizer/vocab.json", "tokenizer/merges.txt",
               "tokenizer/token_type.json", "tokenizer/chat_template.jinja")
 
@@ -630,11 +635,22 @@ def hip_unified_memory(g) -> bool:
         re.search(r"Ryzen AI Max|Radeon(?:\s*\(TM\))?\s+80[4-6]\dS", g.get("name", ""), re.I))
 
 
+def hip_reserve_mib(gpus) -> int:
+    """The VRAM (MiB) an engine on these AMD GPUs leaves free on each: the desktop runs on them and allocates after
+    the engine has filled its expert pool - 3072, but 1024 on a Linux APU (its pool is sized from the RAM it shares;
+    Windows draws its desktop from the APU's carve-out too)."""
+    if any(hip_unified_memory(g) for g in gpus) and not WIN:
+        return 1024
+    return 3072
+
+
 def hip_clang(root: Path) -> Path | None:
-    """ROCm's clang++: <root>/llvm/bin (a system ROCm on Linux), <root>/lib/llvm/bin (TheRock's wheels), or <root>/bin
-    (AMD's HIP SDK for Windows)."""
+    """ROCm's clang++: <root>/llvm/bin (a system ROCm on Linux), <root>/lib/llvm/bin (TheRock's wheels),
+    <root>/lib64/rocm/llvm/bin (a distribution's own ROCm packages under /usr, e.g. Fedora's), or <root>/bin (AMD's HIP
+    SDK for Windows)."""
     exe = "clang++.exe" if WIN else "clang++"
-    return next((p for p in (root / "llvm" / "bin" / exe, root / "lib" / "llvm" / "bin" / exe, root / "bin" / exe)
+    return next((p for p in (root / "llvm" / "bin" / exe, root / "lib" / "llvm" / "bin" / exe,
+                             root / "lib64" / "rocm" / "llvm" / "bin" / exe, root / "bin" / exe)
                  if p.exists()), None)
 
 
@@ -796,8 +812,12 @@ def check_hip_pc(a, installed=False) -> dict:
                               key=lambda p: [int(x) for x in re.findall(r"\d+", p.name)])
             if versions:
                 root = versions[-1]
+            elif (Path("/usr/bin/hipcc").exists() and hip_clang(Path("/usr")) is not None):
+                root = Path("/usr")   # a distribution's own ROCm packages (Fedora's: /usr/lib64/rocm/llvm, lib64)
         root = root.resolve()
-        if not (root / "llvm/bin/clang++").exists() or not list((root / "lib").glob("libhipblas.so*")):
+        clang = hip_clang(root)
+        if (clang is None or clang.parent == root / "bin"
+                or not any(list((root / d).glob("libhipblas.so*")) for d in ("lib", "lib64"))):
             fail("ROCm's HIP compiler and hipBLAS are required", "install ROCm 7, or set ROCM_PATH to its root")
         if tool_version(str(root / "bin/hipcc")) < (7, 0):
             fail("Maya's HIP port requires ROCm 7 or newer")
@@ -1503,7 +1523,8 @@ def compile_engine_hip(pc: dict, llama: Path, src: str, soft=False, target: str 
                ROCM_PATH=str(root), HIP_PATH=str(root))
     env["PATH"] = os.pathsep.join([str(bindir), str(clang.parent), env.get("PATH", "")])
     if not WIN:
-        env["LD_LIBRARY_PATH"] = os.pathsep.join([str(root / "lib"), env.get("LD_LIBRARY_PATH", "")]).rstrip(os.pathsep)
+        libs = [str(root / d) for d in ("lib", "lib64") if (root / d).is_dir() and root != Path("/usr")]
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(libs + [env.get("LD_LIBRARY_PATH", "")]).rstrip(os.pathsep)
     # Keep compiler-cache writes inside this project, including when run in a workspace sandbox.
     env.setdefault("CCACHE_DIR", str(BUILD / ".ccache"))
     conf = [cmake]
@@ -1527,6 +1548,8 @@ def compile_engine_hip(pc: dict, llama: Path, src: str, soft=False, target: str 
              f"-DCMAKE_HIP_ARCHITECTURES={';'.join(pc['archs'])}",
              f"-DCMAKE_HIP_COMPILER={clang.as_posix()}", f"-DCMAKE_PREFIX_PATH={root.as_posix()}",
              f"-DSTRATA_GGML_DIR={llama.as_posix()}"]
+    if not WIN and root == Path("/usr"):   # a distribution's ROCm: CMake's HIP check looks for hip-lang under this root
+        conf.append(f"-DCMAKE_HIP_COMPILER_ROCM_ROOT={root.as_posix()}")
     jobs = max(1, min(4, (os.cpu_count() or 4) // 2))
     say("  Compiling Maya for AMD " + ", ".join(pc["archs"]) + " ...")
     if cmake_steps(conf, [cmake, "--build", str(BUILD), "--target", target, "-j", str(jobs)], env,
@@ -2211,7 +2234,7 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vi
         cfg["backend"] = "hip"
         # Leave space for the Linux desktop. The engine sizes its prompt chunk from
         # the available prompt-memory budget; forcing 256 here severely slows HIP.
-        hip_env = {"STRATA_GLM_RESERVE_MB": "3072", "STRATA_GLM_RAM_HEADROOM_GB": "16"}
+        hip_env = {"STRATA_GLM_RESERVE_MB": str(hip_reserve_mib(pc["gpus"])), "STRATA_GLM_RAM_HEADROOM_GB": "16"}
         gpus = pc["gpus"]
         if len(gpus) == 1:
             hip_env["STRATA_GLM_SPLIT"] = "0"   # two or more cards: the engine picks the split (and drafts with MTP)
@@ -2224,7 +2247,7 @@ def write_config(a, pc, meta, pack: Path, quant: str, ctx: int, models: Path, vi
             total_ram, _ = mem_gb()
             if WIN:     # Windows counts the GPU's carve-out apart from its RAM, and its desktop runs on that GPU
                 total_ram += sum(g.get("vram_gb", 0) for g in gpus)
-            hip_env.update({"STRATA_GLM_RESERVE_MB": "3072" if WIN else "1024", "STRATA_GLM_PREFILL_SUB": "1024",
+            hip_env.update({"STRATA_GLM_PREFILL_SUB": "1024",
                             "STRATA_GLM_PREFILL_MB": "6144" if total_ram >= 96 else "4096"})
         elif min(g.get("vram_gb", 0) for g in gpus) >= 20:
             hip_env.update({"STRATA_GLM_PREFILL_SUB": "1024", "STRATA_GLM_PREFILL_MB": "4096"})
@@ -2346,6 +2369,35 @@ def add_profile(cfg: dict) -> bool:
         return False
     args += ["--expert-profile", str(PROFILE)]
     return True
+
+
+def ds4_seed_profile(cfg: dict) -> Path | None:
+    """A DeepSeek config whose pack has no expert profile yet (a fresh setup, or one from before the shipped profile)
+    and that names no other one (--expert-profile): the shipped DS4_PROFILE copied into the pack, where the engine
+    reads it and saves what it learns.  Only a profile of the pack's geometry (its layers x routed experts).  The
+    profile written, or None."""
+    args = cfg.get("args") or []
+    pack = flag_value(args, "--pack")
+    if pack is None or "--expert-profile" in args[:-1] or not DS4_PROFILE.is_file():
+        return None
+    dst = Path(pack) / "expert-profile.bin"
+    if dst.exists():
+        return None
+    geo = {}
+    try:
+        for line in (Path(pack) / "ds4.txt").read_text(encoding="utf-8").splitlines():
+            k, _, v = line.partition(" ")
+            geo[k] = v.strip()
+        want = int(geo["num_hidden_layers"]) * int(geo["n_routed_experts"]) * 4
+    except (OSError, KeyError, ValueError):
+        return None
+    if DS4_PROFILE.stat().st_size != want:
+        return None
+    try:
+        shutil.copyfile(DS4_PROFILE, dst)
+    except OSError:
+        return None
+    return dst
 
 
 def keep_profile(old: list, new: list) -> list:
@@ -2679,6 +2731,8 @@ def server_command(cfg_path: Path, a) -> tuple:
     if add_profile(cfg):                               # a config written before the expert profile (an update)
         cfg_path.write_text(json.dumps(N.env_out(cfg), indent=1), encoding="utf-8")
         ok(f"{cfg_path.name}: starts from the shipped expert profile now (--expert-profile {PROFILE})")
+    if ds4 and ds4_seed_profile(cfg):                  # (DeepSeek's: a pack that has not learned one yet)
+        ok(f"{cfg_path.name}: starts from DeepSeek's shipped expert profile ({DS4_PROFILE.name}, copied into the pack)")
     cfg_path.touch()                                   # the most recently used model
     refresh_engine(cfg)
     if needs_speed_calibration(cfg):                   # a drafter set up without its speed calibration: measured once
@@ -2741,7 +2795,55 @@ def start(cfg_path: Path, a) -> int:
         rc = setup_tui.run(lambda: serve_on_screen(cfg_path, a), maya_version(), None, ME, steps=False)
         return after_server(rc, a)
     cmd, env, _ = server_command(cfg_path, a)
-    return after_server(subprocess.call(cmd, env=env), a)
+    return after_server(run_server(cmd, env=env), a)
+
+
+STOP_WAIT_S = 150   # a stop's longest wait for the server: its request in progress (40 s) and the engine's QUIT (50 s)
+
+
+def run_server(cmd, env=None, wait_s: float = STOP_WAIT_S) -> int:
+    """Maya's server in this terminal until it ends: its exit code.  It ends with this process, however this one
+    ends: its stdin is a pipe from here (--parent-pipe), so when this process ends - Ctrl+C, SIGTERM or SIGHUP (a
+    service manager, `kill`, the terminal closed: KeyboardInterrupt here, stop_signals), a crash, even SIGKILL - the
+    pipe closes and the server stops as on Ctrl+C: the request in progress answers, the engine gets QUIT and keeps its
+    conversation.  On Windows a job object also ends the server and everything it started at once when this process
+    ends without the time for that (setup.end_with_me: the console closed, taskkill /F).  A stop here closes the pipe
+    and waits for the server (up to `wait_s` seconds, then it is ended)."""
+    p = subprocess.Popen(list(cmd) + ["--parent-pipe"], env=env, stdin=subprocess.PIPE)
+    S.end_with_me(p)
+    deadline = None
+    while True:
+        try:
+            return p.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            if deadline is not None and time.monotonic() > deadline:
+                say(f"  (the server did not end within {wait_s:.0f} s of the stop: ended)")
+                p.kill()
+                return p.wait()
+        except KeyboardInterrupt:                      # (the server gets Ctrl+C itself; a signal here: the pipe says it)
+            if deadline is None:
+                deadline = time.monotonic() + wait_s
+                try:
+                    p.stdin.close()
+                except OSError:
+                    pass
+
+
+def stop_signals() -> None:
+    """SIGTERM and SIGHUP (and Windows' SIGBREAK: Ctrl+Break, the console closed) stop maya.py as Ctrl+C does - a
+    KeyboardInterrupt - so a service manager, `kill <pid>` or a closed terminal stop the setup, or the server it runs
+    (run_server), the same way.  A signal that is ignored (nohup) stays ignored."""
+    import signal
+
+    def stop(signum, frame):
+        raise KeyboardInterrupt
+    for name in ("SIGTERM", "SIGHUP", "SIGBREAK"):
+        sig = getattr(signal, name, None)
+        try:
+            if sig is not None and signal.getsignal(sig) is not signal.SIG_IGN:
+                signal.signal(sig, stop)
+        except (OSError, RuntimeError, ValueError):     # (not the main thread: an embedding caller)
+            pass
 
 
 def serve_on_screen(cfg_path: Path, a) -> int:
@@ -3579,6 +3681,11 @@ def write_config_ds4(a, pc: dict, meta: dict, pack: Path, ctx: int, models: Path
     if getattr(a, "vram_reserve_mib", None) is not None:   # given now: written, and a later setup keeps it
         set_arg(args, "--reserve-mib", a.vram_reserve_mib)
         ok(f"VRAM kept free on each GPU: {a.vram_reserve_mib} MiB (--vram-reserve-mib)")
+    elif hip and "--reserve-mib" not in args[:-1]:
+        mib = hip_reserve_mib(pc["gpus"])
+        set_arg(args, "--reserve-mib", mib)
+        ok(f"VRAM kept free on each GPU: {mib} MiB (the desktop and other programs on an AMD GPU allocate beside the "
+           "engine; --vram-reserve-mib changes it)")
     cfg = {"exe": str(DS4_EXE), "args": args, "cwd": str(ROOT), "tokenizer": str(pack / "tokenizer"),
            **({"backend": "hip"} if hip else {}),
            "model_name": DS4_MODEL_NAME, "gpu": [g["index"] for g in pc["gpus"]],
@@ -3604,6 +3711,9 @@ def write_config_ds4(a, pc: dict, meta: dict, pack: Path, ctx: int, models: Path
     cfg_path.write_text(json.dumps(N.env_out(cfg), indent=1), encoding="utf-8")
     ok(f"config: {cfg_path}")
     ok(f"start script: {write_run_script(cfg_path, port)}")
+    if ds4_seed_profile(cfg):
+        ok("expert profile: the pack starts from DeepSeek's shipped one (the most-routed experts placed in VRAM and "
+           "read ahead first); the engine adds what this PC routes to it")
     return cfg_path
 
 
@@ -3680,6 +3790,7 @@ def maya_version() -> str:
 
 def main() -> int:
     N.alias_env(os.environ)   # (MAYA_* settings under the names the code and the engines read, for all it starts)
+    stop_signals()            # (SIGTERM / SIGHUP stop it as Ctrl+C does: the server it runs with it)
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--backend", choices=["cuda", "hip"], help="GPU backend (HIP: experimental gfx1100/gfx1201/gfx1151 on Linux and Windows)")
     ap.add_argument("--setup", action="store_true", help="set up again instead of starting the installed model")

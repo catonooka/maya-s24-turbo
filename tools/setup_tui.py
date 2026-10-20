@@ -109,6 +109,28 @@ class SetupApp(App):
         self.set_interval(0.05, self.drain)
         self.set_interval(0.12, self.tick)
         self.begin_capture_print(self)
+        self.stop_on_signals()
+
+    def stop_on_signals(self) -> None:
+        """SIGTERM / SIGHUP (a service manager, `kill`, the terminal closed) stop the screen as a confirmed Ctrl+C does:
+        the setup's thread ends, Maya's server and its engine end (POSIX; on Windows the server ends with this process:
+        its --parent-pipe and job object).  A signal that is ignored (nohup) stays ignored."""
+        import os
+        import signal
+        if os.name == "nt":
+            return
+        def stop():
+            if not getattr(self, "signalled", False):   # (once: a second SIGINT would end the server at once)
+                self.signalled = True
+                self.stop_answered(True)
+        try:
+            import asyncio
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGTERM, signal.SIGHUP):
+                if signal.getsignal(sig) is not signal.SIG_IGN:
+                    loop.add_signal_handler(sig, stop)
+        except (ImportError, NotImplementedError, RuntimeError, ValueError):
+            pass
         self.bridge.thread = threading.Thread(target=self.work, name="setup", daemon=True)
         self.bridge.thread.start()
 

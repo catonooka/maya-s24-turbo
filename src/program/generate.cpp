@@ -78,6 +78,7 @@
 #include <map>
 #include <mutex>
 #include <charconv>
+#include <climits>
 #include <cmath>
 #include <limits>
 #include <cstdio>
@@ -3391,6 +3392,7 @@ static int glm_pack_generate(const Options& o) {
             if (!std::isfinite(pen_repeat) || pen_repeat <= 0.0f) pen_repeat = 1.0f;
             if (!std::isfinite(pen_freq)) pen_freq = 0.0f;
             if (!std::isfinite(pen_present)) pen_present = 0.0f;
+            if (pen_n < 0) pen_n = INT_MAX;   // -1, llama.cpp's "the whole context": every token the window keeps (4096)
             // as llama.cpp: no window, or every penalty neutral, is no penalty - the request's picks are exactly as
             // without the keys (no history kept, nothing uploaded)
             const bool pen_on = pen_n > 0 && (pen_repeat != 1.0f || pen_freq != 0.0f || pen_present != 0.0f);
@@ -3406,10 +3408,11 @@ static int glm_pack_generate(const Options& o) {
                 std::fflush(stdout);
                 continue;
             }
-            if ((!req_bias.empty() || pen_on) && (rq.greedy || rq.temperature <= 0.0f)) {
-                // greedy with a bias or penalties: the sampled path's top_k = 1 is the same argmax (ties to the lower
-                // id) over the biased, penalized logits - the greedy shortcuts (the argmax at the end of a forward, the
-                // windows' argmax) read the plain ones
+            if (!req_bias.empty() && (rq.greedy || rq.temperature <= 0.0f)) {
+                // greedy with a bias: the sampled path's top_k = 1 is the same argmax (ties to the lower id) over the
+                // biased logits - the greedy shortcuts (the argmax at the end of a forward, the windows' argmax) read
+                // the unbiased ones.  (Greedy with penalties stays greedy: every shortcut leaves a request with
+                // penalties to the sampler, whose greedy kernel counts them - the same pick, ~75 us less a token)
                 rq.greedy = false;
                 rq.temperature = 1.0f;
                 rq.top_k = 1;
@@ -3555,6 +3558,7 @@ int main(int argc, char** argv) {
             if (i + 1 >= argc) { std::fprintf(stderr, "%s needs a value\n", what); std::exit(2); }
             return argv[++i];
         };
+        bool handled = true;
         if (a == "--help" || a == "-h") { usage(); return 0; }
         else if (a == "--pack") o.pack = next("--pack");
         else if (a == "--glm-pack") o.glm_pack = next("--glm-pack");
@@ -3658,7 +3662,9 @@ int main(int argc, char** argv) {
             const std::string v = next("--expert-cache");
             o.expert_cache = (v == "auto") ? -1 : std::atoi(v.c_str());
         }
-        else if (a == "--expert-cache-device1") o.expert_cache_remote[0] = std::atoi(next("--expert-cache-device1"));
+        else handled = false;
+        if (!handled) {   // (a second chain: MSVC stops an if-else chain this long, C1061 "blocks nested too deeply")
+        if (a == "--expert-cache-device1") o.expert_cache_remote[0] = std::atoi(next("--expert-cache-device1"));
         else if (a == "--expert-cache-device2") o.expert_cache_remote[1] = std::atoi(next("--expert-cache-device2"));
         else if (a == "--expert-cache-device3") o.expert_cache_remote[2] = std::atoi(next("--expert-cache-device3"));
         else if (a == "--expert-cache-remote-placement")
@@ -3771,6 +3777,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "unknown argument: %s\n", a.c_str());
             usage();
             return 2;
+        }
         }
     }
     // ---- the glm5-next pack path (M3.1): BEFORE every qwen4exp-shaped check below (this driver's
@@ -6657,7 +6664,8 @@ int main(int argc, char** argv) {
             req_sp.seed = req_seed ? req_seed
                                    : (unsigned long long) std::chrono::steady_clock::now().time_since_epoch().count();
             req_sp.min_p = std::clamp(req_min_p, 0.0f, 1.0f);
-            req_sp.penalty_last_n = std::max(req_penalty_last_n, 0);
+            // (-1, llama.cpp's "the whole context": the history buffer's whole window, kPenaltyWindowCap)
+            req_sp.penalty_last_n = req_penalty_last_n < 0 ? INT_MAX : req_penalty_last_n;
             req_sp.penalty_repeat = req_penalty_repeat;
             req_sp.penalty_freq = req_penalty_freq;
             req_sp.penalty_present = req_penalty_present;

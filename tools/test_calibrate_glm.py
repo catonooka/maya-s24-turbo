@@ -142,6 +142,29 @@ class ReadChunks(unittest.TestCase):
         self.assertEqual(res["settings"], {})
         self.assertEqual(set(eng.chunks), {8})
 
+    def test_the_configs_own_values_stay_unless_beaten(self):
+        # #277: share 0.10 and 4 pieces are faster only together - each alone is noise, so the sweeps keep the
+        # engine's own; the config's own pair, confirmed as one against that, stays
+        eng = DiskEngine(lambda s, t, c: 20.0 * (1.14 if abs(s - 0.1) < 1e-9 and c == 4 else 1.0))
+        kept = {CAL.SHARE_ENV: "0.10", CAL.CHUNKS_ENV: "4"}
+        res = CAL.measure({"env": {}}, [[1, 2, 3]] * 3, lambda c: eng, say=lambda *a: None, extra_threads=(),
+                          kept=kept)
+        self.assertEqual(res["settings"], kept)
+        self.assertAlmostEqual(res["report"]["tok_s"], 22.8, places=1)
+
+    def test_the_configs_own_values_go_when_clearly_slower(self):
+        # the config's 12 threads cost 20% here: the engine's own wins by more than MIN_GAIN and replaces them
+        eng = FakeEngine(lambda s, t: 20.0 * (0.8 if t == 12 else 1.0))
+        res = CAL.measure({"env": {}}, [[1, 2, 3]] * 3, lambda c: eng, say=lambda *a: None, extra_threads=(),
+                          kept={CAL.THREADS_ENV: "12"})
+        self.assertEqual(res["settings"], {})
+        self.assertIn("kept_confirm", res["report"])
+
+    def test_incumbent(self):
+        self.assertIsNone(CAL.incumbent({}))
+        self.assertIsNone(CAL.incumbent({CAL.SHARE_ENV: "x"}))
+        self.assertEqual(CAL.incumbent({CAL.SHARE_ENV: "0.10", CAL.CHUNKS_ENV: "4"}), (0.1, None, 4))
+
     def test_reads_disk(self):
         self.assertTrue(CAL.reads_disk({"experts": 12384, "vram_slots": 3000, "ram_slots": 5000}))
         self.assertFalse(CAL.reads_disk({"experts": 12384, "vram_slots": 7000, "ram_slots": 6000}))

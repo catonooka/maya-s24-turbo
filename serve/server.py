@@ -99,8 +99,9 @@ IMAGE_PAD = "<|image_pad|>"
 VISION_START = "<|vision_start|>"
 CTX_SLACK = 8               # `strata --serve` rejects prompt + max_new + 8 > context: keep the same margin here
 # The live tok/s is a rate over a window, not a mean since the first token: a mean reads ~1/elapsed at the first
-# token (the Monitor showed five-digit numbers) and then undershoots for the first second of every answer.
-RATE_WINDOW_S = 2.0
+# token (the Monitor showed five-digit numbers) and then undershoots for the first second of every answer.  5 s: drafted
+# tokens come in bursts of 1-4 a step, and over 2 s the rate swung +-25% around the engine's steady one
+RATE_WINDOW_S = 5.0
 RATE_MIN_SPAN_S = 0.25      # younger than this there is no rate yet: the mean so far, with the span floored here
 
 
@@ -254,6 +255,10 @@ def client_stop_strings(req: dict | None) -> list[str]:
     return [x for x in s if isinstance(x, str) and x][:16] if isinstance(s, list) else []
 
 
+# the penalties' window at most: what the engines count (GLM's and DeepSeek's samplers keep the last 4096 tokens) -
+# a request's penalty_last_n / repeat_last_n of -1 (llama.cpp's "the whole context") asks for this
+PENALTY_WINDOW_MAX = 4096
+
 # a request's sampling fields and their JSON type (True: an integer); llama.cpp's names for two of them
 SAMPLING_TYPES = (("temperature", False), ("top_p", False), ("min_p", False), ("presence_penalty", False),
                   ("frequency_penalty", False), ("repetition_penalty", False), ("top_k", True),
@@ -266,19 +271,21 @@ def check_request_sampling(req: dict) -> None:
     type ("temperature": "warm", "top_k": 40.5, "seed": true) is refused - before, it replaced the configured default
     and the engine line left it out, so the answer was silently greedy.  Ranges behave as before (a temperature <= 0 is
     greedy, top_k 0 or above 64 the widest list, a seed <= 0 none) and an absent or null field is not checked.
-    llama.cpp's repeat_penalty / repeat_last_n are taken as repetition_penalty / penalty_last_n (those win)."""
+    llama.cpp's repeat_penalty / repeat_last_n are taken as repetition_penalty / penalty_last_n (those win); the window
+    means what it means there (penalty_keys): 0 = no penalties, -1 = the whole context, below -1 refused."""
     if not isinstance(req, dict):
         return
     if req.get("repeat_penalty") is not None and req.get("repetition_penalty") is None:
         req["repetition_penalty"] = req["repeat_penalty"]
-    rl = req.get("repeat_last_n")
-    if req.get("penalty_last_n") is None and isinstance(rl, int) and not isinstance(rl, bool) and rl > 0:
-        req["penalty_last_n"] = rl      # 0 and -1 (off / the whole context) keep the engine's default window
+    window_key = "penalty_last_n"
+    if req.get("penalty_last_n") is None and req.get("repeat_last_n") is not None:
+        req["penalty_last_n"] = req["repeat_last_n"]
+        window_key = "repeat_last_n"
     for key, integer in SAMPLING_TYPES:
         value = req.get(key)
         if value is None:
             continue
-        what = f"{key}: {'an integer' if integer else 'a number'}"
+        what = f"{window_key if key == 'penalty_last_n' else key}: {'an integer' if integer else 'a number'}"
         if isinstance(value, str) and value.strip():
             try:
                 num = float(value)
@@ -295,6 +302,8 @@ def check_request_sampling(req: dict) -> None:
             req[key] = value = num
         if isinstance(value, bool) or not isinstance(value, int if integer else (int, float)):
             raise ValueError(what)
+    if isinstance(req.get("penalty_last_n"), int) and req["penalty_last_n"] < -1:
+        raise ValueError(f"{window_key}: -1 (the whole context), 0 (no penalties) or a positive number of tokens")
 
 
 def logit_bias_of(value, vocab_size: int | None = None) -> dict[int, float]:
@@ -726,8 +735,12 @@ class StrataEngine:
     def penalty_keys(sampling: dict) -> str:
         """The repetition / frequency / presence penalties (llama.cpp's repeat_penalty and repeat_last_n are read as
         repetition_penalty and penalty_last_n): only the ones that change something, and their window with them.  ""
-        when none does - the GEN line is then the one it was without them."""
+        when none does - the GEN line is then the one it was without them.  The window as llama.cpp's: none given = the
+        last 64 tokens, 0 = no penalties, -1 = the whole context - the engines count at most PENALTY_WINDOW_MAX."""
         keys = ""
+        pln = sampling.get("penalty_last_n")
+        if isinstance(pln, int) and not isinstance(pln, bool) and pln == 0:
+            return keys
         rp = sampling.get("repetition_penalty")
         rp_on = isinstance(rp, (int, float)) and float(rp) != 1.0
         pf = sampling.get("frequency_penalty")
@@ -742,9 +755,10 @@ class StrataEngine:
             keys += f" penalty_present={float(pp)!r}"
         if rp_on or pf_on or pp_on:
             # a penalty without a window counts over nothing: the engine's default is the last 64 tokens
-            pln = sampling.get("penalty_last_n")
             if isinstance(pln, int) and not isinstance(pln, bool) and pln > 0:
                 keys += f" penalty_last_n={pln}"
+            elif pln == -1 and not isinstance(pln, bool):
+                keys += f" penalty_last_n={PENALTY_WINDOW_MAX}"
             else:
                 keys += " penalty_last_n=64"
         return keys
@@ -1332,7 +1346,9 @@ class Service:
         self.cors_origins: list[str] = []
         self.status = {"busy": False, "queued": 0}      # GET /status: what the model is doing right now
         self.active = 0                                 # requests with the engine now (several: READY multi=<n>)
-        self.rate = collections.deque(maxlen=32)        # (time, generated) samples for the live tok/s window
+        # (time, generated) samples for the live tok/s window: enough for all of RATE_WINDOW_S at any speed (32 held
+        # well under a second at 40 tok/s, and the rate then followed the last few bursts of drafted tokens)
+        self.rate = collections.deque(maxlen=4096)
         self.history = collections.deque(maxlen=500)    # the last finished requests, newest last (GET /metrics)
         # since the server started (the Monitor's totals, issue #35)
         self.totals = {"since": time.time(), "requests": 0, "prompt_tokens": 0, "reused": 0, "output_tokens": 0,
@@ -3711,8 +3727,9 @@ def sampling_defaults_from_config(cfg: dict) -> dict:
                 raise SystemExit(f"[maya] config sampling.repetition_penalty={value!r}: expected a number > 0 (1 = off)")
             out[key] = float(value)
         elif key == "penalty_last_n":
-            if not number or value != int(value) or value < 0:
-                raise SystemExit(f"[maya] config sampling.penalty_last_n={value!r}: expected a non-negative integer")
+            if not number or value != int(value) or value < -1:
+                raise SystemExit(f"[maya] config sampling.penalty_last_n={value!r}: expected an integer >= -1 (0 = no "
+                                 "penalties, -1 = the whole context)")
             out[key] = int(value)
         elif key == "seed":
             if not number or value != int(value) or value <= 0:
@@ -3726,6 +3743,62 @@ def sampling_defaults_from_config(cfg: dict) -> dict:
         else:
             print(f"[maya] config sampling.{key}={value!r}: unknown key, ignored", flush=True)
     return out
+
+
+def request_stop(stop: threading.Event, why: str) -> None:
+    """The server's stop, once: main() wraps up the request in progress and ends the engine."""
+    if not stop.is_set():
+        stop.set()
+        print(f"[maya] stopping ({why}): the engine ends", flush=True)
+
+
+def stop_signals(stop: threading.Event) -> None:
+    """SIGTERM, SIGINT (Ctrl+C), SIGHUP (the terminal closed) and Windows' SIGBREAK (Ctrl+Break) stop the server
+    (request_stop).  A later one is ignored while it stops - but a second Ctrl+C raises KeyboardInterrupt: at once.  A
+    signal that is ignored (nohup) stays ignored."""
+    import signal
+
+    def on(signum, frame):
+        if stop.is_set():
+            if signum == signal.SIGINT:
+                raise KeyboardInterrupt
+            return
+        request_stop(stop, signal.Signals(signum).name)
+    for name in ("SIGTERM", "SIGINT", "SIGHUP", "SIGBREAK"):
+        sig = getattr(signal, name, None)
+        try:
+            if sig is not None and signal.getsignal(sig) is not signal.SIG_IGN:
+                signal.signal(sig, on)
+        except (OSError, RuntimeError, ValueError):
+            pass
+
+
+def watch_parent(stop, stdin=None, getppid=None, poll: float = 1.0) -> None:
+    """--parent-pipe: stdin is a pipe from the program that started the server (maya.py), which writes nothing and
+    holds it open while it runs.  Its end - however that program ended: a crash, SIGKILL, Task Manager - closes it,
+    and the EOF stops the server (`stop(why)`) as Ctrl+C does.  On POSIX a new parent process does too (the parent
+    ended and init or a subreaper took the server).  Both watch from threads of their own."""
+    src = stdin if stdin is not None else getattr(sys.stdin, "buffer", None)
+
+    def eof():
+        try:
+            while src.read(1 << 12):
+                pass
+        except (OSError, ValueError):
+            pass
+        stop("the program that started it ended")
+    if src is not None:
+        threading.Thread(target=eof, name="parent-pipe", daemon=True).start()
+    if os.name == "nt" and getppid is None:
+        return
+    getppid = getppid or os.getppid
+    first = getppid()
+
+    def orphan():
+        while getppid() == first:
+            time.sleep(poll)
+        stop("its parent process ended")
+    threading.Thread(target=orphan, name="parent-pid", daemon=True).start()
 
 
 def main() -> int:
@@ -3758,6 +3831,10 @@ def main() -> int:
     ap.add_argument("--mcp-config", help="a JSON file with MCP servers in Claude Desktop's format ({\"mcpServers\": "
                                          "{...}}); the web app's chat can use their tools (also \"mcp_servers\" in "
                                          "the config)")
+    ap.add_argument("--parent-pipe", action="store_true",
+                    help="stdin is a pipe from the program that started this server (maya.py), open while it runs: "
+                         "when it closes - that program ended, however it ended - the server stops as on Ctrl+C "
+                         "(on Linux also when its parent process ends)")
     a = ap.parse_args()
     maya_names.alias_env(os.environ)   # (MAYA_* settings under the names the code and the engine read)
     cfg = maya_names.env_in(json.loads(Path(a.config).read_text(encoding="utf-8-sig"))) if a.config else {}   # (a BOM: Notepad)
@@ -3933,27 +4010,21 @@ def main() -> int:
     if a.open:
         import webbrowser
         webbrowser.open(f"http://{'127.0.0.1' if a.host in ('0.0.0.0', '') else a.host}:{a.port}/")
-    # SIGTERM (llama-swap's cmdStop, systemd) ends the server as Ctrl+C does: the engine gets QUIT and time to keep its
-    # conversation.  A second SIGTERM while that runs (systemd signals the whole group, then the supervisor again) is
-    # ignored instead of cutting it short.
+    # SIGTERM (llama-swap's cmdStop, systemd), SIGHUP (the terminal closed), Ctrl+C, Windows' Ctrl+Break and - with
+    # --parent-pipe - the end of maya.py (watch_parent) end the server alike: the engine gets QUIT and time to keep its
+    # conversation.  A second signal while that runs (systemd signals the whole group, then the supervisor again) is
+    # ignored instead of cutting it short - except a second Ctrl+C, which ends the server at once (the engine then ends
+    # when its input closes).
     stop = threading.Event()
-
-    def on_term(signum, frame):
-        if stop.is_set():
-            return
-        stop.set()
-        print("[maya] stopping: the engine ends", flush=True)
-        raise KeyboardInterrupt
-
-    if os.name != "nt":
-        import signal
-        signal.signal(signal.SIGTERM, on_term)
+    stop_signals(stop)
+    if a.parent_pipe:
+        watch_parent(lambda why: request_stop(stop, why))
     try:
-        threading.Event().wait()
+        while not stop.wait(0.5):                      # (a timed wait: signal handlers run on Windows too)
+            pass
     except KeyboardInterrupt:
-        stop.set()
-        if os.name != "nt":
-            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        request_stop(stop, "Ctrl+C")
+    try:
         httpd.shutdown()
         # a request in progress is wrapped up, not dropped: its thinking is closed and it answers, for up to
         # STRATA_ENGINE_WRAP_S seconds (40), so the client still gets an answer and the turn ends; past that it is cut.
@@ -3980,6 +4051,9 @@ def main() -> int:
             vision.close()
         if hub is not None:
             hub.close()
+    except KeyboardInterrupt:                          # a second Ctrl+C: at once
+        print("[maya] stopped at once: the engine ends as its input closes", flush=True)
+        return 130
     return 0
 
 

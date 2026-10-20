@@ -124,7 +124,7 @@ class RestartAfterUpdate(unittest.TestCase):
                            % ((d / "strata").as_posix(), (d / "tok").as_posix(), (d / "pack").as_posix()))
             a = SimpleNamespace(port=8090, host=None, api_key=None, gpu=None, gpus="0,1", backend="cuda")
             with patch.object(maya, "refresh_engine") as refresh, patch.object(maya, "say"), \
-                    patch.object(maya, "setup_screen", return_value=False),                     patch.object(maya.sys, "argv", list(argv)),                     patch.object(maya.subprocess, "call", return_value=rc) as call,                     patch.object(maya.os, "execv") as execv, patch.object(maya, "WIN", False):
+                    patch.object(maya, "setup_screen", return_value=False),                     patch.object(maya.sys, "argv", list(argv)),                     patch.object(maya, "run_server", return_value=rc) as call,                     patch.object(maya.os, "execv") as execv, patch.object(maya, "WIN", False):
                 out = maya.start(cfg, a)
             return out, call, execv, refresh
 

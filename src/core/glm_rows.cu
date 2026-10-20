@@ -458,7 +458,7 @@ bool Glm5Model::rows_head(const RowSeq* rw, const strata::kernels::SamplerParams
     if (!mv(&o, 1, "output head")) return false;
     for (int i = 0; i < n; ++i) {
         const float* lg = rows(S->logits, g.n_vocab, i);
-        if (sps[i].greedy || sps[i].temperature <= 0.0f)
+        if ((sps[i].greedy || sps[i].temperature <= 0.0f) && sps[i].penalty_last_n <= 0)
             gf::argmax(lg, g.n_vocab, S->tok + i, s);
         else
             pick_tokens(lg, 1, sps[i], nullptr, 0, S->tok + i, s);

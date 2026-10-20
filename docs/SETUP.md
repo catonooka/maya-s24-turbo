@@ -65,7 +65,9 @@ GLM-5.3-Flash's first run takes 20-40 minutes plus the download:
 
 **Next time**, just run `./setup.sh` again (or the model's `./run-maya-<model>.sh`): it starts right away, nothing is
 downloaded twice, on the same screen - its dashboard shows the Monitor's numbers (the speed, where the experts live, the
-GPUs, the requests), Tab its log. Ctrl+C stops it.
+GPUs, the requests), Tab its log. Ctrl+C stops it - and so does any other way of ending `maya.py`: `kill`, a
+service manager, closing the terminal or the window, even a crash: the server and the engine end with it (the
+engine keeps its conversation where there is time for that).
 
 **Updating:** the dashboard's **About** says when a new version is out, and its **Update** button does it: Maya
 downloads the new code (git), compiles only the engine files that changed and loads the same model again - the model

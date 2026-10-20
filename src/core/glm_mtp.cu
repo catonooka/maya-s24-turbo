@@ -549,7 +549,7 @@ bool Glm5Model::decode_mtp(strata::kernels::SamplerParams& sp, int64_t max_new, 
     static const bool trace = getenv("STRATA_GLM_MTP_TRACE") != nullptr;
     // the first token: the prompt's last forward left its logits (and greedy argmax)
     int y = -1;
-    if (sp.greedy && last_tok_ >= 0) {
+    if (sp.greedy && sp.penalty_last_n <= 0 && last_tok_ >= 0) {   // (penalties: picked through the sampler)
         y = last_tok_;
     } else {
         y = fast_sample(sp, err);
@@ -653,7 +653,7 @@ bool Glm5Model::decode_mtp(strata::kernels::SamplerParams& sp, int64_t max_new, 
                 break;
             }
             int y2 = -1;
-            if (sp.greedy) {
+            if (sp.greedy && sp.penalty_last_n <= 0) {
                 y2 = last_tok_;
             } else {
                 y2 = fast_sample(sp, err);

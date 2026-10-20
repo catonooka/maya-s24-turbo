@@ -58,6 +58,7 @@
 #endif
 #include <windows.h>
 #include <psapi.h>
+#include "strata/platform/commit.hpp"
 #if defined(STRATA_USE_HIP)
 #include <dxgi.h>
 #endif
@@ -5827,7 +5828,8 @@ void Glm5Model::pool_check(size_t floor_b, size_t slot_b, size_t all_b) {
         MEMORYSTATUSEX ms{};
         ms.dwLength = sizeof ms;
         if (GlobalMemoryStatusEx(&ms)) {
-            size_t can = (size_t) ms.ullAvailPageFile;
+            // (+ what a page file Windows manages may still grow by: commit_growth)
+            size_t can = (size_t) ms.ullAvailPageFile + (size_t) strata::platform::commit_growth(ms.ullTotalPhys);
             if (const char* v = getenv("STRATA_GLM_COMMIT_CAP_GB")) can = std::min(can, (size_t) (std::atof(v) * 1e9));
             const PoolBudget b2 = part_budget(free_b, total_b, floor_b, slot_b);   // (the dedicated cap's included)
             const auto cap = glmfast::commit_pool_cap(b2.avail, floor_b, all_b, can, (size_t) ms.ullTotalPhys);
@@ -6304,7 +6306,7 @@ bool Glm5Model::decode_spec(strata::kernels::SamplerParams& sp, int64_t max_new,
     bool have_draft = false;   // the verify needs a draft drawn for its position: none before the first one
     // the tail's token for its last position: the argmax it left, or a sample from its logits
     const auto take = [&](int& y) -> bool {
-        if (sp.greedy) {
+        if (sp.greedy && sp.penalty_last_n <= 0) {   // (the tail's argmax; penalties: picked through the sampler)
             cudaSetDevice(TL->dev_);
             if (!glmfast::wait_event(TL->fast_->ev_done, "glm spec token", err)) return false;
             y = TL->fast_->tok_h[0];
@@ -6338,7 +6340,7 @@ bool Glm5Model::decode_spec(strata::kernels::SamplerParams& sp, int64_t max_new,
     // the prompt's last forward left position q = pos_ - 1 processed by both halves and its logits on the tail
     int64_t q = pos_ - 1;
     int y = -1;
-    if (sp.greedy && last_tok_ >= 0) {
+    if (sp.greedy && sp.penalty_last_n <= 0 && last_tok_ >= 0) {
         y = forced(last_tok_);
         sp.counter += 1;
     } else {

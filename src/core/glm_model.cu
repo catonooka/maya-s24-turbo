@@ -1024,7 +1024,8 @@ const float* Glm5Model::logit_bias_table(int slot, const std::vector<std::pair<i
 
 int Glm5Model::sample_token(strata::kernels::SamplerParams& sp, std::string& err) {
     // the fast path already ran the greedy argmax on the device at the end of the forward (an unbiased one)
-    if (fast_ != nullptr && sp.greedy && sp.logit_bias == nullptr && last_tok_ >= 0) return last_tok_;
+    if (fast_ != nullptr && sp.greedy && sp.logit_bias == nullptr && sp.penalty_last_n <= 0 && last_tok_ >= 0)
+        return last_tok_;
     Glm5Model* tail = this;
     while (tail->split_next_) tail = tail->split_next_.get();
     if (tail->d_tok_ == nullptr) {

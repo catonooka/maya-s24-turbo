@@ -520,6 +520,15 @@ class SamplingKeys(unittest.TestCase):
         self.assertIn("penalty_last_n=4096", self.keys(repetition_penalty=1.1, penalty_last_n=4096))
         self.assertFalse([k for k in self.keys(temperature=0.7) if k.startswith("penalty")])
 
+    def test_penalty_window_llama_cpp(self):
+        # the window as llama.cpp's repeat_last_n: 0 = no penalties, -1 = the whole context (the engines' window at most)
+        self.assertFalse([k for k in self.keys(temperature=0.7, repetition_penalty=1.3, penalty_last_n=0)
+                          if k.startswith("penalty")])
+        self.assertEqual(StrataEngine.sampling_keys({"temperature": 0, "repetition_penalty": 1.3, "penalty_last_n": 0}),
+                         " temperature=0")
+        self.assertIn("penalty_last_n=4096", self.keys(temperature=0, repetition_penalty=1.3, penalty_last_n=-1))
+        self.assertIn("penalty_last_n=64", self.keys(temperature=0, repetition_penalty=1.3))
+
     def test_penalties_greedy(self):
         # #273: a greedy request keeps its penalties (they used to be dropped with every other sampler key there)
         k = self.keys(temperature=0, repetition_penalty=1.3, penalty_last_n=128, frequency_penalty=0.5)
@@ -574,7 +583,18 @@ class RequestChecks(unittest.TestCase):
         req = {"repeat_penalty": 1.1, "repetition_penalty": 1.3, "repeat_last_n": -1}
         check_request_sampling(req)
         self.assertEqual(req["repetition_penalty"], 1.3)
-        self.assertNotIn("penalty_last_n", req)
+        self.assertEqual(req["penalty_last_n"], -1)          # the whole context (penalty_keys: the engines' window)
+        req = {"repeat_last_n": "0", "penalty_last_n": 32}
+        check_request_sampling(req)
+        self.assertEqual(req["penalty_last_n"], 32)          # penalty_last_n wins
+        req = {"repeat_last_n": "0"}
+        check_request_sampling(req)
+        self.assertEqual(req["penalty_last_n"], 0)           # no penalties
+        for bad, field in (({"repeat_last_n": -2}, "repeat_last_n"), ({"penalty_last_n": -5}, "penalty_last_n"),
+                           ({"repeat_last_n": 1.5}, "repeat_last_n")):
+            with self.assertRaises(ValueError) as cm:
+                check_request_sampling(dict(bad))
+            self.assertTrue(str(cm.exception).startswith(field + ":"), cm.exception)
 
     def test_logit_bias(self):
         from serve.server import logit_bias_of
@@ -868,6 +888,39 @@ class PromptProgressStream(unittest.TestCase):
             httpd.server_close()
         self.assertNotIn("prompt_progress", out)
         self.assertIn("usage", out)
+
+
+class LiveRateBursts(unittest.TestCase):
+    """With drafting the tokens come in bursts (a step's accepted drafts at once, 1 to 4 of them): the live rate must
+    cover its whole RATE_WINDOW_S, not the last few bursts, or it swings far around the true rate (a CLI dashboard
+    read 30-80 tok/s while the engine decoded a steady ~40)."""
+
+    def test_bursty_tokens_read_near_the_true_rate(self):
+        import random
+        import serve.server as srv
+        tok = ByteTokenizer()
+        svc = Service(MockEngine(tok, "x", max_context=CTX), tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        rnd = random.Random(7)
+        t, n, samples = 1000.0, 0, []
+        while t < 1012.0:                           # 12 s of steps 50-100 ms apart, 1-4 tokens each: ~40 tok/s
+            t += rnd.uniform(0.05, 0.10)
+            for _ in range(rnd.choice((1, 2, 3, 4))):
+                n += 1
+                samples.append((t, n))
+        true_rate = n / (t - 1000.0)
+        reads = []
+        for now in (1004.0, 1006.0, 1008.0, 1010.0, 1012.0):
+            svc.status.update(busy=True, first_token=1000.0, generated=n)
+            svc.rate.clear()
+            svc.rate.extend(s for s in samples if s[0] <= now)
+            orig = srv.time.time
+            srv.time.time = lambda: now
+            try:
+                reads.append(svc._tok_s())
+            finally:
+                srv.time.time = orig
+        for r in reads:
+            self.assertLess(abs(r - true_rate) / true_rate, 0.15, (reads, true_rate))
 
 
 class LiveRate(unittest.TestCase):

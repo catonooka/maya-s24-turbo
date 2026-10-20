@@ -233,7 +233,7 @@ class Start(unittest.IsolatedAsyncioTestCase):
             return body()
         with patch.object(maya, "setup_screen", return_value=True), patch("setup_tui.run", side_effect=run), \
                 patch.object(maya, "server_command", return_value=(cmd, {}, {"dashboard": "http://127.0.0.1:9/"})), \
-                patch.object(maya.S, "UI", ui), patch.object(maya.subprocess, "call") as plain:
+                patch.object(maya.S, "UI", ui), patch.object(maya, "run_server") as plain:
             self.assertEqual(maya.start(Path("maya-test.json"), SimpleNamespace(plain=False, yes=True)), 0)
         self.assertEqual(served[0][0], cmd)
         self.assertEqual(got, {"log": None, "steps": False})   # (the setup's log stays the setup's)
@@ -242,7 +242,7 @@ class Start(unittest.IsolatedAsyncioTestCase):
     def test_plain_starts_in_the_terminal(self):
         with patch.object(maya, "setup_screen", return_value=False), \
                 patch.object(maya, "server_command", return_value=(["server"], {}, {})), \
-                patch.object(maya.subprocess, "call", return_value=0) as plain, patch("setup_tui.run") as screen:
+                patch.object(maya, "run_server", return_value=0) as plain, patch("setup_tui.run") as screen:
             self.assertEqual(maya.start(Path("maya-test.json"), SimpleNamespace(plain=True, yes=False)), 0)
         plain.assert_called_once()
         screen.assert_not_called()

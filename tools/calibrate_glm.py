@@ -252,10 +252,13 @@ def run(cfg: dict, say=print, start_engine=None) -> dict:
     with tempfile.TemporaryDirectory(prefix="maya-calibrate-") as tmp:
         base = {**cfg, "args": without_writes(list(cfg.get("args") or [])),
                 "env": {**apply(cfg.get("env") or {}, {}), **usage_copy(cfg, Path(tmp))}}
-        return measure(base, prompt_ids(cfg), start_engine, say, host_thread_extras())
+        kept = {k: v for k, v in (cfg.get("env") or {}).items() if k in KEYS}
+        return measure(base, prompt_ids(cfg), start_engine, say, host_thread_extras(), kept)
 
 
-def measure(cfg: dict, ids_list, start_engine, say=print, extra_threads=()) -> dict:
+def measure(cfg: dict, ids_list, start_engine, say=print, extra_threads=(), kept=None) -> dict:
+    """`kept`: the config's own values of KEYS (an earlier calibration's, or set by hand) - the incumbent: the sweeps'
+    choice replaces them only when it beats them, all together, by more than MIN_GAIN interleaved (#277)."""
     t0 = time.time()
     report: dict = {}
     settings: dict = {}
@@ -326,14 +329,26 @@ def measure(cfg: dict, ids_list, start_engine, say=print, extra_threads=()) -> d
                           chunk_confirm={("own" if k is None else str(k)): v for k, v in confirm_c.items()})
             if chunks is not None:
                 rates = confirm_c[chunks]
+        final = (chosen[0], None if chosen[1] == d_threads else chosen[1], chunks)
+        # 5. the config's own values (the incumbent), as one combination against the sweeps' choice, interleaved
+        inc = incumbent(kept)
+        if inc is not None and inc != final:
+            say("    confirming against the config's own settings ...")
+            confirm_k = {inc: [], final: []}
+            for _ in range(3):
+                for k in (inc, final):
+                    confirm_k[k].append(s.rate(tune_keys(*k)))
+            report["kept_confirm"] = {"/".join("own" if x is None else str(x) for x in k): v for k, v in confirm_k.items()}
+            final = pick(confirm_k, inc)
+            rates = confirm_k[final]
     finally:
         close(eng)
-    if chosen[0] is not None:
-        settings[SHARE_ENV] = f"{chosen[0]:.2f}"
-    if chosen[1] != d_threads:
-        settings[THREADS_ENV] = str(chosen[1])
-    if chunks is not None:
-        settings[CHUNKS_ENV] = str(chunks)
+    if final[0] is not None:
+        settings[SHARE_ENV] = f"{final[0]:.2f}"
+    if final[1] is not None:
+        settings[THREADS_ENV] = str(final[1])
+    if final[2] is not None:
+        settings[CHUNKS_ENV] = str(final[2])
     report["tok_s"] = round(statistics.median(rates), 1) if rates else None
     report["seconds"] = round(time.time() - t0)
     return {"settings": settings, "report": report}
@@ -364,6 +379,19 @@ def close(eng):
         proc.wait(120)
     except Exception:
         proc.kill()
+
+
+def incumbent(kept) -> tuple | None:
+    """The config's own (share, threads, chunks) as tune_keys takes them (None: the engine's own); None without any."""
+    try:
+        if not kept:
+            return None
+        share = float(kept[SHARE_ENV]) if kept.get(SHARE_ENV) not in (None, "") else None
+        threads = int(kept[THREADS_ENV]) if kept.get(THREADS_ENV) not in (None, "") else None
+        chunks = int(kept[CHUNKS_ENV]) if kept.get(CHUNKS_ENV) not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+    return None if (share, threads, chunks) == (None, None, None) else (share, threads, chunks)
 
 
 def apply(env: dict, settings: dict) -> dict:
