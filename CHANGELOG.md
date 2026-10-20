@@ -4,6 +4,50 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.18 - 2026-10-20
+
+DeepSeek-V4.1-Flash-1017 adapts to each PC (faster long prompts on one GPU, decode that uses the GPU's PCIe link when
+it pays, a faster first answer), GLM-5.3-Flash on the Tesla P100, the Responses API, and a round of fixes - among them
+the slower decode on Windows laptops with an AMD Strix Halo since v1.1.17.
+
+- **Windows + AMD Strix Halo: decode back to its speed.** Since v1.1.17 the engines keep an integrated GPU's experts
+  within what Windows can commit (RAM + page file), but they counted only what the page file holds now. Windows grows
+  a page file it manages (its default) as more is committed, so on a laptop giving its GPU 96 GB, most experts stayed
+  off the GPU (decode 17-22 -> 10-15 tokens/s, reported by a user). Both engines now count what the page file may still
+  grow by.
+- **DeepSeek: long prompts on one GPU borrow the experts' VRAM.** While a prompt runs, its buffers take room from the
+  experts' slots, and the experts go back after it, so the decode keeps more experts in VRAM than v1.1.17 did. Prompt
+  chunks grow to 16K or 32K tokens where the room allows, a short prompt's reads stay in the page cache for the answer
+  after it, and after a long prompt the experts its last rows used are read ahead while the first tokens decode. On one
+  GPU by default; several GPUs work as in v1.1.17.
+- **DeepSeek: the PCIe lane.** Of a decoded token's experts that VRAM doesn't hold, some are streamed to the GPU and
+  computed there while the CPU computes the rest, split by this PC's measured costs. Decode checks that streaming pays
+  and turns it off where the CPU alone is faster (`MAYA_DS4_STREAM=0`: off). A low-bit expert now gives the same sums
+  on the CPU and the GPU, so Maya-S's answers depend much less on where its experts are placed.
+- **DeepSeek: tuned to the PC at start.** The CPU lane's way of running (cores, performance cores, one socket) is
+  measured at load, a core's second thread stays with the readers unless asked for (`MAYA_DS4_CPU_LANE`), AMD desktop
+  GPUs keep a VRAM reserve, and a new install starts from a shipped expert profile, so its first answers are faster.
+- **DeepSeek: repetition, frequency and presence penalties**, drafting included, and `repeat_last_n` /
+  `penalty_last_n` as in llama.cpp (0 = off, -1 = the whole context).
+- **DeepSeek: repeatable answers with `--no-expert-cache`**: a request's answer no longer depends on what the process
+  answered before. `MAYA_DS4_DISK_SKIP_AUTO=1` (experimental, with `MAYA_DS4_DISK_SKIP_W`) skips light experts only
+  while the model is cold.
+- **GLM on the Tesla P100** (#261 by @ruibeikaa). The engine builds for compute capability 6.0, and four GP100 decode
+  kernels: Maya-M on four GP100 dies 21.0 -> 28.3 tokens/s, the same answers. Other cards run exactly as before.
+- **The Responses API** (#217 by @Micro-ATP). `POST /v1/responses` with stored conversations, background jobs and
+  structured output, each API key seeing only its own records (`docs/RESPONSES.md`).
+- **GLM: prompts on two GPUs without NVLink, opt-in** (#270 by @sociolog, `MAYA_GLM_PREFILL_CALC=1`): the waiting GPU
+  computes a share of the working one's experts over its own PCIe link (EXL3 experts; +25-48% prompt speed on an
+  RTX 3090 + 3060).
+- **Fixes:** `--calibrate` keeps the config's own CPU-lane settings unless it measures something clearly faster (#277,
+  reported by @klvnblst); MSVC builds (#278, reported by @suprekt) and the Windows test build (#296, reported by
+  @jerem91150); the setup finds ROCm installed from Fedora's own packages (#301, reported by @paxsali); the Monitor's
+  and the CLI dashboard's live tokens/s no longer jump around with drafting (reported on X by @gabu3d_pl); stopping
+  `maya.py` in any way stops the server and the engine too.
+- **Smaller changes:** `--spec-follow` decodes a given continuation, for fair speed A/Bs (#266 by @sociolog);
+  `--check` names the DeepSeek quant it checks (#294 by @boxwrench); the README shows each model's Hugging Face
+  downloads.
+
 ## v1.1.17 - 2026-10-20
 
 DeepSeek-V4.1-Flash-1017's prompts many times faster with Maya's quant, all of its files from Maya's repo, and for
