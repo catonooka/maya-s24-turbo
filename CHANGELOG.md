@@ -4,6 +4,37 @@ Every release is on GitHub (Releases) with these notes; every published change m
 dashboard's About > Update (from v1.0.18), or `git pull`, then `./setup.sh` (Windows: `START-MAYA.bat`) - it recompiles
 only what changed and starts; the model is not downloaded again.
 
+## v1.1.20 - 2026-10-21
+
+Stop now stops at once, DeepSeek-V4.1-Flash decodes ~6.5% faster on a Strix Halo and fits its GPU memory by itself,
+Windows starts Maya again from `START-MAYA.bat`, the port can be changed from the dashboard, and a round of community
+work.
+
+- **Stop stops, even while a long prompt is read.** Pressing Stop while DeepSeek-V4.1-Flash read a long prompt let it
+  read to the end first (a minute or more on a 28K prompt). It now stops within seconds, and the conversation before
+  it stays loaded, so your next message does not read it again.
+- **DeepSeek: faster drafting, ~6.5% more tokens a second** with the DSpark drafter on a Strix Halo, the same answers:
+  a draft whose earlier drafts would likely be rejected is no longer verified (`MAYA_DS4_DSPARK_CUM`, 0.5; `0` = off).
+- **DeepSeek on a Strix Halo / Windows APU: the GPU's memory, measured.** Windows' HIP counts an APU's GPU memory plus
+  shared system memory (172 GB on a 160 GB Gorgon Halo); DeepSeek now keeps the model within the dedicated part, as
+  GLM already did - no `--vram-experts` needed, the full speed by itself.
+- **Windows: `START-MAYA.bat` works again** (#315, #322): since v1.1.18 its screen showed the setup and then did
+  nothing; thanks to @kelheor for pinning down the cause.
+- **Dashboard: Settings > Port** moves Maya to another port; it starts again there and the page follows.
+- **Setup: you choose the drafter, or skip the speed test.** Before the 10-30 minute measurement the setup asks:
+  measure, use the drafter, or no drafter (`--drafting measure|on|off`); the choice is kept.
+- **Server:** a request whose client went away leaves the queue at once (#314, thanks @jettoblack); with `--parallel`
+  each request reports its own timings and cached tokens (#310, thanks @pepuscz).
+- **DeepSeek's EXL3 quants on the Tesla V100.** The setup now offers the EXL3 quants from the V100 on (text; pictures
+  from the RTX 30 / A100 on): the prompt path runs portable kernels there, and the experts take the newer kernels
+  where the older ones did not cover DeepSeek's width.
+- **EXL3 on AMD GPUs:** the prompt path's expert kernels (#298 by @LostVector) - the groundwork for running EXL3 quants
+  on a Strix Halo.
+- **GLM:** fused prompt experts on the RX 7900 XT / XTX, +5-13% prompt speed (#304 by @Cass67); experimental AMD
+  Instinct MI100 support (#245 by @nsaxploit); batched decode settings for several conversations, opt-in (#323, #324,
+  #325 by @somnergy); prompt-path tools and the MMQ scratch's room counted (#284, #286, #289 by @gopinath87607); and
+  `.gitignore` (#308 by @rkarp).
+
 ## v1.1.19 - 2026-10-20
 
 DeepSeek-V4.1-Flash reads long prompts up to ~1.5x faster with the same answers, its prompts follow DeepSeek's own
