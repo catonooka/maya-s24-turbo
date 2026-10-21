@@ -135,6 +135,55 @@ class Dashboard(unittest.TestCase):
         self.assertEqual(json.loads(b)["requests"][0]["api"], "openai")
 
 
+class Port(unittest.TestCase):
+    """The dashboard's Port: saved into the config and Maya's start script for it; a busy, a reserved or the same port is
+    refused with nothing saved; only Maya's own page may move the server.  (No restart here: maya.py did not start this
+    server, so the port applies from the next start - the restart itself is maya.py's RESTART_EXIT, tested there.)"""
+
+    def setUp(self):
+        os.environ.pop("MAYA_RESTART_ON_UPDATE", None)
+        Dashboard.setUp(self)
+        self.script = Path(self.tmp.name) / "run-maya-test.bat"
+        self.script.write_bytes(b"@echo off\r\npython maya.py --config " + str(self.cfg).encode() + b" --port 8080 %*\r\n")
+
+    tearDown = Dashboard.tearDown
+    req = Dashboard.req
+
+    @staticmethod
+    def free_port():
+        import socket
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+
+    def test_saved_and_reported(self):
+        s, _, b = self.req("GET", "/api/port")
+        info = json.loads(b)
+        self.assertEqual((s, info["port"], info["restarts"]), (200, self.httpd.server_address[1], False))
+        n = self.free_port()
+        s, _, b = self.req("POST", "/api/port", {"port": n})
+        self.assertEqual((s, json.loads(b)), (202, {"port": n, "restarts": False}))
+        self.assertEqual(json.loads(self.cfg.read_text())["port"], n)
+        self.assertEqual(json.loads(self.cfg.read_text())["args"][-1], "32768")   # (the rest kept)
+        self.assertIn(f"--port {n} %*\r\n".encode(), self.script.read_bytes())   # (CR LF kept)
+
+    def test_refused_with_nothing_saved(self):
+        import socket
+        busy = socket.socket()
+        busy.bind(("127.0.0.1", 0))
+        busy.listen(1)
+        try:
+            for port in (busy.getsockname()[1], 80, self.httpd.server_address[1], "x"):
+                s, _, b = self.req("POST", "/api/port", {"port": port})
+                self.assertEqual(s, 400, port)
+        finally:
+            busy.close()
+        s, _, _ = self.req("POST", "/api/port", {"port": self.free_port()}, {"Origin": "http://elsewhere.example"})
+        self.assertEqual(s, 403)
+        self.assertNotIn("port", json.loads(self.cfg.read_text()))
+        self.assertIn(b"--port 8080 %*", self.script.read_bytes())
+
+
 class ContextCost(unittest.TestCase):
     """The GLM engine's start lines give what its context costs in VRAM, summed over its GPUs."""
 

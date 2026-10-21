@@ -100,7 +100,7 @@ class Quant35(unittest.TestCase):
                              (e29["files"][n], e29["sha256"][n], e29["sources"][n]))
 
     def test_offered_only_where_exl3_runs(self):
-        """--ds4-quant exl3-3.5, or the menu's row - only on NVIDIA compute capability 8.0+ (not AMD, not a PC whose
+        """--ds4-quant exl3-3.5, or the menu's row - only on NVIDIA compute capability 7.0+ (not AMD, not a PC whose
         GPUs are all older)."""
         self.assertIn("exl3-3.5", maya.DS4_QUANTS)
         def offered(gpus, backend="cuda"):
@@ -113,7 +113,8 @@ class Quant35(unittest.TestCase):
                 maya.choose_ds4_quant(args(backend=backend), {})
             return [r for r in rows if r.startswith("EXL3")]
         self.assertEqual(len(offered([{"arch": 86}, {"arch": 70}])), 2)
-        self.assertEqual(offered([{"arch": 70}, {"arch": 70}]), [])            # (Volta: the GGUFs only)
+        self.assertEqual(len(offered([{"arch": 70}, {"arch": 70}])), 2)       # (Volta: since v1.1.20)
+        self.assertEqual(offered([{"arch": 61}, {"arch": 61}]), [])            # (Pascal: the GGUFs only)
         self.assertEqual(offered([], backend="hip"), [])
         self.assertRegex(offered([{"arch": 89}])[1], r"^EXL3 3\.5 bits \(461 GB\)$")
         self.assertEqual(maya.choose_ds4_quant(args(ds4_quant="exl3-3.5"), {}), "exl3-3.5")
@@ -809,6 +810,64 @@ class StartingProfile(unittest.TestCase):
         self.assertEqual(sum(out[1]), 200)
         self.assertEqual(out[1].index(max(out[1])), 3)
         self.assertEqual(prof.agree(a, b, 2), [1.0, 0.5])
+
+
+class Drafting(unittest.TestCase):
+    """The drafter chosen by the user instead of the speed calibration: --drafting, the question, and the config."""
+    def setUp(self):
+        self.quiet = [patch.object(maya, n, lambda *a, **k: None) for n in ("say", "ok")]
+        for p in self.quiet:
+            p.start()
+        self.dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        for p in self.quiet:
+            p.stop()
+
+    def test_choice(self):
+        choice = lambda **kw: maya.drafting_choice(args(**kw), "The DSpark drafter", "10-30")   # noqa: E731
+        self.assertEqual(choice(drafting="off"), "off")
+        self.assertEqual(choice(drafting="on", no_speed_calibration=False), "on")
+        self.assertEqual(choice(no_speed_calibration=True), "on")
+        self.assertEqual(choice(), "measure")                             # (--yes: measured)
+        for answer, how in (("m", "measure"), ("y", "on"), ("n", "off")):
+            with patch.object(maya, "ask", return_value=answer) as asked:
+                self.assertEqual(choice(yes=False), how)
+            self.assertEqual(asked.call_args[0][2], "m")                  # (measuring is the default answer)
+
+    def write(self, cfg: dict) -> Path:
+        p = self.dir / "c.json"
+        p.write_text(json.dumps(cfg), encoding="utf-8")
+        return p
+
+    def test_deepseek_kept_as_chosen(self):
+        pack = self.dir / "maya-ds4"
+        pack.mkdir()
+        (pack / "tensors.txt").write_text("t mtp.0.attn.wq_a.weight BF16 0 0 2 1\n")
+        for on, mode in ((True, "on"), (False, "none")):
+            p = self.write({"exe": "/m/build/maya-ds4", "args": ["--pack", str(pack), "--dspark", "none"],
+                            "installer": {"family": "deepseek"}})
+            self.assertTrue(maya.needs_speed_calibration(json.loads(p.read_text())))
+            maya.keep_drafting(p, on)
+            c = json.loads(p.read_text())
+            self.assertEqual(c["args"][-2:], ["--dspark", mode])
+            self.assertEqual(c["args"].count("--dspark"), 1)
+            self.assertEqual(c["installer"]["speed_calibration"]["kept"], "dspark" if on else "none")
+            self.assertFalse(maya.needs_speed_calibration(c))             # (a start does not measure by itself)
+
+    def test_glm_kept_as_chosen(self):
+        cfg = {"exe": "/m/build/maya", "args": ["--glm-pack", "/m/pack", "--dflash", "/m/d.bin"], "gpu": [0, 1]}
+        p = self.write(cfg)
+        maya.keep_drafting(p, False)
+        c = json.loads(p.read_text())
+        self.assertNotIn("--dflash", c["args"])
+        self.assertEqual((c["installer"]["draft"], c["installer"]["speed_calibration"]["kept"]), ("mtp", "mtp"))
+        p = self.write(cfg)
+        maya.keep_drafting(p, True)
+        c = json.loads(p.read_text())
+        self.assertEqual(c["args"][-2:], ["--dflash", "/m/d.bin"])
+        self.assertEqual(c["installer"]["draft"], "dflash2")
+        self.assertFalse(maya.needs_speed_calibration(c))
 
 
 if __name__ == "__main__":

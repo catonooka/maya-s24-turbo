@@ -144,6 +144,13 @@ class RestartAfterUpdate(unittest.TestCase):
         self.assertEqual(out, 0)
         execv.assert_not_called()
 
+    def test_a_new_port_starts_again_on_the_saved_one(self):   # (the dashboard's Port: RESTART_EXIT)
+        _, _, execv, _ = self.start(maya.RESTART_EXIT)
+        argv = execv.call_args.args[1]
+        self.assertEqual(argv[1:3], [str(maya.HERE / "maya.py"), "--yes"])
+        self.assertNotIn("--port", argv)               # (this start's --port 8090 would undo it: the config's applies)
+        self.assertEqual(argv[argv.index("--gpus") + 1], "0,1")
+
 
 class RunScript(unittest.TestCase):
     """run-maya-<model>.sh starts its config through maya.py - on the screen in a terminal, as ./maya.sh does - not

@@ -250,4 +250,8 @@ bool to_f16(int t, const void* w, uint16_t* dst, int64_t n, void* stream) {
     return true;
 }
 
+extern "C" void strata_mmq_pool_slab(int dev, void* base, size_t bytes);   // src/prefill/ggml_cuda_host.cu's pool
+
+void pool_slab(int dev, void* base, size_t bytes) { strata_mmq_pool_slab(dev, base, bytes); }
+
 }  // namespace strata::prefill::mmq

@@ -125,6 +125,11 @@ public:
     int feed_unit() const;
     /// Called from feed() while a run of chunks goes through the layers, with the tokens done so far.
     void set_progress(std::function<void(int64_t)> f);
+    /// Asked while a run of chunks goes through the layers: true (a Stop) ends it early - one GPU after the layer it is
+    /// on, several at a chunk all of them reach - and feed() returns false with cancelled() true.  The state past the
+    /// prompt's start is then not usable: restore() a checkpoint kept before the feed, or reset().
+    void set_cancel(std::function<bool()> f);
+    bool cancelled() const;   // the last feed() / feed_mark() ended early on a Stop
     /// A request starts (before its prompt): DISK_SKIP_AUTO may switch back on here, never mid-answer.
     void begin_request();
     int64_t pos() const;

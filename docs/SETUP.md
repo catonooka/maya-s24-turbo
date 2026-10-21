@@ -12,7 +12,7 @@ It first asks which model to set up:
   (211 GB) or [at 3.5 bits](https://huggingface.co/LibertAIDAI/DeepSeek-V4.1-Flash-1017-EXL3-3.5bpw) (258 GB, about
   280 GB of VRAM and RAM; `--ds4-quant exl3-3.5`, its own folder; a second quant hard-links the Engram tables from the
   first instead of downloading them) and its two Engram tables from [DeepSeek's repo](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017)
-  (203 GB), on its own engine (`build/maya-ds4`): Linux, NVIDIA RTX 30 / A100 or newer. It is fast with about 230 GB
+  (203 GB), on its own engine (`build/maya-ds4`): Linux, NVIDIA V100 or newer (pictures: RTX 30 / A100 or newer). It is fast with about 230 GB
   of VRAM and RAM together; with less, the setup warns and the engine reads the experts that do not fit from the
   model's files on the SSD (`--mmap-experts auto`), much slower - one RTX 3090 with 64 GB of RAM: prompts about 50
   tokens/s, answers 4-5 tokens/s (faster with `--dspark none`). The same steps with these differences: the
@@ -96,8 +96,9 @@ is not downloaded again, and your settings stay. By hand: `git pull`, then `./se
 | `--host-compiler g++-12` | when your g++ is newer than your CUDA accepts ("unsupported GNU version") |
 | `--rebuild`, `--repack` | compile the engine / build the pack again |
 | `--calibrate` | tune the engine's CPU lane for this PC (see [Tuning](SETTINGS.md)), then start; with `--no-start` only tune |
-| `--speed-calibration` | measure again whether DFlash2 or the MTP block decodes faster on this PC ([how](SETTINGS.md#the-speed-calibration); 5-20 minutes, with Maya stopped) and keep the faster, then start; with `--no-start` only measure |
-| `--no-speed-calibration` | with `--draft dflash2`: keep DFlash2 without the speed calibration |
+| `--speed-calibration` | measure again whether the drafter (DFlash2, or DeepSeek's DSpark) decodes faster on this PC ([how](SETTINGS.md#the-speed-calibration); 5-30 minutes, with Maya stopped) and keep the faster, then start; with `--no-start` only measure |
+| `--drafting measure\|on\|off` | the drafter without the question: `measure` = the speed calibration (the default with `--yes`), `on` = draft with it, `off` = no drafting - both skip the measuring |
+| `--no-speed-calibration` | the same as `--drafting on` |
 | `--yes` | the recommended answers (the model download still needs `--download-model`) |
 | `--plain` | the setup in plain text with typed answers, and Maya in the terminal, not on their own screen (a pipe gets this too, and `--yes` a plain setup); the setup screen's whole output is in `maya-setup.log` |
 

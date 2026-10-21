@@ -44,8 +44,14 @@ bool win_experts(const WinArgs& a, cudaStream_t s);
 }  // namespace strata::kernels::exl3::legacy
 #define EXL3_LEGACY(call) \
     if (use_legacy()) return legacy::call
+// ... the experts' kernels only where v1.1.8's cover the model: their rotated input slice is at most 4096 wide (GLM's);
+// a wider one (DeepSeek-V4.1's 5120) takes this file's kernels on every GPU - the token path and a window's alike, so
+// their results stay the same bits
+#define EXL3_LEGACY_MOE(a, call) \
+    if ((a).n_embd <= 4096 && (a).n_ff <= 4096 && use_legacy()) return legacy::call
 #else
 #define EXL3_LEGACY(call) (void) 0
+#define EXL3_LEGACY_MOE(a, call) (void) 0
 #endif
 
 namespace strata::kernels::exl3 {
@@ -273,6 +279,16 @@ __device__ __forceinline__ void chunk_load(const Xin& x, const uint16_t* __restr
 #pragma unroll
     for (int i = 0; i < 4; ++i) s[i] = h2f(suh[base + i]);
 }
+struct XinHalf { const uint16_t* h = nullptr; };   // (FP16 rows: the portable prompt kernels' input)
+__device__ __forceinline__ void chunk_load(const XinHalf& x, const uint16_t* suh, int k0, int lane,
+                                         float (&v)[4], float (&s)[4]) {
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        const int c = k0 + lane * 4 + i;
+        v[i] = h2f(x.h[c]);
+        s[i] = h2f(suh[c]);
+    }
+}
 // ... and H(x * suh) of the chunk, FP16, into dst[0..127]
 __device__ __forceinline__ void chunk_store(float (&v)[4], const float (&s)[4], int lane, __half* dst) {
 #pragma unroll
@@ -386,8 +402,8 @@ struct BlockSmem {
     float out[kTok * kCols];
 };
 
-template <int K2, int cb>
-__device__ void block_gemv(const uint32_t* __restrict__ tr, int ld, int tc0, int k0, int k1, const Xin& x,
+template <int K2, int cb, class Input = Xin>
+__device__ void block_gemv(const uint32_t* __restrict__ tr, int ld, int tc0, int k0, int k1, const Input& x,
                            const uint16_t* __restrict__ suh, int nc, BlockSmem<K2>& sm) {
     constexpr int W = Words<K2>::W, R = Words<K2>::R;
     const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5, g = lane >> 2, t = lane & 3;
@@ -1171,6 +1187,97 @@ __global__ void __launch_bounds__(kThreads) gate_up_kernel(const GArgs a) {
 }  // namespace tc
 #endif
 
+// The prompt path's portable kernels (#298): the tested 8-activation GEMV decoder (block_gemv) on the CUDA cores, F32
+// sums - a block owns one expert, up to eight of its routed rows and 128 outputs; no host bounds readback, no expanded
+// weights.  AMD runs them (no tensor-core port yet), and NVIDIA before sm_80 (V100, T4, RTX 20: the tensor-core
+// kernels below need mma.m16n8k16), which had no prompt path for EXL3 experts before.
+template <int K2, int cb, bool gate_up>
+__global__ void __launch_bounds__(kThreads) hip_set_kernel(SetArgs a, const float* x, int ldx,
+                                                        const int* idx, uint16_t* h, int ldh,
+                                                        float* y, int ldy) {
+    __shared__ __align__(16) BlockSmem<K2> sm;
+    __shared__ float gate[kTok * kCols];
+    const int e = blockIdx.z, g = blockIdx.y, warp = threadIdx.x >> 5;
+    const int start = a.bounds[e], end = a.bounds[e + 1];
+    const int row = start - a.row0 + (int) blockIdx.x * kTok;
+    const int nc = min(kTok, end - start - (int) blockIdx.x * kTok);
+    if (nc <= 0) return;
+    const uint8_t* blob = a.wbase + (size_t) e * a.stride;
+    if constexpr (gate_up) {
+        Xin in;
+        if (warp < nc) in.f = x + (size_t) idx[row + warp] * ldx;
+        block_gemv<K2, cb>((const uint32_t*) (blob + a.lay.trellis[0]), a.n_ff / 16,
+                          g * 8, 0, a.n_embd, in, (const uint16_t*) (blob + a.lay.suh[0]), nc, sm);
+        if (warp < nc)
+            block_out(sm.out + warp * kCols, (const uint16_t*) (blob + a.lay.svh[0]) + g * kCols,
+                      gate + warp * kCols);
+        __syncthreads();
+        block_gemv<K2, cb>((const uint32_t*) (blob + a.lay.trellis[1]), a.n_ff / 16,
+                          g * 8, 0, a.n_embd, in, (const uint16_t*) (blob + a.lay.suh[1]), nc, sm);
+        if (warp < nc) {
+            const int lane = threadIdx.x & 31;
+            float v[4];
+            for (int i = 0; i < 4; ++i) v[i] = sm.out[warp * kCols + lane * 4 + i];
+            had128(v, lane);
+            for (int i = 0; i < 4; ++i) {
+                const int c = lane * 4 + i;
+                const float up = v[i] * h2f(((const uint16_t*) (blob + a.lay.svh[1]))[g * kCols + c]);
+                h[(size_t) (row + warp) * ldh + g * kCols + c] =
+                    __half_as_ushort(__float2half_rn(swiglu(gate[warp * kCols + c], up, a.limit)));
+            }
+        }
+    } else {
+        XinHalf in;
+        if (warp < nc) in.h = h + (size_t) (row + warp) * ldh;
+        block_gemv<K2, cb>((const uint32_t*) (blob + a.lay.trellis[2]), a.n_embd / 16,
+                          g * 8, 0, a.n_ff, in, (const uint16_t*) (blob + a.lay.suh[2]), nc, sm);
+        if (warp < nc)
+            block_out(sm.out + warp * kCols, (const uint16_t*) (blob + a.lay.svh[2]) + g * kCols,
+                      y + (size_t) (row + warp) * ldy + g * kCols);
+    }
+}
+
+template <int K2, int cb>
+__global__ void __launch_bounds__(kThreads) hip_rows_kernel(Mat m, const uint16_t* x, int ldx, int rows,
+                                                         float* y, int ldy, float beta) {
+    __shared__ __align__(16) BlockSmem<K2> sm;
+    const int row = blockIdx.x * kTok, g = blockIdx.y, warp = threadIdx.x >> 5;
+    const int nc = min(kTok, rows - row);
+    XinHalf in;
+    if (warp < nc) in.h = x + (size_t) (row + warp) * ldx;
+    block_gemv<K2, cb>(m.trellis, m.ld > 0 ? m.ld : m.n / 16, g * 8, 0, m.k, in, m.suh, nc, sm);
+    if (warp < nc) {
+        const int lane = threadIdx.x & 31;
+        float v[4];
+        for (int i = 0; i < 4; ++i) v[i] = sm.out[warp * kCols + lane * 4 + i];
+        had128(v, lane);
+        for (int i = 0; i < 4; ++i) {
+            const int c = g * kCols + lane * 4 + i;
+            float* dst = y + (size_t) (row + warp) * ldy + c;
+            const float value = v[i] * h2f(m.svh[c]);
+            *dst = beta == 0.0f ? value : value + beta * *dst;
+        }
+    }
+}
+template <int K2, int cb> struct RunHipGateUp {
+    static void run(const SetArgs& a, const float* x, int ldx, const int* idx, uint16_t* h, int ldh, cudaStream_t s) {
+        hip_set_kernel<K2, cb, true><<<dim3((a.max_rows + kTok - 1) / kTok, a.n_ff / kCols, a.n_exp), kThreads, 0, s>>>
+            (a, x, ldx, idx, h, ldh, nullptr, 0);
+    }
+};
+template <int K2, int cb> struct RunHipDown {
+    static void run(const SetArgs& a, const uint16_t* h, int ldh, float* y, int ldy, cudaStream_t s) {
+        hip_set_kernel<K2, cb, false><<<dim3((a.max_rows + kTok - 1) / kTok, a.n_embd / kCols, a.n_exp), kThreads, 0, s>>>
+            (a, nullptr, 0, nullptr, const_cast<uint16_t*>(h), ldh, y, ldy);
+    }
+};
+template <int K2, int cb> struct RunHipRows {
+    static void run(const Mat& m, const uint16_t* x, int ldx, int rows, float* y, int ldy, float beta, cudaStream_t s) {
+        hip_rows_kernel<K2, cb><<<dim3((rows + kTok - 1) / kTok, m.n / kCols), kThreads, 0, s>>>
+            (m, x, ldx, rows, y, ldy, beta);
+    }
+};
+
 // ---------------------------------------------------------------- dispatch
 // F(K2, cb) for K 1..8 (K2 = 2 K) and the three codebooks, and for the half-integer K 1.5 / 2.5 / 3.5 (K2 3, 5, 7)
 // with mul1 - exllamav3 1.6 writes no other codebook for them; any other pair is refused (false: nothing launched)
@@ -1560,7 +1667,7 @@ static bool moe_args(const MoeArgs& a, KMoe& m, cudaStream_t s) {
 }
 
 void moe_gate_up(const MoeArgs& a, const float* x, float* h, cudaStream_t s) {
-    EXL3_LEGACY(moe_gate_up(a, x, h, s));
+    EXL3_LEGACY_MOE(a, moe_gate_up(a, x, h, s));
     KMoe m;
     if (!moe_args(a, m, s)) return;
     if (a.lay.k2[0] != a.lay.k2[1]) {
@@ -1575,7 +1682,7 @@ void moe_gate_up(const MoeArgs& a, const float* x, float* h, cudaStream_t s) {
 }
 
 void moe_down(const MoeArgs& a, const float* h, const float* sh_out, float* out, cudaStream_t s) {
-    EXL3_LEGACY(moe_down(a, h, sh_out, out, s));
+    EXL3_LEGACY_MOE(a, moe_down(a, h, sh_out, out, s));
     KMoe m;
     if (!moe_args(a, m, s)) return;
     if (h != nullptr) m.h = const_cast<float*>(h);
@@ -1587,7 +1694,7 @@ void moe_down(const MoeArgs& a, const float* h, const float* sh_out, float* out,
 }
 
 bool win_experts(const WinArgs& a, cudaStream_t s) {
-    EXL3_LEGACY(win_experts(a, s));
+    EXL3_LEGACY_MOE(a, win_experts(a, s));
     if (a.T < 1 || a.k < 1 || a.k > 8 || a.n_embd % kCols != 0 || a.n_ff % kCols != 0 || a.n_embd > kMaxMoeK ||
         a.n_ff > kMaxMoeK || a.lay.k2[0] != a.lay.k2[1] || a.h == nullptr || a.part == nullptr || a.out == nullptr) {
         std::fprintf(stderr, "exl3 win_experts: not covered (T %d k %d n_embd %d n_ff %d, gate K %g up K %g)\n", a.T,
@@ -1638,6 +1745,20 @@ bool win_experts(const WinArgs& a, cudaStream_t s) {
     return true;
 }
 
+// mma_supported() for the current device, cached (the prompt path's launches ask it each time)
+bool mma_now() {
+#if defined(STRATA_USE_HIP)
+    return false;
+#else
+    static int known[64];   // 0: not asked yet, 1: no, 2: yes
+    int dev = 0;
+    cudaGetDevice(&dev);
+    if (dev < 0 || dev >= 64) return mma_supported();
+    if (known[dev] == 0) known[dev] = mma_supported() ? 2 : 1;
+    return known[dev] == 2;
+#endif
+}
+
 bool mma_supported() {
 #if defined(STRATA_USE_HIP)
     return false;
@@ -1652,6 +1773,16 @@ bool mma_supported() {
 void set_gate_up(const SetArgs& sa, const float* x, int ldx, const int* row_idx, uint16_t* h16, int ldh,
                  cudaStream_t s) {
 #if !defined(STRATA_USE_HIP)
+    if (!mma_now()) {   // (before sm_80: the portable kernels)
+        if (sa.n_exp <= 0 || sa.max_rows <= 0) return;
+        if (sa.lay.k2[0] != sa.lay.k2[1] || !dispatch<RunHipGateUp>(sa.lay.k2[0], sa.lay.cb, sa, x, ldx, row_idx, h16, ldh, s)) {
+            std::fprintf(stderr, "exl3 set_gate_up: unsupported layout\n");
+            g_launch_errors.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        launch_check("set_gate_up (portable)");
+        return;
+    }
     if (sa.lay.k2[0] != sa.lay.k2[1]) {
         std::fprintf(stderr, "exl3 set_gate_up: gate K %g != up K %g\n", sa.lay.k2[0] / 2.0, sa.lay.k2[1] / 2.0);
         g_launch_errors.fetch_add(1, std::memory_order_relaxed);
@@ -1682,13 +1813,26 @@ void set_gate_up(const SetArgs& sa, const float* x, int ldx, const int* row_idx,
         std::fprintf(stderr, "exl3 set_gate_up: K %g cb %d\n", sa.lay.k2[0] / 2.0, sa.lay.cb);
     launch_check("set_gate_up");
 #else
-    (void) sa; (void) x; (void) ldx; (void) row_idx; (void) h16; (void) ldh; (void) s;
+    if (sa.n_exp <= 0 || sa.max_rows <= 0) return;
+    if (sa.lay.k2[0] != sa.lay.k2[1] || !dispatch<RunHipGateUp>(sa.lay.k2[0], sa.lay.cb, sa, x, ldx, row_idx, h16, ldh, s)) {
+        std::fprintf(stderr, "exl3 HIP set_gate_up: unsupported layout\n");
+        g_launch_errors.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    launch_check("HIP set_gate_up");
 #endif
 }
 
 void set_down(const SetArgs& sa, const uint16_t* h16, int ldh, float* y, int ldy, cudaStream_t s) {
 #if !defined(STRATA_USE_HIP)
     if (sa.n_exp <= 0 || sa.max_rows <= 0) return;
+    if (!mma_now()) {   // (before sm_80: the portable kernels)
+        if (!dispatch<RunHipDown>(sa.lay.k2[2], sa.lay.cb, sa, h16, ldh, y, ldy, s))
+            g_launch_errors.fetch_add(1, std::memory_order_relaxed);
+        else
+            launch_check("set_down (portable)");
+        return;
+    }
     tc::GArgs a{};
     a.wbase = sa.wbase;
     a.stride = sa.stride;
@@ -1709,13 +1853,25 @@ void set_down(const SetArgs& sa, const uint16_t* h16, int ldh, float* y, int ldy
         std::fprintf(stderr, "exl3 set_down: K %g cb %d\n", sa.lay.k2[2] / 2.0, sa.lay.cb);
     launch_check("set_down");
 #else
-    (void) sa; (void) h16; (void) ldh; (void) y; (void) ldy; (void) s;
+    if (sa.n_exp <= 0 || sa.max_rows <= 0) return;
+    if (!dispatch<RunHipDown>(sa.lay.k2[2], sa.lay.cb, sa, h16, ldh, y, ldy, s)) {
+        g_launch_errors.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    launch_check("HIP set_down");
 #endif
 }
 
 void gemm_rows(const Mat& m, const uint16_t* x16, int ldx, int rows, float* y, int ldy, float beta, cudaStream_t s) {
 #if !defined(STRATA_USE_HIP)
     if (rows <= 0) return;
+    if (!mma_now()) {   // (before sm_80: the portable kernels)
+        if (!supported(m) || !dispatch<RunHipRows>(m.k2, m.cb, m, x16, ldx, rows, y, ldy, beta, s))
+            g_launch_errors.fetch_add(1, std::memory_order_relaxed);
+        else
+            launch_check("gemm_rows (portable)");
+        return;
+    }
     tc::GArgs a{};
     a.wbase = nullptr;
     a.tr[0] = (size_t) m.trellis;
@@ -1738,7 +1894,12 @@ void gemm_rows(const Mat& m, const uint16_t* x16, int ldx, int rows, float* y, i
     }
     launch_check("gemm_rows");
 #else
-    (void) m; (void) x16; (void) ldx; (void) rows; (void) y; (void) ldy; (void) beta; (void) s;
+    if (rows <= 0) return;
+    if (!supported(m) || !dispatch<RunHipRows>(m.k2, m.cb, m, x16, ldx, rows, y, ldy, beta, s)) {
+        g_launch_errors.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    launch_check("HIP gemm_rows");
 #endif
 }
 

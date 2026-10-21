@@ -117,20 +117,19 @@ class SetupApp(App):
         its --parent-pipe and job object).  A signal that is ignored (nohup) stays ignored."""
         import os
         import signal
-        if os.name == "nt":
-            return
         def stop():
             if not getattr(self, "signalled", False):   # (once: a second SIGINT would end the server at once)
                 self.signalled = True
                 self.stop_answered(True)
-        try:
-            import asyncio
-            loop = asyncio.get_running_loop()
-            for sig in (signal.SIGTERM, signal.SIGHUP):
-                if signal.getsignal(sig) is not signal.SIG_IGN:
-                    loop.add_signal_handler(sig, stop)
-        except (ImportError, NotImplementedError, RuntimeError, ValueError):
-            pass
+        if os.name != "nt":   # (Windows has no SIGHUP and no loop signal handlers; the setup's thread starts all the same)
+            try:
+                import asyncio
+                loop = asyncio.get_running_loop()
+                for sig in (signal.SIGTERM, signal.SIGHUP):
+                    if signal.getsignal(sig) is not signal.SIG_IGN:
+                        loop.add_signal_handler(sig, stop)
+            except (ImportError, NotImplementedError, RuntimeError, ValueError):
+                pass
         self.bridge.thread = threading.Thread(target=self.work, name="setup", daemon=True)
         self.bridge.thread.start()
 

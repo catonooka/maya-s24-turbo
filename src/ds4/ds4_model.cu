@@ -26,6 +26,7 @@
 #include "strata/kernels/f16_bits.hpp"
 #include "strata/kernels/glm_fast.hpp"
 #include "strata/kernels/sampler.hpp"
+#include "strata/platform/dedicated.hpp"
 
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
@@ -36,6 +37,7 @@
 #include <deque>
 #include <atomic>
 #include <chrono>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -76,6 +78,52 @@ double now_ms() {
 }
 
 size_t align256(size_t n) { return (n + 255) & ~(size_t) 255; }
+
+// cudaMemGetInfo for the current device - on Windows, an APU's kept within its DEDICATED memory: HIP counts its
+// carve-out plus shared system memory there, and what fills into the shared part pages (Maya-S on a 160 GB Strix Halo,
+// HIP's 172: 2.45 tok/s - strata/platform/dedicated.hpp).  Its total is then the dedicated memory, its free what of
+// that is not in use, so every budget read from it (the experts', the prompt path's room, the split's) keeps within
+// it.  DS4_APU_DEDICATED_GB=<n>: n GB (a test: a smaller carve-out), =0: HIP's figures.
+cudaError_t mem_info(size_t* free_b, size_t* total_b) {
+    const cudaError_t e = cudaMemGetInfo(free_b, total_b);
+#if defined(_WIN32) && defined(STRATA_USE_HIP)
+    int dev = 0;
+    if (e != cudaSuccess || cudaGetDevice(&dev) != cudaSuccess) return e;
+    static std::mutex mu;
+    static std::map<int, size_t> known;   // device -> its dedicated memory (0: nothing to keep within)
+    size_t ded = 0;
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        auto it = known.find(dev);
+        if (it == known.end()) {
+            int integ = 0;
+            if (cudaDeviceGetAttribute(&integ, cudaDevAttrIntegrated, dev) != cudaSuccess) (void) cudaGetLastError();
+            cudaDeviceProp prop{};
+            if (const char* v = std::getenv("DS4_APU_DEDICATED_GB")) {
+                ded = (size_t) (std::atof(v) * 1073741824.0);
+            } else if (integ != 0) {
+                if (cudaGetDeviceProperties(&prop, dev) == cudaSuccess)
+                    ded = (size_t) strata::platform::dedicated_bytes(prop.luid);
+                else
+                    (void) cudaGetLastError();
+            }
+            if (ded >= *total_b) ded = 0;
+            if (ded > 0)
+                std::fprintf(stderr, "ds4: CUDA%d: Windows gives this APU's GPU %.2f GB of dedicated memory (HIP counts "
+                                     "%.2f GB with shared memory): the model stays within it\n",
+                             dev, (double) ded / 1073741824.0, (double) *total_b / 1073741824.0);
+            it = known.emplace(dev, ded).first;
+        }
+        ded = it->second;
+    }
+    if (ded > 0) {
+        const size_t used = *total_b - *free_b;
+        *free_b = ded > used ? ded - used : 0;
+        *total_b = ded;
+    }
+#endif
+    return e;
+}
 
 // part p of np of `whole` (a multiple of 128) in 128-blocks, as even as they go (whole / 128 % np parts a block more:
 // those from part rot on, cyclically - so a group's layers, each its own rot, even out what each member holds):
@@ -835,6 +883,35 @@ struct Model::Impl {
     bool logits_all = false;          // the last feed was a chunk with logits for every row (chunk_logits)
     std::vector<float> chunk_logits;
     std::function<void(int64_t)> progress;   // a run of chunks: the tokens done so far (the main thread, while it waits)
+    // a Stop while a run of chunks goes through the layers (Model::set_cancel, asked while forward_chunks waits): one
+    // GPU stops after the layer it is on (halt); several stop at a chunk every one of them reaches - none starts chunk
+    // halt_k or later, halt_k one past the latest any started - so no device waits on a hand-off that never comes
+    std::function<bool()> cancel;
+    std::atomic<bool> halt{false};
+    std::mutex halt_mu;
+    int halt_k = INT_MAX, halt_seen = -1;
+    bool halted = false;                      // the last run ended early on a Stop
+    static constexpr const char* kHalted = "stopped";
+    bool chunk_go(int k) {   // chunk k may start on this device (several GPUs)
+        std::lock_guard<std::mutex> lk(halt_mu);
+        if (k >= halt_k) return false;
+        halt_seen = std::max(halt_seen, k);
+        return true;
+    }
+    bool halt_now() const { return devs.size() == 1 && halt.load(std::memory_order_acquire); }
+    // a run's early end on device di: the expert reads still in flight land first (they count down items the next run
+    // clears), then its streams are idle
+    bool halt_end(int di, std::string& err) {
+        Chunk& c = *chunks[(size_t) di];
+        cudaSetDevice(devs[(size_t) di].id);
+        if (c.flow)
+            for (size_t i = c.base; i < c.n_read; ++i)
+                while (fit(c, i).left.load(std::memory_order_acquire) != 0) c.io->wait_any(500);
+        if (c.cs != nullptr) cudaStreamSynchronize(c.cs);
+        cudaStreamSynchronize(devs[(size_t) di].st);
+        err = kHalted;
+        return false;
+    }
     std::vector<cudaEvent_t> chunk_done;     // on the last layer's device: chunk k through every layer
     std::unique_ptr<std::atomic<int>[]> chunk_rec;   // chunk k's event recorded
     // a prompt the flow could take: the flow or windows of 16, whichever this PC runs it faster (pick_path) - this
@@ -1982,7 +2059,7 @@ struct Model::Impl {
                 err = "exl3 scratch on CUDA" + std::to_string(d.id);
                 return false;
             }
-            CK(cudaMemGetInfo(&d.free0, &d.total));
+            CK(mem_info(&d.free0, &d.total));
         }
         // the groups' width: o.tp, less while the experts' blocks do not split in it (a member takes n_ff / tp of each
         // expert: the down's inputs in whole blocks - a GGUF's 256-value types split n_ff 2304 in 1, 3 or 9 parts)
@@ -2561,7 +2638,7 @@ struct Model::Impl {
             for (Dev& d : devs) {
                 cudaSetDevice(d.id);
                 size_t fr = 0, tot = 0;
-                CK(cudaMemGetInfo(&fr, &tot));
+                CK(mem_info(&fr, &tot));
                 room += std::max(0.0, (double) fr - (double) ((size_t) o.reserve_mib << 20)) * o.vram_experts;
             }
             for (const Layer& l : L) all += (double) l.blob * l.n_exp;
@@ -3802,7 +3879,7 @@ struct Model::Impl {
             Chunk& c = *chunks[di];
             cudaSetDevice(d.id);
             size_t fr = 0, tot = 0;
-            CK(cudaMemGetInfo(&fr, &tot));
+            CK(mem_info(&fr, &tot));
             const double room_e = std::max(0.0, (double) fr - (double) ((size_t) o.reserve_mib << 20)) * o.vram_experts;
             const size_t need = lay_chunk(c, chunk, nullptr, 2);
             if (room_e >= 2.0 * (double) need) continue;   // (the chunk default's own bound: at most half the room)
@@ -3833,7 +3910,7 @@ struct Model::Impl {
             for (int m : groups[gi].mem) {
                 cudaSetDevice(devs[(size_t) m].id);
                 size_t fr = 0, tot = 0;
-                CK(cudaMemGetInfo(&fr, &tot));
+                CK(mem_info(&fr, &tot));
                 budget = std::min(budget, std::max(0.0, ((double) fr - (double) ((size_t) o.reserve_mib << 20))) *
                                               o.vram_experts);
                 charged = charged || commit_charged(devs[(size_t) m]);
@@ -4488,7 +4565,7 @@ struct Model::Impl {
                     }
             size_t fr = 0, tot = 0;
             cudaSetDevice(d.id);
-            cudaMemGetInfo(&fr, &tot);
+            mem_info(&fr, &tot);
             const size_t gsz = groups.empty() ? 1 : groups[(size_t) d.grp].mem.size();
             char tp[64] = "";
             if (gsz > 1) std::snprintf(tp, sizeof tp, " (tensor parallel %zu, part %d)", gsz, d.mi);
@@ -4847,7 +4924,7 @@ struct Model::Impl {
         if (!vt.load(vg, d.id, read, err)) return false;
         img_tok = tok;
         CK(cudaSetDevice(d.id));
-        CK(cudaMemGetInfo(&d.free0, &d.total));   // (the split sees what the tower left)
+        CK(mem_info(&d.free0, &d.total));   // (the split sees what the tower left)
         if (o.verbose)
             std::fprintf(stderr, "ds4: vision tower (%d blocks) on CUDA%d: %.0f MiB, up to %d patches, %.1f s\n",
                          vg.layers, d.id, (double) vt.device_bytes() / (1 << 20), vt.max_patches(),
@@ -6063,7 +6140,7 @@ struct Model::Impl {
             if (stride == 0) continue;
             CK(cudaSetDevice(d.id));
             size_t fr = 0, tot = 0;
-            CK(cudaMemGetInfo(&fr, &tot));
+            CK(mem_info(&fr, &tot));
             const double room = std::max(0.0, (double) fr - (double) ((size_t) o.reserve_mib << 20)) * o.vram_experts;
             if (exp_b <= room) continue;   // (every expert of its layers fits)
             if (ln_force.empty() && pcie::cal_get(ln_file, lane_dev_key((int) di) + " | lane") == "off") continue;
@@ -7676,6 +7753,7 @@ struct Model::Impl {
             const bool last_l = li + 1 == c.fl_layers.size();
             for (int k = 0; k < nk; ++k) {
                 if (!run.runs(k, il)) continue;   // (a skipped early chunk: nothing after the yoco layer)
+                if (halt_now()) return halt_end(di, err);   // (a Stop: one GPU, this one)
                 const int64_t p0 = run.p0[(size_t) k];
                 const int T = run.T[(size_t) k], slot = k % 2;
                 const bool last_k = k + 1 == nk;
@@ -7839,6 +7917,7 @@ struct Model::Impl {
         std::future<void> eg_next;
         if (!egs.empty()) eg_next = std::async(std::launch::async, read_eg, 0);
         for (int k = 0; k < nk; ++k) {
+            if (!chunk_go(k)) return halt_end(di, err);   // (a Stop: the chunks every device reaches are done)
             const int64_t p0 = run.p0[(size_t) k];
             const int T = run.T[(size_t) k], slot = k % 2;
             const bool last_k = k + 1 == nk;
@@ -7857,6 +7936,7 @@ struct Model::Impl {
             bool started = false;
             std::vector<char> got(srcs.size(), 0);
             for (int il = 0; il < g.nl && run.runs(k, il); ++il) {
+                if (halt_now()) return halt_end(di, err);   // (one GPU: after the layer it is on)
                 Layer& L0 = L[(size_t) il];
                 int mi = -1;
                 for (int m = 0; m < L0.nm; ++m)
@@ -8603,6 +8683,14 @@ struct Model::Impl {
             }
         } lm_end_{this, lm};
         std::vector<std::string> errs(devs.size());
+        halted = false;
+        halt.store(false);
+        {
+            std::lock_guard<std::mutex> lk(halt_mu);
+            halt_k = INT_MAX;
+            halt_seen = -1;
+        }
+        bool halting = false;
         for (size_t di = 0; di < devs.size(); ++di)
             workers[di]->submit([this, di, &run, &errs] {
                 std::string e;
@@ -8612,6 +8700,12 @@ struct Model::Impl {
         for (;;) {
             bool all = true;
             for (auto& w : workers) all = all && w->idle();
+            if (!all && !halting && cancel && cancel()) {   // a Stop: the devices end the run early
+                halting = true;
+                std::lock_guard<std::mutex> lk(halt_mu);
+                halt_k = halt_seen + 1;
+                halt.store(true, std::memory_order_release);
+            }
             if (progress && lm) {   // (layer-major: the share of the layers every chunk went through)
                 const int nd = lm_layers.load(std::memory_order_acquire);
                 if (nd > 0 && nd < g.nl) progress((int64_t) n * nd / g.nl);
@@ -8625,9 +8719,15 @@ struct Model::Impl {
             if (all) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
-        for (const std::string& e : errs)
-            if (!e.empty()) {
+        for (const std::string& e : errs)   // (a device's failure first: a Stop's early end is not one)
+            if (!e.empty() && e != kHalted) {
                 err = e;
+                return false;
+            }
+        for (const std::string& e : errs)
+            if (e == kHalted) {
+                halted = true;
+                err = "stopped while reading the prompt";
                 return false;
             }
         borrow_end();   // (before the cache looks at the slots again)
@@ -9633,6 +9733,7 @@ bool Model::step(int token, bool logits, std::string& err) { return p_->step(tok
 bool Model::feed(const int* tokens, int n, int logits_rows, std::string& err) {
     Impl& p = *p_;
     p.pm.last = -1;
+    p.halted = false;
     if (p.chunk > 0 && n >= p.chunk_min) {   // a long run - or one the flow could take, if it is the faster path here
         const double t0 = now_ms();   // (every row's logits (tests): the chunked path, which keeps them all)
         const bool ok = logits_rows > kWin || p.pick_path(n) ? p.forward_chunks(tokens, n, logits_rows, err)
@@ -9645,6 +9746,7 @@ bool Model::feed(const int* tokens, int n, int logits_rows, std::string& err) {
 bool Model::feed_mark(const int* tokens, int n, int logits_rows, int slot, std::string& err) {
     Impl& p = *p_;
     p.pm.last = -1;
+    p.halted = false;
     const double t0 = now_ms();
     if (n >= 2 && p.chunk > 0 && n >= p.chunk_min && p.pick_path(n)) {   // (the last token rides along; its layers
         const bool ok = p.forward_chunks(tokens, n, logits_rows, err, slot);   // keep the state before it)
@@ -9659,6 +9761,8 @@ bool Model::feed_mark(const int* tokens, int n, int logits_rows, int slot, std::
 }
 int Model::feed_unit() const { return p_->chunk > 0 ? std::max(p_->chunk, (int) p_->o.max_context) : kWin; }
 void Model::set_progress(std::function<void(int64_t)> f) { p_->progress = std::move(f); }
+void Model::set_cancel(std::function<bool()> f) { p_->cancel = std::move(f); }
+bool Model::cancelled() const { return p_->halted; }
 void Model::begin_request() { p_->begin_request(); }
 int Model::sample(float t, float tp, int tk, float mp, uint64_t seed, uint64_t counter) {
     return p_->sample(t, tp, tk, mp, seed, counter);

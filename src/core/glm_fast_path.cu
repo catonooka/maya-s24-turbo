@@ -59,9 +59,7 @@
 #include <windows.h>
 #include <psapi.h>
 #include "strata/platform/commit.hpp"
-#if defined(STRATA_USE_HIP)
-#include <dxgi.h>
-#endif
+#include "strata/platform/dedicated.hpp"
 #endif
 #ifdef __linux__
 #include <sched.h>
@@ -622,6 +620,10 @@ static void* fa_take_b(uint8_t*& at, size_t bytes) {
     return p;
 }
 
+namespace {
+void cpu_win_alloc(Glm5Model::FastState* F, const Glm5Geometry& g, bool exl3);   // (after X3Rows)
+}  // namespace
+
 bool Glm5Model::fast_setup(std::string& err) {
     cudaSetDevice(dev_);
     auto* F = new FastState();
@@ -1000,6 +1002,40 @@ bool Glm5Model::fast_setup(std::string& err) {
             for (int i = 0; i < 8; ++i) sp[i] = (unsigned long long) (F->scratch + (size_t) i * sstride);
             cudaMemcpy(F->md.scratch, sp, sizeof sp, cudaMemcpyHostToDevice);
         }
+        // STRATA_GLM_GROUP_EXPERTS (the batched rows' experts, each once for its group: glm_rows.cu): every row of a
+        // group routes before the group's experts run, so a row's fetched experts cannot share the 8 slots above (the
+        // verify window redoes itself token by token when its tokens take one twice; a batched step cannot) - row i
+        // has slots [8 i, 8 i + 8) of rows_scr, row 0 the ones above.  The rows' route state (plans, the CPU lane's
+        // answer slots, the grouping) is the verify window's, its rows a window's tokens (win_alloc).  Both before the
+        // pool takes the card.
+        if (glmfast::group_experts_on() && rows_ != nullptr) {
+            const int R = std::min(rows_max(), n_parts_ > 1 ? split_rows_setting() : seq_count());
+            if (R >= 2) {
+                const size_t extra = (size_t) (R - 1) * 8 * sstride;
+                std::vector<unsigned long long> sp((size_t) R * 8);
+                if (cudaMalloc(&F->rows_scratch, extra) != cudaSuccess ||
+                    cudaMalloc((void**) &F->rows_scr, sp.size() * sizeof(unsigned long long)) != cudaSuccess) {
+                    cudaGetLastError();
+                    err = "glm fast: the grouped rows' scratch slots (" + std::to_string(extra >> 20) +
+                          " MB) did not allocate";
+                    return false;
+                }
+                for (size_t i = 0; i < sp.size(); ++i)
+                    sp[i] = (unsigned long long) (i < 8 ? F->scratch + i * sstride : F->rows_scratch + (i - 8) * sstride);
+                cudaMemcpy(F->rows_scr, sp.data(), sp.size() * sizeof(unsigned long long), cudaMemcpyHostToDevice);
+                F->scratch_bytes += extra;
+                size_t f0 = 0, f1 = 0, tot = 0;
+                cudaMemGetInfo(&f0, &tot);
+                if (!win_alloc(kWinMax, err)) return false;
+                cudaMemGetInfo(&f1, &tot);
+                F->win_bytes += f0 > f1 ? f0 - f1 : 0;
+                cpu_win_alloc(F, g, exl3_);   // the merged CPU lane's rows (win_cpu_merged)
+                F->rows_group = R;
+                std::fprintf(stderr, "glm fast: CUDA%d grouped rows' experts (STRATA_GLM_GROUP_EXPERTS): up to %d rows, "
+                             "%.0f MB of scratch slots and %.0f MB of route state\n", dev_, R, (double) extra / 1e6,
+                             (double) (f0 > f1 ? f0 - f1 : 0) / 1e6);
+            }
+        }
         // a parallel split load: the parts pin their prompt paths, size their pools and plan their RAM tiers one at a
         // time, in part order - the first part's RAM measurement then sees none of the later parts' prompt staging, as
         // when they load one after another (it took that staging twice: once pinned, once in the headroom)
@@ -1046,6 +1082,18 @@ bool Glm5Model::fast_setup(std::string& err) {
         if (pool_b_.fixed > 0)
             std::fprintf(stderr, "glm fast: CUDA%d --expert-cache %lld: at most %.2f GB for the expert pool\n", dev_,
                          (long long) pool_b_.fixed, (double) pool_b_.fixed * (double) stride_max / 1073741824.0);
+        // the prompt path's MMQ context keeps a scratch pool (llama.cpp's stream-k fixup tiles) that it fills lazily,
+        // out of free VRAM, on the first product of a chunk - so what the pool leaves free must cover it (the prompt
+        // path's own borrow is the tail, which this shrinks and prefill_setup sizes the chunk against)
+        if (pf_ != nullptr) {
+            const size_t sc = mmq_scratch_reserve();
+            if (sc > 0) {
+                avail -= std::min(avail, sc);
+                std::fprintf(stderr, "glm fast: CUDA%d the prompt path's MMQ scratch pool keeps %.0f MB of the free VRAM "
+                                     "(STRATA_GLM_MMQ_RESERVE_MB): the expert pool is sized without it\n",
+                             dev_, (double) sc / 1048576.0);
+            }
+        }
 #if defined(STRATA_USE_HIP)
         if (F->unified_memory) {
             // Measure after dense/KV/scratch and pinned prompt staging are allocated.
@@ -1149,11 +1197,12 @@ bool Glm5Model::fast_setup(std::string& err) {
         if (pf_ != nullptr) {
             k_extra = tail_slots(prefill_borrow_bytes());
             // (the prestage buffer is the part that can shrink: to what the pool can lend, else none)
-            const int k_max = per - (g.n_exp_used + gf::kSpares + 2);
+            const int k_keep = pool_keep(g.n_exp_used);
+            const int k_max = per - k_keep;
             if (k_extra > k_max && k_max > 0) k_extra = tail_slots(prefill_trim_prestage((size_t) k_max * stride_sum));
             // (a prompt runs alone - no decode beside it, unlike the vision encoder's lending below - so its main
             // slots need little more than one route's experts and the spares)
-            if (per - k_extra < g.n_exp_used + gf::kSpares + 2) {
+            if (per - k_extra < k_keep) {
                 std::fprintf(stderr, "glm prefill: CUDA%d the pool (%d slots/layer) cannot lend %zu MB - token by token\n",
                              dev_, per, prefill_borrow_bytes() >> 20);
                 prefill_destroy();
@@ -1938,6 +1987,20 @@ struct X3Rows {
     float* xds() const { return xsb(2); }
 };
 
+// a merged layer's CPU-lane rows (win_cpu_merged): each token's activation quant, each entry's h quant and rows - the
+// window lanes' (win_lanes_make) and the grouped batched rows' (STRATA_GLM_GROUP_EXPERTS, fast_setup)
+void cpu_win_alloc(Glm5Model::FastState* F, const Glm5Geometry& g, bool exl3) {
+    namespace kc = strata::kernels::cpu;
+    constexpr int kWinMax = Glm5Model::kWinMax;
+    auto& C = F->cpu_win;
+    if (!C.dn.empty()) return;
+    C.act.assign((size_t) kWinMax * kc::kNativeActBytes, 0);
+    C.hq.assign((size_t) kWinMax * 8 * kc::kNativeHBytes, 0);
+    C.ff.assign((size_t) kWinMax * 8 * g.n_ff_exp, 0.0f);
+    C.dn.assign((size_t) kWinMax * 8 * g.n_embd, 0.0f);
+    if (exl3) C.x3.assign((size_t) kWinMax * 8 * X3Rows::floats(g.n_embd, g.n_ff_exp), 0.0f);
+}
+
 // matrix r (0 gate, 1 up, 2 down) of an EXL3 expert blob
 strata::kernels::cpu::Exl3Part x3_part(const uint8_t* blob, const strata::kernels::exl3::ExpertLayout& xl, int r,
                                        int E, int FF) {
@@ -2297,8 +2360,10 @@ void Glm5Model::win_cpu_merged(int il, int nb, const gf::MoeRequest* const* rq, 
         const char* v = getenv("STRATA_GLM_WIN_X3_POOLS");
         return v != nullptr && std::atoi(v) == 1 ? 1 : 2;
     }();
+    // a batched rows group (win_rows): every expert on this part's own pool - the other part's pool computes its group
+    const bool own = rq[0]->win_rows != 0;
     for (int k = 0; k < nu; ++k) {
-        const int h = (Ly.exl3 && x3_pools == 1) || load[0] <= load[1] ? 0 : 1;
+        const int h = own || (Ly.exl3 && x3_pools == 1) || load[0] <= load[1] ? 0 : 1;
         half[h][nh[h]++] = order[k];
         load[h] += cost(order[k]);
     }
@@ -2392,18 +2457,23 @@ void Glm5Model::win_cpu_merged(int il, int nb, const gf::MoeRequest* const* rq, 
         });
     };
     // half 1 on the second lane, half 0 here on the first lane's pool (its thread is idle: no window token is queued)
-    std::atomic<int> done{0};
-    const std::function<void(glmfast::Workers&)> fn1 = [&](glmfast::Workers& pool) {
-        if (Ly.exl3) run_half_x3(1, pool);
-        else run_half(1, pool);
-    };
-    FastState::WinLane::Job j1;
-    j1.fn = &fn1;
-    j1.done = &done;
-    F->win_lane[1]->push(j1);
-    if (Ly.exl3) run_half_x3(0, *F->win_lane[0]->pool);
-    else run_half(0, *F->win_lane[0]->pool);
-    while (done.load(std::memory_order_acquire) == 0) cpu_relax();
+    if (own) {
+        if (Ly.exl3) run_half_x3(0, *F->cpu_pool);
+        else run_half(0, *F->cpu_pool);
+    } else {
+        std::atomic<int> done{0};
+        const std::function<void(glmfast::Workers&)> fn1 = [&](glmfast::Workers& pool) {
+            if (Ly.exl3) run_half_x3(1, pool);
+            else run_half(1, pool);
+        };
+        FastState::WinLane::Job j1;
+        j1.fn = &fn1;
+        j1.done = &done;
+        F->win_lane[1]->push(j1);
+        if (Ly.exl3) run_half_x3(0, *F->win_lane[0]->pool);
+        else run_half(0, *F->win_lane[0]->pool);
+        while (done.load(std::memory_order_acquire) == 0) cpu_relax();
+    }
     for (int j = 0; j < nb; ++j) {
         float* out = ans[j]->part;
         const float* dn[8];
@@ -2482,11 +2552,7 @@ void Glm5Model::win_lanes_make(std::shared_ptr<glmfast::Workers> p0, std::shared
         glmfast::pin_thread(L->th.native_handle(), k == 0 ? c0 : c1);
         F->win_lane[k] = L;
     }
-    F->cpu_win.act.assign((size_t) kWinMax * kc::kNativeActBytes, 0);
-    F->cpu_win.hq.assign((size_t) kWinMax * 8 * kc::kNativeHBytes, 0);
-    F->cpu_win.ff.assign((size_t) kWinMax * 8 * g.n_ff_exp, 0.0f);
-    F->cpu_win.dn.assign((size_t) kWinMax * 8 * g.n_embd, 0.0f);
-    if (exl3_) F->cpu_win.x3.assign((size_t) kWinMax * 8 * X3Rows::floats(g.n_embd, g.n_ff_exp), 0.0f);
+    cpu_win_alloc(F, g, exl3_);
 }
 
 void Glm5Model::win_lanes_stop() {
@@ -3650,6 +3716,8 @@ void Glm5Model::fast_destroy() {
     if (F->hop_h) cudaFreeHost(F->hop_h);
     if (F->tok_h) cudaFreeHost(F->tok_h);
     if (F->scratch) cudaFree(F->scratch);
+    if (F->rows_scratch) cudaFree(F->rows_scratch);
+    if (F->rows_scr) cudaFree(F->rows_scr);
     if (F->mtp_h) cudaFree(F->mtp_h);
     if (F->mtp_catq) cudaFree(F->mtp_catq);
     if (F->mtp_logits) cudaFree(F->mtp_logits);
@@ -3988,8 +4056,12 @@ void Glm5Model::fast_service() {
         }
         std::atomic_thread_fence(std::memory_order_acquire);
         // (the lanes are made at the CPU lane's setup, after this thread started; an EXL3 pack's merged rows with them)
-        const bool held = win_merge && rq->win_n > 0 && F->cpu_ans_h != nullptr && F->win_lane[0] != nullptr &&
-                          F->win_lane[1] != nullptr && (!exl3_ || !F->cpu_win.x3.empty());
+        // A batched rows step's group (STRATA_GLM_GROUP_EXPERTS, win_rows) is held the same way and merged on this part's
+        // own pool - the other part works on its own group meanwhile; not with a helper GPU (it answers per route)
+        const bool held = win_merge && rq->win_n > 0 && F->cpu_ans_h != nullptr && !F->cpu_win.dn.empty() &&
+                          (!exl3_ || !F->cpu_win.x3.empty()) &&
+                          (rq->win_rows != 0 ? F->cpu_pool != nullptr && F->helper.device() < 0
+                                             : F->win_lane[0] != nullptr && F->win_lane[1] != nullptr);
         if (rq->error != 0) {
             if (held) {   // a window token's invalid route: nothing to compute, but it may be the layer's last
                 ++w_held;
@@ -5163,21 +5235,12 @@ bool Glm5Model::fast_moe(int il, bool& pf_pending, std::string& err, bool cpu_wa
     return ok;
 }
 
-bool Glm5Model::fast_moe_experts(int il, const MoeIo& io, bool pred, int n_ah, const float* const* ah_bias,
-                                 bool& pf_pending, std::string& err) {
+void Glm5Model::fast_moe_route(int il, const MoeIo& io, const gf::MoeDev& md, void* sh_hq, bool pred, int n_ah,
+                               const float* const* ah_bias, bool lane, int win, int win_n, int win_rows) {
     FastState* F = fast_;
     const Glm5Geometry& g = g_;
-    cudaStream_t s = F->cs;
     const auto& Ly = F->L[(size_t) il];
     const int FFs = g.n_ff_exp * g.n_shared;
-    // the prefetch list of THIS route lives in the buffer of this layer's parity (the side stream may still
-    // read the previous layer's list while this route writes)
-    gf::MoeDev md = F->md;
-    md.pf_src = F->pf_buf[il & 1];
-    md.pf_dst = F->pf_buf[il & 1] + 8;
-    md.pf_n = F->pf_n_buf[il & 1];
-    // the CPU lane splits this layer's RAM-tier experts when the CPU has a dot product for its types
-    const bool lane = (F->cpu_plan != 0ull || F->helper.device() >= 0) && F->cpu_fmt[(size_t) il].n_ff > 0;
     // STRATA_GLM_PROMOTE_MIN=<n>: a fetched expert is kept in VRAM only when its aged route count clears n.
     // Unset or <= 1: the old rule (keep it whenever a spare is free).
     static const int promote_min = [] {
@@ -5191,16 +5254,34 @@ bool Glm5Model::fast_moe_experts(int il, const MoeIo& io, bool pred, int n_ah, c
     }();
     static const int near_n = getenv("STRATA_GLM_ROUTE_LOG") != nullptr ? 16 : 0;   // the route log's near misses
     gf::moe_route(io.rlog, Ly.router_bias, g.n_expert, g.n_exp_used, g.w_scale, g.norm_w != 0, il, io.x,
-                  g.n_embd, md, io.sh_g, io.sh_u, g.swiglu_shexp, FFs, F->sh_hq, s,
+                  g.n_embd, md, io.sh_g, io.sh_u, g.swiglu_shexp, FFs, sh_hq, F->cs,
                   pred ? F->plog : nullptr, pred ? F->L[(size_t) il + 1].router_bias : nullptr,
                   pred ? F->max_pf : 0, n_ah > 0 ? F->alog : nullptr, ah_bias, n_ah,
                   il == mtp_il_ ? mtp_skip_from() : glmfast::trunk_skip_from(il), lane ? F->cpu_plan : 0ull, promote_min,
-                  pf_rank, near_n, 0, nullptr, 0, il == mtp_il_ ? 8 : F->disk_skip_from,
+                  pf_rank, near_n, win, nullptr, win_n, il == mtp_il_ ? 8 : F->disk_skip_from,
                   il == mtp_il_ ? 0.0f : F->disk_skip_w, il == mtp_il_ ? 0.0f : [&] {
                       const float w = F->miss_w_req >= 0.0f ? F->miss_w_req : F->miss_w;
                       const int from = F->miss_from_req >= 0 ? F->miss_from_req : F->miss_from;
                       return il >= from ? w : 0.0f;
-                  }());
+                  }(), win_rows);
+}
+
+bool Glm5Model::fast_moe_experts(int il, const MoeIo& io, bool pred, int n_ah, const float* const* ah_bias,
+                                 bool& pf_pending, std::string& err, bool rows) {
+    FastState* F = fast_;
+    const Glm5Geometry& g = g_;
+    cudaStream_t s = F->cs;
+    const auto& Ly = F->L[(size_t) il];
+    const int FFs = g.n_ff_exp * g.n_shared;
+    // the prefetch list of THIS route lives in the buffer of this layer's parity (the side stream may still
+    // read the previous layer's list while this route writes)
+    gf::MoeDev md = F->md;
+    md.pf_src = F->pf_buf[il & 1];
+    md.pf_dst = F->pf_buf[il & 1] + 8;
+    md.pf_n = F->pf_n_buf[il & 1];
+    // the CPU lane splits this layer's RAM-tier experts when the CPU has a dot product for its types
+    const bool lane = (F->cpu_plan != 0ull || F->helper.device() >= 0) && F->cpu_fmt[(size_t) il].n_ff > 0;
+    fast_moe_route(il, io, md, F->sh_hq, pred, n_ah, ah_bias, lane);
     if (F->prof_on) F->mark("moe_route");
     ++F->expected;
     // the side stream copies the next layer's predicted experts while this layer computes.  STRATA_GLM_PREFETCH_AT:
@@ -5224,7 +5305,14 @@ bool Glm5Model::fast_moe_experts(int il, const MoeIo& io, bool pred, int n_ah, c
     // in VRAM is then pulled over PCIe into its slot, and all 8 run from VRAM.  With every expert in VRAM
     // (all_resident) neither can happen and both launches are left out: an empty launch and its gap were
     // ~2.5 ms of a 54 ms Maya-S token on the 8065S (moe_wait 1.8 + moe_fetch 0.7 in STRATA_GLM_PROF)
-    if (!F->all_resident) {
+    // STRATA_GLM_SKIP_EMPTY=1, a batched step's row (glm_rows.cu - the token path's launches are its graphs'): the
+    // same per layer (FastState::layer_res: a layer whose every expert is in VRAM), and elsewhere the wait and the
+    // fetch as one launch (gf::moe_wait_fetch): a batched step makes these launches once a row and layer, mostly empty
+    const bool skip_empty = rows && glmfast::skip_empty_on();
+    const bool empty = F->all_resident || (skip_empty && F->layer_resident(il));
+    if (!empty && skip_empty) {
+        gf::moe_wait_fetch(md, g.n_embd, g.n_exp_used, Ly.blob, s);
+    } else if (!empty) {
         gf::moe_wait(md, g.n_embd, s);
         if (F->prof_on) F->mark("moe_wait");
         gf::moe_fetch(md, g.n_exp_used, Ly.blob, s);
@@ -5266,7 +5354,7 @@ bool Glm5Model::fast_moe_experts(int il, const MoeIo& io, bool pred, int n_ah, c
     if (F->prof_on) F->mark("moe_down");
     }
     // the CPU lane's experts last: the device's own down rows ran while the CPU worked (none: all in VRAM)
-    if (lane && !F->all_resident && !moe_defer_wait_) {
+    if (lane && !empty && !moe_defer_wait_) {
         gf::moe_cpu_wait(md, g.n_embd, io.ffn, s);
         if (F->prof_on) F->mark("moe_cpu_wait");
     }
@@ -5737,6 +5825,7 @@ Glm5Model::PoolBudget Glm5Model::pool_budget(size_t free_b, size_t total_b, int 
             glmfast::pool_reserve(free_b, b.reserve, b.reserve_given, b.fixed > 0, floor_b, (size_t) 300 << 20);
     b.avail = glmfast::expert_pool_budget(false, free_b, 0, b.reserve, 0, 0);
     if (b.fixed > 0 && slot_b > 0) b.avail = std::min(b.avail, (size_t) b.fixed * slot_b);
+
     if (const char* cap = getenv("STRATA_GLM_POOL_GB"))
         b.avail = std::min(b.avail, (size_t) (std::atof(cap) * 1073741824.0));
     if (const char* vc = getenv("STRATA_GLM_VRAM_GB")) {
@@ -5745,6 +5834,21 @@ Glm5Model::PoolBudget Glm5Model::pool_budget(size_t free_b, size_t total_b, int 
         b.avail = std::min(b.avail, cap > used + b.reserve ? cap - used - b.reserve : (size_t) 0);
     }
     return b;
+}
+
+// The prompt path's MMQ scratch pool (mmq::Context -> llama.cpp's CachingPool) allocates its buffers lazily, on the
+// first product of a chunk, and never gives them back: they are the stream-k fixup tiles of the launch (one float
+// buffer of block_nums x J x I, tens of MB, and the ids tables of the MoE path).  Nothing sizes them today, so they
+// land on free VRAM - and at a 16,384-token chunk on the head card (56 slots/layer, 4.53 GB pool + 2.89 GB held, ~110
+// MB free) the first MoE product's allocation failed and ggml_cuda_error aborted the engine mid-prompt.  The number is
+// a worst case read off a chunk of that size (STRATA_GLM_MMQ_RESERVE_MB, see its log line): both fast_setup (the pool)
+// and prefill_setup (the lendable the chunk is chosen against) subtract it, so the pool it sizes is the pool it gets.
+size_t Glm5Model::mmq_scratch_reserve() {
+    static const size_t r = [] {
+        const char* v = getenv("STRATA_GLM_MMQ_RESERVE_MB");
+        return v != nullptr ? (size_t) std::max(0LL, std::atoll(v)) << 20 : (size_t) 0;
+    }();
+    return r;
 }
 
 // this part's budget: the one above, less what pool_check found short of the reserve once it was written
@@ -5776,31 +5880,7 @@ static size_t win_dedicated_bytes(int dev) {
         cudaGetLastError();
         return 0;
     }
-    HMODULE m = LoadLibraryA("dxgi.dll");
-    if (m == nullptr) return 0;
-    using Create = HRESULT(WINAPI*)(REFIID, void**);
-    const auto create = reinterpret_cast<Create>(reinterpret_cast<void*>(GetProcAddress(m, "CreateDXGIFactory1")));
-    static const GUID kFactory1 = {0x770aae78, 0xf26f, 0x4dba, {0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87}};
-    IDXGIFactory1* f = nullptr;
-    size_t ded = 0, amd = 0;
-    int n_amd = 0;
-    if (create != nullptr && SUCCEEDED(create(kFactory1, (void**) &f)) && f != nullptr) {
-        IDXGIAdapter1* a = nullptr;
-        for (UINT i = 0; f->EnumAdapters1(i, &a) == S_OK; ++i) {
-            DXGI_ADAPTER_DESC1 d{};
-            if (SUCCEEDED(a->GetDesc1(&d)) && !(d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
-                if (std::memcmp(&d.AdapterLuid, prop.luid, sizeof(d.AdapterLuid)) == 0) ded = d.DedicatedVideoMemory;
-                if (d.VendorId == 0x1002) {
-                    amd = d.DedicatedVideoMemory;
-                    ++n_amd;
-                }
-            }
-            a->Release();
-        }
-        f->Release();
-    }
-    FreeLibrary(m);
-    return ded > 0 ? ded : n_amd == 1 ? amd : 0;   // (no LUID match: the one AMD adapter)
+    return (size_t) strata::platform::dedicated_bytes(prop.luid);
 }
 #endif
 
@@ -5945,6 +6025,21 @@ std::pair<size_t, size_t> Glm5Model::commit_capped() const {
             ram = m->commit_ram_;
         }
     return {kept, kept > 0 ? glmfast::pagefile_hint_gib(limit, ram, kept) : 0};
+}
+
+// The floor a lend leaves the pool: a layer keeps one route's experts and the device's spares, +2 for the token that
+// lands as the loan is taken back (Strata's number, the same in the prompt path's sizing, the lend and its refusal).
+// STRATA_GLM_PREFILL_KEEP=<slots> lowers it - the prompt path's buffers then take more of the pool and the chunk
+// grows, at the resident cache's expense (the tail still serves decode between prompts); route + spares is the floor
+// the pool's own sizing needs (fast_setup's `need`), so a smaller number is clamped up, not obeyed.
+int Glm5Model::pool_keep(int n_exp_used) {
+    const int floor_slots = n_exp_used + gf::kSpares;
+    int keep = floor_slots + 2;
+    if (const char* v = getenv("STRATA_GLM_PREFILL_KEEP")) {
+        const int want = std::atoi(v);
+        if (want > 0) keep = std::max(floor_slots, want);
+    }
+    return keep;
 }
 
 bool Glm5Model::has_mtp() const {

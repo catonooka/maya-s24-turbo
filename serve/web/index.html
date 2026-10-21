@@ -301,6 +301,12 @@
       <span class="muted small" id="ctx-est">How much text the model holds at once: the chat, files, tool output.</span>
       <span class="ctx-warn small" id="ctx-warn" hidden></span>
     </div>
+    <div class="st-field" id="port-field" hidden>
+      <label class="st-label" for="s-port">Port <output id="o-port"></output></label>
+      <input class="st-input" type="number" id="s-port" min="1024" max="65535" step="1" inputmode="numeric">
+      <span class="muted small" id="port-est">Where this page and the API listen (http://this-pc:<b>port</b>/).</span>
+      <span class="ctx-warn small" id="port-warn" hidden></span>
+    </div>
 
     <div class="drawer-section">This chat</div>
     <div class="st-field">

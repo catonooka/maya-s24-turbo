@@ -1777,5 +1777,71 @@ class IdleUnload(unittest.TestCase):
         self.assertEqual((self.engine.restarts, self.engine.running, self.svc.unloaded), (1, True, False))
 
 
+class HeldEngine(MockEngine):
+    """The first request holds the engine until `release` is set (heartbeats meanwhile); the others answer at once."""
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.release, self.held, self.calls = threading.Event(), threading.Event(), 0
+
+    def generate(self, ids, max_new, sampling, cancel, embeddings=None):
+        self.calls += 1
+        if self.calls == 1:
+            self.held.set()
+            while not self.release.is_set() and not cancel.is_set():
+                yield None
+                time.sleep(0.05)
+        yield from super().generate(ids, max_new, sampling, cancel, embeddings)
+
+
+class GoneClients(unittest.TestCase):
+    """#314: a request whose client went away while it waited in the queue leaves it, streamed or not - before, nothing
+    was written to a queued request's client, so nobody noticed and the queue filled with requests no one waited for."""
+
+    def setUp(self):
+        tok = ByteTokenizer()
+        self.engine = HeldEngine(tok, "</think>\n\nhello", max_context=CTX)
+        self.svc = Service(self.engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        self.httpd = serve(self.svc, port=0)
+        self.port = self.httpd.server_address[1]
+
+    def tearDown(self):
+        self.engine.release.set()
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+    def send(self, stream):
+        import socket
+        body = json.dumps({"model": "m", "max_tokens": 8, "stream": stream,
+                           "messages": [{"role": "user", "content": "hi"}]}).encode()
+        s = socket.create_connection(("127.0.0.1", self.port))
+        s.sendall(b"POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                  b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body)
+        return s
+
+    def queued(self):
+        with self.svc.status_lock:
+            return self.svc.status.get("queued", 0)
+
+    def wait(self, cond, s=5.0):
+        end = time.time() + s
+        while time.time() < end and not cond():
+            time.sleep(0.05)
+        return cond()
+
+    def test_a_queued_request_leaves_when_its_client_goes(self):
+        first = self.send(False)
+        self.assertTrue(self.engine.held.wait(5))
+        for stream in (False, True):
+            waiting = self.send(stream)
+            self.assertTrue(self.wait(lambda: self.queued() == 1), "the second request should wait in the queue")
+            waiting.close()
+            self.assertTrue(self.wait(lambda: self.queued() == 0), f"stream={stream}: still queued after its client left")
+        self.engine.release.set()
+        first.settimeout(10)
+        self.assertIn(b"200 OK", first.recv(65536))   # (the request that kept its client answers as before)
+        first.close()
+        self.assertEqual(self.engine.calls, 1)         # (neither gone request reached the engine)
+
+
 if __name__ == "__main__":
     unittest.main()

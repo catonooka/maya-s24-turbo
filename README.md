@@ -179,8 +179,8 @@ builds everything once (20-40 minutes plus the download) and **starts the model*
 ## Using it
 
 - **In the browser:** chat (kept in your browser, per-chat instructions, edit and regenerate, HTML previews), a live
-  **Monitor** of the model and your hardware (down to what fills each GPU's memory), and a context size you can change
-  in Settings.
+  **Monitor** of the model and your hardware (down to what fills each GPU's memory), and a context size and port you
+  can change in Settings.
 - **Your apps and coding agents:** an OpenAI-compatible API at `http://127.0.0.1:8080/v1`, and Anthropic's at
   `http://127.0.0.1:8080/v1/messages` (Claude Code: `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`). Tool calls are
   streamed as the model writes them, and a long prompt's reading progress too when a request asks for it
@@ -239,7 +239,8 @@ your setup and the engine's speed lines; nothing is sent anywhere by itself. The
 - **Windows on a Strix Halo / Gorgon Halo: other programs run out of memory, or the setup warns about the page
   file:** set the page file to the size the setup prints ([docs/AMD_MAYA.md](docs/AMD_MAYA.md)).
 - **The download stopped:** run `./maya.sh` again; it continues where it stopped.
-- **Port 8080 is in use:** Maya is already running, or `--port 8081` starts another one.
+- **Port 8080 is in use:** Maya is already running, or `--port 8081` starts another one. Settings > Port moves Maya to
+  another port for good (it starts again there).
 
 ## Support
 

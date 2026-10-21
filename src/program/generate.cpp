@@ -2258,8 +2258,7 @@ static int glm_pack_generate(const Options& o) {
     static const int64_t multi_room = (int64_t) env_num("STRATA_GLM_MULTI_ROOM", 16384);
     static const int multi_boundary_every = (int) env_num("STRATA_GLM_MULTI_BOUNDARY", 32);
     static const bool multi_spec = env_num("STRATA_GLM_MULTI_SPEC", 1) != 0;
-    static const int split_rows = std::clamp((int) env_num("STRATA_GLM_SPLIT_ROWS", 0), 0,
-                                             strata::core::Glm5Model::rows_max());
+    static const int split_rows = strata::core::Glm5Model::split_rows_setting();
     // STRATA_GLM_EVEN_GROUPS=1: the split's groups cut evenly from all the running requests, two at least, instead of
     // k at a time (strata/core/split_groups.hpp): k 4 no longer makes one group - and idle GPUs - at 4 requests or fewer
     static const bool even_groups = env_num("STRATA_GLM_EVEN_GROUPS", 0) != 0;

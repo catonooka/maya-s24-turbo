@@ -42,6 +42,23 @@ class Engine(unittest.TestCase):
             self.assertEqual(toks, [i + 1000 for i in ids], k)
         self.assertEqual(len(out), 3)
 
+    def test_each_request_reads_its_own_done_figures(self):   # (#310: one shared `last` mixed them up)
+        out = {}
+
+        def one(k):
+            ids = list(range(k * 100, k * 100 + 20 + 7 * k))
+            for _ in self.engine.generate(ids, 20, {}, threading.Event()):
+                pass
+            time.sleep(0.2)                            # (the others' DONE lines land meanwhile)
+            out[k] = (len(ids), self.engine.last.get("prompt_tokens"))
+
+        ths = [threading.Thread(target=one, args=(k,)) for k in range(3)]
+        [t.start() for t in ths]
+        [t.join(30) for t in ths]
+        self.assertEqual(len(out), 3)
+        for k, (n, got) in out.items():
+            self.assertEqual(got, n, k)
+
     def test_a_consumer_that_stops_ends_only_its_request(self):
         out = {}
 
