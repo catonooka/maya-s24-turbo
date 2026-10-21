@@ -1,0 +1,13 @@
+ds4: CUDA0 layers [0, 42] (tensor parallel 2, part 0) + head: weights 3.66 GB, experts 18.64 GB (2193 of 15744 in VRAM), caches 0.03 GB, 228 MiB free
+ds4: CUDA1 layers [0, 39] (tensor parallel 2, part 1): weights 3.08 GB, experts 11.83 GB (1809 of 15360 in VRAM), caches 0.03 GB, 7685 MiB free
+ds4: 13551 routed experts on the CPU lane (172.9 GB of RAM, 1 NUMA parts), 16 threads
+prompt: 8 tokens in 174 ms (45.88 tok/s, windows of 16)
+prompt's Engram rows: 384, 0.0% without a read (repeats and the row cache), 384 read
+175,247,257,237,200,175,247,257,237,201,1,dspark: 9 rounds, 1 drafts offered, 1 accepted (1.22 tokens a round); drafting 2.71 ms a round, verifying 48.7 ms in all (0 windows)
+dspark per position (kept / reached): 1: 1/1 100%
+decode: 11 tokens in 266 ms (37.64 tok/s); CPU lane: 208 of 2625 experts, streamed to the GPU: 0; the cache moved 20 (20 in all)
+decode per token: layers 8.97 ms (of it: routing waits 0.00, CPU lane 9.24, the rest host launches), head wait 15.70, Engram reads 3.41
+Engram per token: 48 rows, 30.0% without a read (the row cache holds 720 of 1016800), 33.6 read, the reads 4.44 ms from asking to the last one (left to wait: 3.41)
+decode reads from the disk: 0.3 MB a token
+
+EXIT=0

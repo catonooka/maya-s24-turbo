@@ -1,0 +1,10 @@
+ds4: CUDA0 layers [0, 42] (tensor parallel 2, part 0) + head: weights 3.66 GB, experts 18.64 GB (2193 of 15744 in VRAM), caches 0.03 GB, 228 MiB free
+ds4: CUDA1 layers [0, 39] (tensor parallel 2, part 1): weights 3.08 GB, experts 11.83 GB (1809 of 15360 in VRAM), caches 0.03 GB, 7685 MiB free
+ds4: 13551 routed experts on the CPU lane (172.9 GB of RAM, 1 NUMA parts), 16 threads
+prompt: 35 tokens in 1713 ms (20.43 tok/s, windows of 16)
+prompt's Engram rows: 1680, 0.0% without a read (repeats and the row cache), 1680 read
+1,decode: 1 tokens in 8 ms (0.00 tok/s); CPU lane: 0 of 0 experts, streamed to the GPU: 0; the cache moved 0 (15 in all)
+decode per token: layers 0.00 ms (of it: routing waits 0.00, CPU lane 0.00, the rest host launches), head wait 0.00, Engram reads 0.00
+decode reads from the disk: 0.4 MB a token
+
+EXIT=0
