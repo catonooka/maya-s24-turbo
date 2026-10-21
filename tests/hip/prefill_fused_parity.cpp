@@ -1,4 +1,4 @@
-// gfx1151 GLM fused expert validation. Random valid IQ blocks, MMQ and independent
+// gfx1151 / gfx1100 GLM fused expert validation. Random valid IQ blocks, MMQ and independent
 // FP32 dequantized products; nonzero bounds, empty experts, partial/multiple tiles,
 // permuted source rows, clipping, all-zero input, and two-byte weight alignment.
 #include "strata/prefill/moe_fused_rdna4.hpp"
@@ -49,7 +49,7 @@ double relative(const std::vector<float>& a, const std::vector<float>& b) {
 }
 
 void run(ggml_type gu_type, ggml_type d_type, float limit = 1.25f) {
-    if (!rf::supported(gu_type, d_type)) throw std::runtime_error("requires gfx1151 and fused enabled");
+    if (!rf::supported(gu_type, d_type)) throw std::runtime_error("requires gfx1151 or gfx1100 and fused enabled");
     std::mt19937 rng(1570 + gu_type * 17 + d_type);
     rf::Geometry geo{gu_type, d_type, ggml_row_size(gu_type, E), ggml_row_size(d_type, FF), 0, 0, limit};
     geo.up_off = FF * geo.gu_row; geo.down_off = 2 * geo.up_off;
@@ -153,7 +153,7 @@ int main() {
     try {
         ck(hipSetDevice(0));
         if (!rf::supported(GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_S)) {
-            std::cout << "SKIP: fused experts need compiled gfx1151 kernels and the switch enabled\n";
+            std::cout << "SKIP: fused experts need compiled gfx1151 or gfx1100 kernels and the switch enabled\n";
             return 77;
         }
         for(float limit:{1.25f,100.0f})
