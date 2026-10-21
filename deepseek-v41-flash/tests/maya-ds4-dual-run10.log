@@ -1,0 +1,8 @@
+unknown option --ids-file
+maya-ds4 --pack <model>/maya-ds4 [--gpus 0,1,...] [--max-context N] [--reserve-mib N]
+           [--vram-experts F] [--cpu-threads N] [--expert-profile FILE|none] [--no-expert-cache] [--verbose]
+           [--tp N] [--threads on|off] [--prefill-chunk N] [--dspark on|off|none] [--dspark-conf F]
+           [--vision on|off] [--mmap-experts on|off|auto]
+           (--ids I,J,... [--images FILE] [--n N] [--dump-logits FILE] | --serve
+           | --encode-image FILE.rgb --size WxH --dump-image OUT)
+EXIT=2

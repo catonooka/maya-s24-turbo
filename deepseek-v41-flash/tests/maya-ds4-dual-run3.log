@@ -1,0 +1,2 @@
+./build-ds4/maya-ds4: /usr/lib/x86_64-linux-gnu/libm.so.6: version `GLIBC_2.43' not found (required by ./build-ds4/maya-ds4)
+EXIT=1

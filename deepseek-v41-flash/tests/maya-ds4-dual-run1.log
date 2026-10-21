@@ -1,0 +1,1 @@
+ds4: the experts VRAM leaves over (~167.2 GB) are read in place from the model's files, not copied into RAM (4.0 GB of RAM free to keep them: the most-routed 0.0 GB read ahead; prompts in chunks of 8192)
