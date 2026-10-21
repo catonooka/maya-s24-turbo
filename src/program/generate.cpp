@@ -46,6 +46,7 @@
 #include "strata/prefill/prefill.hpp"
 #include "strata/core/native_dense.hpp"
 #include "strata/core/glm_model.hpp"
+#include "strata/core/split_groups.hpp"
 #include "strata/program/logits_selection.hpp"
 #include "strata/program/conv_cache.hpp"
 #include "strata/spec/draft_policy.hpp"
@@ -2259,6 +2260,9 @@ static int glm_pack_generate(const Options& o) {
     static const bool multi_spec = env_num("STRATA_GLM_MULTI_SPEC", 1) != 0;
     static const int split_rows = std::clamp((int) env_num("STRATA_GLM_SPLIT_ROWS", 0), 0,
                                              strata::core::Glm5Model::rows_max());
+    // STRATA_GLM_EVEN_GROUPS=1: the split's groups cut evenly from all the running requests, two at least, instead of
+    // k at a time (strata/core/split_groups.hpp): k 4 no longer makes one group - and idle GPUs - at 4 requests or fewer
+    static const bool even_groups = env_num("STRATA_GLM_EVEN_GROUPS", 0) != 0;
     // Reuse split-row scheduler buffers; allocating vectors for each decode group defeats part of the batching gain.
     std::vector<Gen*> split_group;
     std::vector<int> split_seqs;
@@ -2739,10 +2743,21 @@ static int glm_pack_generate(const Options& o) {
                 split_group.clear();
                 return true;
             };
+            int ready = 0, active = 0;
+            for (auto& gp : gens) {
+                if (gp->done) continue;
+                ready += !gp->inflight && gp->pending >= 0;
+                active += gp->inflight || gp->pending >= 0;
+            }
+            const std::vector<int> sizes = strata::core::split_groups(ready, active, split_rows, even_groups);
+            size_t gi = 0;
             for (auto& gp : gens) {
                 if (gp->done || gp->inflight || gp->pending < 0) continue;
                 split_group.push_back(gp.get());
-                if ((int) split_group.size() == split_rows && !issue()) { multi_fail(err); return; }
+                if (gi < sizes.size() && (int) split_group.size() == sizes[gi]) {
+                    ++gi;
+                    if (!issue()) { multi_fail(err); return; }
+                }
             }
             if (!issue()) { multi_fail(err); return; }
             if (flight.empty()) { gen_sweep(); return; }
@@ -2905,8 +2920,11 @@ static int glm_pack_generate(const Options& o) {
         if (srows) {
             std::deque<int> qg;
             const auto issue_rows = [&](const std::vector<int>& seqs) -> bool {
-                for (size_t first = 0; first < seqs.size(); first += (size_t) split_rows) {
-                    const int k = std::min(split_rows, (int) (seqs.size() - first));
+                // (STRATA_GLM_EVEN_GROUPS: the groups the server makes, from the sequences still decoding)
+                int active = 0;
+                for (int s = 0; s < n; ++s) active += (int) out[(size_t) s].size() < G;
+                size_t first = 0;
+                for (const int k : strata::core::split_groups((int) seqs.size(), active, split_rows, even_groups)) {
                     std::vector<int> group_seqs;
                     std::vector<int32_t> toks;
                     std::vector<strata::kernels::SamplerParams> sps((size_t) k, g0);
@@ -2921,6 +2939,7 @@ static int glm_pack_generate(const Options& o) {
                     }
                     for (const int s : group_seqs) q.push_back(s);
                     qg.push_back(k);
+                    first += (size_t) k;
                 }
                 return true;
             };
@@ -3015,6 +3034,20 @@ static int glm_pack_generate(const Options& o) {
         std::printf("  solo :");
         for (int i = 0; i < 12 && i < (int) solo.size(); ++i) std::printf(" %d", solo[(size_t) i]);
         std::printf("\n");
+        // STRATA_GLM_MULTI_DUMP=<file>: every sequence's tokens, a line each (then the solo run's) - two builds' or
+        // settings' runs compared whole, not by their first 12
+        if (const char* dump = getenv("STRATA_GLM_MULTI_DUMP")) {
+            if (std::FILE* f = std::fopen(dump, "w")) {
+                for (int s = 0; s <= n; ++s) {
+                    const std::vector<int>& v = s < n ? out[(size_t) s] : solo;
+                    if (s < n) std::fprintf(f, "seq %d:", s);
+                    else std::fputs("solo:", f);
+                    for (const int t : v) std::fprintf(f, " %d", t);
+                    std::fputc('\n', f);
+                }
+                std::fclose(f);
+            }
+        }
         std::fflush(stdout);
         return 0;
     }
