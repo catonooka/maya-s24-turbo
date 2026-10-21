@@ -4,6 +4,10 @@
 with a full measurement log, an agent-session where the model built its own benchmark toolkit,
 and hard receipts for every lever accepted or rejected.**
 
+Now also home to the **DeepSeek-V4.1-Flash-1017 campaign** ([`deepseek-v41-flash/`](deepseek-v41-flash/)):
+the 748B MoE served on the same rig — 10.4 → 33-35 t/s decode, 144 → **783 t/s** cold prefill,
+fully validated for quality and vision. See the History log below.
+
 This is a **tuning + verification record** on top of [mw00/project-maya](https://github.com/mw00/project-maya),
 the engine that makes running GLM-5.3-Flash on consumer GPUs possible at all.
 All credit for the engine, the Maya-S24 quant, the MTP drafting, KV streaming, and the
@@ -94,6 +98,31 @@ agent-session/    PLAN.md, the agent driver, session/stage logs
 ```
 
 ## History log
+
+### 2026-10-20/21 — DeepSeek-V4.1-Flash-1017: 10.4 → 33-35 t/s decode, 144 → 783 t/s prefill
+
+The same rig serves the 748B-parameter MoE (40×384 experts, Engram tables) from local files
+only — no downloads. Full campaign in [`deepseek-v41-flash/`](deepseek-v41-flash/).
+
+- **vLLM custom stack 10.4 t/s** → **maya-ds4 engine 17.5** — tiered experts (VRAM hot set /
+  CPU lane / bulk chunk DMA) beat per-token PCIe streaming; every ported vLLM idea measured
+  flat or negative across 8 experiments (route bias ×5, tiers, EC profile, chunks, DMA)
+- **17.5 → 33-35** — tp1 layer-split (whole experts per card, both cards packed) + DSpark MTP;
+  `--threads on` unlocks chunked prefill on the split: 144 → 518 t/s
+- **518 → 783 t/s prefill @25K** — PR#344 build (multi-GPU prompt skip, all-reduce off SMs)
+  with tp2 + chunk 8192 + `DSPARK_CUM/STREAM=0/CACHE_THREADS=4`
+- **Validated**: 9/9 functional (JSON, tools, 8K needle, multi-turn) · 5/5 vision · 10/10 QA ·
+  21.8K-doc both needles · OpenAI + Anthropic APIs
+- Honest blockers: decode 50 t/s needs a smaller quant (S24-class download) or an EXL3
+  stream-lane patch; the 44-53 t/s community rows are GLM, not DeepSeek
+
+### 2026-10-18 — v1.1.15 three-quant ladder: EXL3-3.05 crosses 50 t/s
+
+All three GLM quants tuned on one rig at 262K context ([`v1.1.15-ladder/`](v1.1.15-ladder/)):
+**S24 63.6** (70.3 stat, 1258 t/s prefill) · **2bpw 55.2** · **EXL3-3.05 50.0** (52.7 stat).
+New lever everywhere: `STRATA_GLM_MISS_SKIP_W` (upstream #228; knees 0.14 S24/EXL3, 0.12 2bpw,
++9-13%), swept per-request with no restart. FETCH_WIDE kernel kept from the EXL3 era.
+Validation per quant: functest 8/8; EXL3 arithmetic A/B byte-identical between tiers.
 
 ### 2026-10-15 — EXL3-3.05bpw era: 29.2 → 44 t/s decode, 1016 t/s prefill (2×3090)
 
