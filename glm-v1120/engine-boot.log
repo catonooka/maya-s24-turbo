@@ -1,0 +1,20 @@
+glm spec: 633 of 649 drafts accepted (97.5%)
+glm kv: KV streaming: 99.71% of 708323 block reads hit VRAM, 4.3 MiB read from RAM
+glm stat: decode 21.52 ms/tok (46.47 tok/s) | vram hit 93.18% | ram fetches 19.80/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 18.60/tok | cpu lane 5.20/tok in 2.62 ms/tok | prompt 36.3 ms/tok | vram 4195/4306 ram 8142/9524
+glm spec: 1 of 3 drafts accepted (33.3%)
+glm kv: KV streaming: 91.98% of 898 block reads hit VRAM, 0.1 MiB read from RAM
+glm stat: decode 20.31 ms/tok (49.23 tok/s) | vram hit 94.91% | ram fetches 13.00/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 12.00/tok | cpu lane 4.00/tok in 2.00 ms/tok | prompt 28.9 ms/tok | vram 4189/4306 ram 8179/9524
+glm spec: 1 of 2 drafts accepted (50.0%)
+glm kv: KV streaming: 91.14% of 801 block reads hit VRAM, 0.1 MiB read from RAM
+glm stat: decode 21.14 ms/tok (47.31 tok/s) | vram hit 92.79% | ram fetches 19.96/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 17.75/tok | cpu lane 7.46/tok in 4.00 ms/tok | prompt 24.7 ms/tok | vram 4190/4306 ram 8157/9524
+glm spec: 15 of 22 drafts accepted (68.2%)
+glm kv: KV streaming: 95.70% of 2905 block reads hit VRAM, 0.3 MiB read from RAM
+glm stat: decode 19.00 ms/tok (52.63 tok/s) | vram hit 94.98% | ram fetches 14.08/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 12.58/tok | cpu lane 4.92/tok in 2.69 ms/tok | prompt 25.3 ms/tok | vram 4194/4306 ram 8169/9524
+glm spec: 6 of 10 drafts accepted (60.0%)
+glm kv: KV streaming: 93.83% of 1362 block reads hit VRAM, 0.2 MiB read from RAM
+glm stat: decode 21.47 ms/tok (46.58 tok/s) | vram hit 91.38% | ram fetches 22.38/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 17.78/tok | cpu lane 10.34/tok in 5.51 ms/tok | prompt 22.7 ms/tok | vram 4204/4306 ram 8149/9524
+glm spec: 35 of 48 drafts accepted (72.9%)
+glm kv: KV streaming: 97.27% of 7439 block reads hit VRAM, 0.4 MiB read from RAM
+glm stat: decode 18.76 ms/tok (53.31 tok/s) | vram hit 93.14% | ram fetches 17.36/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 14.26/tok | cpu lane 7.44/tok in 3.60 ms/tok | prompt 30.2 ms/tok | vram 4222/4306 ram 8129/9524
+glm spec: 95 of 109 drafts accepted (87.2%)
+glm kv: KV streaming: 98.52% of 26003 block reads hit VRAM, 0.8 MiB read from RAM
