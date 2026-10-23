@@ -1,0 +1,158 @@
+[
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/cc -DGGML_SCHED_MAX_COPIES=4 -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/build/ggml/src -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wdouble-promotion -o ggml/src/CMakeFiles/ggml-base.dir/ggml.c.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml.c",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml.c",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-base.dir/ggml.c.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/build/ggml/src -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o ggml/src/CMakeFiles/ggml-base.dir/ggml.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-base.dir/ggml.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/cc -DGGML_SCHED_MAX_COPIES=4 -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/build/ggml/src -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wdouble-promotion -o ggml/src/CMakeFiles/ggml-base.dir/ggml-alloc.c.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-alloc.c",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-alloc.c",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-base.dir/ggml-alloc.c.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/build/ggml/src -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o ggml/src/CMakeFiles/ggml-base.dir/ggml-backend.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-backend.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-backend.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/build/ggml/src -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o ggml/src/CMakeFiles/ggml-base.dir/ggml-backend-meta.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-backend-meta.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-backend-meta.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend-meta.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/build/ggml/src -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o ggml/src/CMakeFiles/ggml-base.dir/ggml-opt.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-opt.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-opt.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-base.dir/ggml-opt.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/build/ggml/src -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o ggml/src/CMakeFiles/ggml-base.dir/ggml-threading.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-threading.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-threading.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-base.dir/ggml-threading.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/cc -DGGML_SCHED_MAX_COPIES=4 -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/build/ggml/src -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wdouble-promotion -o ggml/src/CMakeFiles/ggml-base.dir/ggml-quants.c.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-quants.c",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-quants.c",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-base.dir/ggml-quants.c.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/build/ggml/src -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o ggml/src/CMakeFiles/ggml-base.dir/gguf.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/gguf.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/gguf.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-base.dir/gguf.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o ggml/src/CMakeFiles/ggml.dir/ggml-backend-dl.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-backend-dl.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-backend-dl.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml.dir/ggml-backend-dl.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -o ggml/src/CMakeFiles/ggml.dir/ggml-backend-reg.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-backend-reg.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-backend-reg.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml.dir/ggml-backend-reg.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/cc -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/.. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wdouble-promotion -march=native -o ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.c.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/ggml-cpu.c",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/ggml-cpu.c",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.c.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/.. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -o ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/ggml-cpu.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/ggml-cpu.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/.. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -o ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/repack.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/repack.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/repack.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/repack.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/.. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -o ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/iqp.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/iqp.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/iqp.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/iqp.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/.. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -o ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/hbm.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/hbm.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/hbm.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/hbm.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/cc -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/.. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wdouble-promotion -march=native -o ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/quants.c.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/quants.c",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/quants.c",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/quants.c.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/.. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -o ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/traits.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/traits.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/traits.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/traits.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/.. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -o ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/amx.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/amx/amx.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/amx/amx.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/amx.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/.. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -o ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/mmq.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/amx/mmq.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/amx/mmq.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/mmq.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/.. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -o ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/binary-ops.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/binary-ops.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/binary-ops.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/binary-ops.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/.. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -o ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/unary-ops.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/unary-ops.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/unary-ops.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/unary-ops.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/.. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -o ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/vec.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/vec.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/vec.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/vec.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/.. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -o ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ops.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/ops.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/ops.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ops.cpp.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/cc -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/.. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=gnu11 -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes -Werror=implicit-int -Werror=implicit-function-declaration -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wdouble-promotion -march=native -o ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/x86/quants.c.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/arch/x86/quants.c",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/arch/x86/quants.c",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/x86/quants.c.o"
+},
+{
+  "directory": "/home/aisever/project-maya/build",
+  "command": "/usr/bin/c++ -DGGML_SCHED_MAX_COPIES=4 -DGGML_USE_CPU_REPACK -DSTRATA_VERSION=\\\"0.1.27\\\" -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/.. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/. -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu -I/home/aisever/project-maya/third_party/llama.cpp/ggml/src/../include -O3 -DNDEBUG -std=c++17 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-array-bounds -Wextra-semi -march=native -o ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/x86/repack.cpp.o -c /home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/arch/x86/repack.cpp",
+  "file": "/home/aisever/project-maya/third_party/llama.cpp/ggml/src/ggml-cpu/arch/x86/repack.cpp",
+  "output": "/home/aisever/project-maya/build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/x86/repack.cpp.o"
+}
+]

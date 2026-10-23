@@ -1,0 +1,20 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/aisever/project-maya/build-vision/cmake_install.cmake",
+		"/home/aisever/project-maya/build-vision/llama/cmake_install.cmake",
+		"/home/aisever/project-maya/build-vision/llama/ggml/cmake_install.cmake",
+		"/home/aisever/project-maya/build-vision/llama/ggml/src/cmake_install.cmake",
+		"/home/aisever/project-maya/build-vision/llama/ggml/src/ggml-cpu/cmake_install.cmake",
+		"/home/aisever/project-maya/build-vision/llama/ggml/src/ggml-cuda/cmake_install.cmake",
+		"/home/aisever/project-maya/build-vision/llama/src/cmake_install.cmake",
+		"/home/aisever/project-maya/build-vision/llama/vendor/cmake_install.cmake",
+		"/home/aisever/project-maya/build-vision/llama/vendor/hash/cmake_install.cmake",
+		"/home/aisever/project-maya/build-vision/llama/vendor/miniaudio/cmake_install.cmake",
+		"/home/aisever/project-maya/build-vision/llama/vendor/nlohmann/cmake_install.cmake",
+		"/home/aisever/project-maya/build-vision/llama/vendor/sheredom/cmake_install.cmake",
+		"/home/aisever/project-maya/build-vision/llama/vendor/stb/cmake_install.cmake",
+		"/home/aisever/project-maya/build-vision/llama/tools/mtmd/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

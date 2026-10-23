@@ -1,0 +1,41 @@
+CMP0215
+-------
+
+.. versionadded:: 4.4
+
+:ref:`Ninja Generators` emit Swift modules separately from compilation.
+
+In CMake 4.3 and below, Swift targets built by :ref:`Ninja Generators`
+emit ``.swiftmodule`` from the Swift compile edge together with object files.
+Because Ninja treats a build edge as atomic, downstream Swift targets
+must wait for compilation outputs to finish before they can use the module
+interface.
+
+CMake 4.4 and above prefer to emit ``.swiftmodule`` from a dedicated
+``-emit-module`` build edge so that downstream Swift targets can begin
+compiling as soon as the module interface is available.  This policy
+provides compatibility with projects that have not been updated.
+
+The ``OLD`` behavior for this policy is to not emit modules separately.
+The ``NEW`` behavior for this policy is to emit ``.swiftmodule`` from a
+dedicated build edge for importable Swift targets by default.
+
+The :prop_tgt:`Swift_SEPARATE_MODULE_EMISSION` target property and
+corresponding :variable:`CMAKE_Swift_SEPARATE_MODULE_EMISSION` variable
+may be set to enable or disable the behavior on a per-target basis.
+
+The ``NEW`` behavior requires that policies :policy:`CMP0157` and
+:policy:`CMP0195` are also set to ``NEW``.  :policy:`CMP0157` selects the
+split Swift build model that provides the dedicated ``.swiftmodule`` edge,
+and must be set prior to the first :command:`project` or
+:command:`enable_language` command that enables the Swift language.
+:policy:`CMP0195` places the module in the Swift module directory structure
+that the dedicated edge writes.  If either policy is not ``NEW`` while
+``CMP0215`` is ``NEW``, CMake issues a fatal error when the Swift language
+is enabled.
+
+.. |INTRODUCED_IN_CMAKE_VERSION| replace:: 4.4
+.. |WARNS_OR_DOES_NOT_WARN| replace:: does *not* warn
+.. include:: include/STANDARD_ADVICE.rst
+
+.. include:: include/DEPRECATED.rst
