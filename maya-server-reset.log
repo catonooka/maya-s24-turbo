@@ -1,0 +1,75 @@
+Project Maya v1.1.15 - GLM-5.3-Flash on your own GPU(s).
+
+  ----------------------------------------------------------------------------------------------------
+  Starting glm-5.3-flash (maya-exl3-3.05bpw.json).
+  Dashboard:        http://127.0.0.1:8080/
+  API (OpenAI):     http://127.0.0.1:8080/v1        (any model name; the API key: any)
+  API (Anthropic):  http://127.0.0.1:8080/v1/messages
+  Loading takes a few minutes: the engine pins up to all but about 6 GB of the free RAM for its expert tier
+  (STRATA_GLM_RAM_HEADROOM_GB changes the 6) and warms its caches - the first answers are the slowest.
+  Ctrl+C (or closing this terminal) stops it. Engine log: /home/aisever/project-maya/maya-exl3-3.05bpw.log
+  ----------------------------------------------------------------------------------------------------
+[maya] sampling defaults from the config: temperature=1.0, top_p=0.95
+[maya] images: the vision encoder needs 2.78 GB on this GPU at up to 4096 image tokens
+loading the model (the first start takes a minute or two) ...
+[maya] layer split across GPUs [0, 1] (auto)
+[maya] starting the engine: reading the model's weights ...
+[maya] still starting (20 s) - please wait ...
+[maya] still starting (40 s) - please wait ...
+[maya] still starting (60 s) - please wait ...
+[maya] still starting (80 s) - please wait ...
+[maya] images: the vision encoder starts when a picture arrives, in 2.85 GB the model lends it
+[maya] thinking level when a request names none: high
+[maya] thinking budget: 32768 tokens (then the answer)
+ready: http://127.0.0.1:8080/v1  (OpenAI: /v1/chat/completions, Anthropic: /v1/messages, context 262144 tokens, images on)
+       open http://127.0.0.1:8080/ in a browser to chat; close this window to stop the model
+[maya] thinking reached its budget (1 tokens): closed, answering
+[maya] done: 13 tokens in 1 s (45.4 tok/s) (stop, cancel=False), expert cache 91.5% hit
+[maya] answering: 9 of max 400 tokens, 45.8 tok/s, 1 s
+[maya] answering: 52 of max 400 tokens, 43.5 tok/s, 2 s
+[maya] answering: 94 of max 400 tokens, 42.7 tok/s, 3 s
+[maya] answering: 137 of max 400 tokens, 42.7 tok/s, 4 s
+[maya] answering: 178 of max 400 tokens, 42.2 tok/s, 5 s
+[maya] done: 191 tokens in 5 s (42.3 tok/s) (stop, cancel=False), expert cache 92.2% hit
+[maya] answering: 44 of max 400 tokens, 45.1 tok/s, 1 s
+[maya] answering: 86 of max 400 tokens, 43.4 tok/s, 2 s
+[maya] answering: 133 of max 400 tokens, 44.3 tok/s, 3 s
+[maya] answering: 175 of max 400 tokens, 43.7 tok/s, 4 s
+[maya] done: 204 tokens in 5 s (44.3 tok/s) (stop, cancel=False), expert cache 93.3% hit
+[maya] thinking reached its budget (1 tokens): closed, answering
+[maya] answering: 11 of max 400 tokens, 52.1 tok/s, 1 s
+[maya] answering: 58 of max 400 tokens, 47.4 tok/s, 2 s
+[maya] answering: 115 of max 400 tokens, 51.4 tok/s, 3 s
+[maya] answering: 171 of max 400 tokens, 52.7 tok/s, 4 s
+[maya] done: 179 tokens in 4 s (52.6 tok/s) (stop, cancel=False), expert cache 93.8% hit
+[maya] thinking reached its budget (1 tokens): closed, answering
+[maya] answering: 53 of max 400 tokens, 54.4 tok/s, 1 s
+[maya] answering: 112 of max 400 tokens, 56.5 tok/s, 2 s
+[maya] answering: 168 of max 400 tokens, 56.1 tok/s, 3 s
+[maya] done: 176 tokens in 3 s (56.0 tok/s) (stop, cancel=False), expert cache 94.4% hit
+[maya] reading the prompt: 30 of 31 tokens, 1 s so far
+[maya] thinking reached its budget (1 tokens): closed, answering
+[maya] answering: 50 of max 600 tokens, 51.1 tok/s, 2 s
+[maya] answering: 104 of max 600 tokens, 52.3 tok/s, 3 s
+[maya] answering: 155 of max 600 tokens, 51.8 tok/s, 4 s
+[maya] answering: 208 of max 600 tokens, 51.8 tok/s, 5 s
+[maya] answering: 262 of max 600 tokens, 52.1 tok/s, 6 s
+[maya] answering: 316 of max 600 tokens, 52.4 tok/s, 7 s
+[maya] answering: 367 of max 600 tokens, 52.2 tok/s, 8 s
+[maya] answering: 419 of max 600 tokens, 52.1 tok/s, 9 s
+[maya] answering: 471 of max 600 tokens, 52.0 tok/s, 10 s
+[maya] done: 497 tokens in 11 s (52.0 tok/s) (stop, cancel=False), expert cache 91.7% hit
+[maya] thinking reached its budget (1 tokens): closed, answering
+[maya] answering: 51 of max 600 tokens, 52.9 tok/s, 1 s
+[maya] answering: 107 of max 600 tokens, 54.0 tok/s, 2 s
+[maya] answering: 160 of max 600 tokens, 53.4 tok/s, 3 s
+[maya] answering: 213 of max 600 tokens, 53.2 tok/s, 4 s
+[maya] answering: 268 of max 600 tokens, 53.4 tok/s, 5 s
+[maya] answering: 321 of max 600 tokens, 53.2 tok/s, 6 s
+[maya] answering: 374 of max 600 tokens, 53.1 tok/s, 7 s
+[maya] answering: 426 of max 600 tokens, 52.9 tok/s, 8 s
+[maya] answering: 477 of max 600 tokens, 52.7 tok/s, 9 s
+[maya] answering: 530 of max 600 tokens, 52.6 tok/s, 10 s
+[maya] answering: 582 of max 600 tokens, 52.5 tok/s, 11 s
+[maya] done: 600 tokens in 11 s (52.5 tok/s) (length, cancel=False), expert cache 91.8% hit
+[maya] stopping: the engine ends

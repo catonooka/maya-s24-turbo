@@ -1,0 +1,64 @@
+{
+ "exe": "/home/aisever/project-maya/build/strata",
+ "args": [
+  "--glm-pack",
+  "/home/aisever/Maya-data/models/EXL3-3.05bpw/pack",
+  "--max-context",
+  "262144",
+  "--expert-cache",
+  "auto",
+  "--prefill",
+  "auto",
+  "--kv-streaming",
+  "on",
+  "--expert-profile",
+  "/home/aisever/project-maya/data/expert-profile-glm.bin"
+ ],
+ "cwd": "/home/aisever/project-maya",
+ "tokenizer": "/home/aisever/Maya-data/models/EXL3-3.05bpw/pack/tokenizer",
+ "model_name": "glm-5.3-flash",
+ "gpu": [
+  0,
+  1
+ ],
+ "sampling": {
+  "temperature": 1.0,
+  "top_p": 0.95
+ },
+ "reasoning_effort": "high",
+ "lib_dirs": [
+  "/usr/local/cuda-13.4/lib64",
+  "/usr/local/cuda-13.4/targets/x86_64-linux/lib"
+ ],
+ "port": 8080,
+ "vision": {
+  "exe": "/home/aisever/project-maya/build-vision/bin/strata-vision",
+  "mmproj": "/home/aisever/Maya-data/models/EXL3-3.05bpw/vision/mmproj-GLM-5.3-Flash-F16.gguf",
+  "model": "/home/aisever/Maya-data/models/EXL3-3.05bpw/vision/GLM-5.3-Flash-vocab.gguf",
+  "gpu": true
+ },
+ "log": "/home/aisever/project-maya/maya-exl3-3.05bpw.log",
+ "installer": {
+  "models_dir": "/home/aisever/Maya-data/models",
+  "quant": "EXL3-3.05bpw",
+  "gguf": null,
+  "gguf_dir": null,
+  "draft": "mtp",
+  "written": "2026-10-17 19:19"
+ },
+ "env": {
+  "STRATA_GLM_RAM_RESIDENT": "1",
+  "STRATA_GLM_KV_INT8": "1",
+  "STRATA_GLM_USAGE": "/home/aisever/project-maya/data/expert-usage-glm.txt",
+  "STRATA_GLM_PREFETCH_N": "2",
+  "STRATA_GLM_PREFETCH_AT": "fetch",
+  "STRATA_GLM_PREFETCH_RANK": "4",
+  "STRATA_GLM_PREFETCH_BLOCKS": "8",
+  "STRATA_GLM_FETCH_WIDE": "1",
+  "STRATA_GLM_SPEC_CANCEL": "1",
+  "STRATA_GLM_SPLIT": "22",
+  "STRATA_GLM_TRUNK_KEEP": "6",
+  "STRATA_GLM_MISS_SKIP_W": "0.14",
+  "STRATA_GLM_MISS_SKIP_FROM": "23"
+ }
+}

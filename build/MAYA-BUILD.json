@@ -1,0 +1,18 @@
+{
+ "src": "d42ea21e815e1a96",
+ "archs": [
+  86
+ ],
+ "gpu_ids": [
+  0,
+  1
+ ],
+ "nvcc": "/usr/local/cuda/bin/nvcc",
+ "host_compiler": null,
+ "llama": "/home/aisever/project-maya/third_party/llama.cpp",
+ "lib_dirs": [
+  "/usr/local/cuda-13.4/lib64",
+  "/usr/local/cuda-13.4/targets/x86_64-linux/lib"
+ ],
+ "date": "2026-10-17 19:18"
+}

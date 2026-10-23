@@ -1,0 +1,10 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/aisever/project-maya/build/cmake_install.cmake",
+		"/home/aisever/project-maya/build/ggml/cmake_install.cmake",
+		"/home/aisever/project-maya/build/ggml/src/cmake_install.cmake",
+		"/home/aisever/project-maya/build/ggml/src/ggml-cpu/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

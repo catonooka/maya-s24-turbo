@@ -1,0 +1,12 @@
+[
+"cmake",
+"jinja2",
+"ninja",
+"numpy",
+"pillow",
+"psutil",
+"pyyaml",
+"regex",
+"requests",
+"tqdm"
+]

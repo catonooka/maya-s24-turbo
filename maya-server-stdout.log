@@ -1,0 +1,26 @@
+Project Maya v1.1.15 - GLM-5.3-Flash on your own GPU(s).
+
+  ----------------------------------------------------------------------------------------------------
+  Starting glm-5.3-flash (maya-exl3-3.05bpw.json).
+  Dashboard:        http://127.0.0.1:8080/
+  API (OpenAI):     http://127.0.0.1:8080/v1        (any model name; the API key: any)
+  API (Anthropic):  http://127.0.0.1:8080/v1/messages
+  Loading takes a few minutes: the engine pins up to all but about 6 GB of the free RAM for its expert tier
+  (STRATA_GLM_RAM_HEADROOM_GB changes the 6) and warms its caches - the first answers are the slowest.
+  Ctrl+C (or closing this terminal) stops it. Engine log: /home/aisever/project-maya/maya-exl3-3.05bpw.log
+  ----------------------------------------------------------------------------------------------------
+[maya] sampling defaults from the config: temperature=1.0, top_p=0.95
+[maya] images: the vision encoder needs 2.78 GB on this GPU at up to 4096 image tokens
+loading the model (the first start takes a minute or two) ...
+[maya] layer split across GPUs [0, 1] (auto)
+[maya] starting the engine: reading the model's weights ...
+[maya] still starting (20 s) - please wait ...
+[maya] still starting (40 s) - please wait ...
+[maya] still starting (60 s) - please wait ...
+[maya] still starting (80 s) - please wait ...
+[maya] images: the vision encoder starts when a picture arrives, in 2.85 GB the model lends it
+[maya] thinking level when a request names none: high
+[maya] thinking budget: 32768 tokens (then the answer)
+ready: http://127.0.0.1:8080/v1  (OpenAI: /v1/chat/completions, Anthropic: /v1/messages, context 262144 tokens, images on)
+       open http://127.0.0.1:8080/ in a browser to chat; close this window to stop the model
+[maya] stopping: the engine ends
