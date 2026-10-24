@@ -51,3 +51,21 @@ Engine-work candidates (NOT config; park for later): two-microbatch prefill over
 RESTORED production config: exe=maya-ds4-pr344, --tp 1, env = DSPARK_CUM 0.5 + CACHE_THREADS 4 + STREAM=0 + PROMPT_SKIP=2 (TP1: applies) + Q8_BATCH 1 (new, free) + SLOT_KEEP 1 (new).
 Decode: 30.8-32.5 warm / 26-29 fresh engine-side. Tradeoff: TP1 prefill @33k = ~700 t/s vs TP2 1161 (flip --tp per workload, or engine rework for the nm>1 stream lane).
 Housekeeping: maya.sh failed bootstrap rm -rf'd the serve .venv (rebuilt); DS4_PROF=1 works on v1125 binary only in serve mode via config log.
+
+## TP2-for-prefill without losing decode (2026-10-24 night, researched)
+
+Q: can we run TP2 prefill speed + TP1 decode speed together?
+A: NO at runtime - TP is a boot-time WEIGHT LAYOUT (TP2 slices every layer's tensors across cards; TP1 assigns whole layer ranges). One process = one layout.
+
+Measured matrix (pr344 binary, all cold-cache):
+| shape | decode warm | decode fresh | prefill 33k | prefill 100k |
+|---|---|---|---|---|
+| TP1 layer-split | 30.8-32.5 | 26-29 | 737 | 835 |
+| TP2 + PROMPT_SKIP=2 | 24.8-26.8 | ~22 | 1069-1071 | 1149 |
+
+- PROMPT_SKIP (layer-20-39 skip) is ONE-GPU-ONLY per engine source+docs ("several GPUs read prompts as before") - inert on both our shapes; no free lunch there. Measured tie with/without on TP2 confirms.
+- TP2 decode cost = allreduce round-trips per layer per token (cards P2P only via driver staging ~1.7ms).
+- SLOT_KEEP=1 makes flips cheap: conversations survive restarts.
+
+Shipped: flip-tp.sh (sudo bash flip-tp.sh 1|2) - one command, ~5 min boot. Default TP1 (decode); flip to TP2 for big-prompt sessions.
+Engine-work path if we ever want both at once: port the prompt-skip to multi-GPU (cut at chunk boundary) OR port the PCIe stream lane to nm>1 - both are engine patches, tracked above.

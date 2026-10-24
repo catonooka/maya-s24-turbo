@@ -1,0 +1,10 @@
+[tp2-skip2-decode r1] essay: 49p 256t in 12.0s = 21.41 t/s
+[tp2-skip2-decode r1] facts: 46p 161t in 7.3s = 22.19 t/s
+[tp2-skip2-decode r1] code: 46p 256t in 11.2s = 22.77 t/s
+[tp2-skip2-decode r2] essay: 49p 256t in 12.1s = 21.20 t/s
+[tp2-skip2-decode r2] facts: 46p 185t in 7.7s = 23.88 t/s
+[tp2-skip2-decode r2] code: 46p 256t in 11.5s = 22.29 t/s
+[tp2-skip2-decode] prefill25k: 33030 tokens in 30.9s = 1069.3 t/s
+== essay: mean 21.30 t/s (runs: [21.41, 21.2])
+== facts: mean 23.04 t/s (runs: [22.19, 23.88])
+== code: mean 22.53 t/s (runs: [22.77, 22.29])
