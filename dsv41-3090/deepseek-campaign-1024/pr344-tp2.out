@@ -1,0 +1,10 @@
+[pr344-tp2 r1] essay: 49p 256t in 12.9s = 19.80 t/s
+[pr344-tp2 r1] facts: 46p 93t in 5.4s = 17.17 t/s
+[pr344-tp2 r1] code: 46p 256t in 12.0s = 21.30 t/s
+[pr344-tp2 r2] essay: 49p 256t in 11.8s = 21.69 t/s
+[pr344-tp2 r2] facts: 46p 161t in 7.2s = 22.49 t/s
+[pr344-tp2 r2] code: 46p 256t in 11.2s = 22.88 t/s
+[pr344-tp2] prefill25k: 33030 tokens in 33.7s = 980.7 t/s
+== essay: mean 20.75 t/s (runs: [19.8, 21.69])
+== facts: mean 19.83 t/s (runs: [17.17, 22.49])
+== code: mean 22.09 t/s (runs: [21.3, 22.88])

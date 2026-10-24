@@ -1,0 +1,10 @@
+[TP1-decode r1] essay: 49p 183t in 9.8s = 18.67 t/s
+[TP1-decode r1] facts: 46p 50t in 3.8s = 13.23 t/s
+[TP1-decode r1] code: 46p 256t in 12.1s = 21.16 t/s
+[TP1-decode r2] essay: 49p 209t in 9.4s = 22.31 t/s
+[TP1-decode r2] facts: 46p 50t in 3.6s = 14.05 t/s
+[TP1-decode r2] code: 46p 256t in 11.3s = 22.67 t/s
+[TP1-decode] prefill25k: 33030 tokens in 0.5s = 63624.8 t/s
+== essay: mean 20.49 t/s (runs: [18.67, 22.31])
+== facts: mean 13.64 t/s (runs: [13.23, 14.05])
+== code: mean 21.91 t/s (runs: [21.16, 22.67])
