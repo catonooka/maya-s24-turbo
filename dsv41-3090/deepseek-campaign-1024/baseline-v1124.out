@@ -1,0 +1,10 @@
+[baseline-v1124 r1] essay: 49p 256t in 13.0s = 19.63 t/s
+[baseline-v1124 r1] facts: 46p 107t in 6.0s = 17.73 t/s
+[baseline-v1124 r1] code: 46p 256t in 12.2s = 21.06 t/s
+[baseline-v1124 r2] essay: 49p 256t in 10.9s = 23.50 t/s
+[baseline-v1124 r2] facts: 46p 153t in 6.6s = 23.14 t/s
+[baseline-v1124 r2] code: 46p 256t in 11.4s = 22.52 t/s
+[baseline-v1124] prefill25k: 6341 tokens in 8.1s = 779.3 t/s
+== essay: mean 21.56 t/s (runs: [19.63, 23.5])
+== facts: mean 20.44 t/s (runs: [17.73, 23.14])
+== code: mean 21.79 t/s (runs: [21.06, 22.52])

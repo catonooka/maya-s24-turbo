@@ -1,0 +1,10 @@
+[L4-lane-smt r1] essay: 49p 159t in 12.2s = 13.02 t/s
+[L4-lane-smt r1] facts: 46p 50t in 5.0s = 10.09 t/s
+[L4-lane-smt r1] code: 46p 256t in 16.4s = 15.61 t/s
+[L4-lane-smt r2] essay: 49p 171t in 12.2s = 14.02 t/s
+[L4-lane-smt r2] facts: 46p 50t in 4.9s = 10.14 t/s
+[L4-lane-smt r2] code: 46p 256t in 15.1s = 16.93 t/s
+[L4-lane-smt] prefill25k: 33030 tokens in 28.7s = 1150.2 t/s
+== essay: mean 13.52 t/s (runs: [13.02, 14.02])
+== facts: mean 10.12 t/s (runs: [10.09, 10.14])
+== code: mean 16.27 t/s (runs: [15.61, 16.93])
