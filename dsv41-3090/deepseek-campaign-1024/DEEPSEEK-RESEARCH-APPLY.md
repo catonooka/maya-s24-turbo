@@ -38,3 +38,16 @@ Baseline v1.1.24 (this session): decode essay 21.6 / facts 20.4 / code 21.8; pre
 - Quality gate at end: 17*19=323, greedy determinism x2, needle, plain-ASCII garbage check.
 
 Engine-work candidates (NOT config; park for later): two-microbatch prefill overlap, AcceptMoE verify-window reranking (from earlier EXL3-50Tps research), grouped-fetch widening.
+
+## Decode regression RCA (2026-10-24 evening, post-campaign)
+
+"33-35 t/s" decomposed — NOT a v1.1.24/25 regression:
+1. OLD 33-35 was REPEAT asks (same 65-tok prompt, 4th-5th repeat, expert cache 80%+ hot, CPU lane 16-20%). Fresh-ask steady state is 26-29 engine-side on ANY binary. First-ask after boot: 24-26.
+2. L2 unpinned MAYA_DS4_STREAM=0 -> on TP1 boots the PCIe stream lane engages and LOSES on this RAM-heavy rig (~3-4 t/s). Pin restored.
+3. Campaign config ran --tp 2 (prefill shape). TP2 costs ~4-6 t/s decode vs TP1 layer-split on this engine+pack (26-28 vs 31-35 warm).
+4. v1.1.20-pr344 vs v1.1.24/25 binaries: measured ties at both TP1 and TP2.
+5. Client-side bench t/s reads ~4-5 under engine t/s on fresh prompts (includes ~1-2 s prompt read) — engine lines are the honest number.
+
+RESTORED production config: exe=maya-ds4-pr344, --tp 1, env = DSPARK_CUM 0.5 + CACHE_THREADS 4 + STREAM=0 + PROMPT_SKIP=2 (TP1: applies) + Q8_BATCH 1 (new, free) + SLOT_KEEP 1 (new).
+Decode: 30.8-32.5 warm / 26-29 fresh engine-side. Tradeoff: TP1 prefill @33k = ~700 t/s vs TP2 1161 (flip --tp per workload, or engine rework for the nm>1 stream lane).
+Housekeeping: maya.sh failed bootstrap rm -rf'd the serve .venv (rebuilt); DS4_PROF=1 works on v1125 binary only in serve mode via config log.
