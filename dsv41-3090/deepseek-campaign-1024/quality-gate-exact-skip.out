@@ -1,0 +1,18 @@
+chain-math: PASS '362We need answer just final number. Need compute.'
+17x19: PASS '323We need answer just number.'
+determinism: FAIL
+needle2k: PASS 'BANANA-7741We need answer. Need parse. U'
+needle30k: PASS 'We need answer just code. Need identify '
+ascii: PASS 'A hammer is for driving nails and striking objects'
+lines4: PASS 'apple\napple\napple\nappleWe need answer exactly 4 lines each l'
+client wall 127.1 s | prompt_tokens 102621
+[exact-skip1 r1] essay: 49p 256t in 12.3s = 20.73 t/s
+[exact-skip1 r1] facts: 46p 187t in 7.4s = 25.36 t/s
+[exact-skip1 r1] code: 46p 256t in 11.5s = 22.21 t/s
+[exact-skip1 r2] essay: 49p 256t in 11.7s = 21.87 t/s
+[exact-skip1 r2] facts: 46p 161t in 6.8s = 23.74 t/s
+[exact-skip1 r2] code: 46p 256t in 11.3s = 22.64 t/s
+[exact-skip1] prefill25k: 33030 tokens in 44.2s = 747.9 t/s
+== essay: mean 21.30 t/s (runs: [20.73, 21.87])
+== facts: mean 24.55 t/s (runs: [25.36, 23.74])
+== code: mean 22.43 t/s (runs: [22.21, 22.64])
