@@ -1,0 +1,10 @@
+[L5-ahead2 r1] essay: 49p 218t in 10.7s = 20.39 t/s
+[L5-ahead2 r1] facts: 46p 50t in 3.9s = 12.84 t/s
+[L5-ahead2 r1] code: 46p 256t in 12.4s = 20.66 t/s
+[L5-ahead2 r2] essay: 49p 202t in 9.9s = 20.49 t/s
+[L5-ahead2 r2] facts: 46p 50t in 3.9s = 12.87 t/s
+[L5-ahead2 r2] code: 46p 256t in 11.7s = 21.81 t/s
+[L5-ahead2] prefill25k: 33030 tokens in 28.6s = 1154.7 t/s
+== essay: mean 20.44 t/s (runs: [20.39, 20.49])
+== facts: mean 12.86 t/s (runs: [12.84, 12.87])
+== code: mean 21.23 t/s (runs: [20.66, 21.81])

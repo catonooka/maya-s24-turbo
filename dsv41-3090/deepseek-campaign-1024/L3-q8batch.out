@@ -1,0 +1,10 @@
+[L3-q8batch r1] essay: 49p 232t in 11.1s = 20.81 t/s
+[L3-q8batch r1] facts: 46p 50t in 3.9s = 12.71 t/s
+[L3-q8batch r1] code: 46p 256t in 12.6s = 20.34 t/s
+[L3-q8batch r2] essay: 49p 214t in 9.6s = 22.33 t/s
+[L3-q8batch r2] facts: 46p 49t in 3.7s = 13.12 t/s
+[L3-q8batch r2] code: 46p 256t in 11.7s = 21.96 t/s
+[L3-q8batch] prefill25k: 33030 tokens in 28.9s = 1142.7 t/s
+== essay: mean 21.57 t/s (runs: [20.81, 22.33])
+== facts: mean 12.91 t/s (runs: [12.71, 13.12])
+== code: mean 21.15 t/s (runs: [20.34, 21.96])

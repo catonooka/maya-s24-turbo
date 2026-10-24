@@ -1,0 +1,10 @@
+[L1-v1125 r1] essay: 49p 231t in 11.5s = 20.16 t/s
+[L1-v1125 r1] facts: 46p 49t in 3.9s = 12.46 t/s
+[L1-v1125 r1] code: 46p 256t in 12.4s = 20.69 t/s
+[L1-v1125 r2] essay: 49p 158t in 8.4s = 18.83 t/s
+[L1-v1125 r2] facts: 46p 50t in 3.8s = 13.23 t/s
+[L1-v1125 r2] code: 46p 256t in 11.5s = 22.35 t/s
+[L1-v1125] prefill25k: 33030 tokens in 28.9s = 1144.5 t/s
+== essay: mean 19.49 t/s (runs: [20.16, 18.83])
+== facts: mean 12.85 t/s (runs: [12.46, 13.23])
+== code: mean 21.52 t/s (runs: [20.69, 22.35])
