@@ -1,8 +1,8 @@
 {
- "exe": "/home/aisever/v1121-tree/build/maya-ds4-v1125",
+ "exe": "/home/USER/v1121-tree/build/maya-ds4-v1125",
  "args": [
   "--pack",
-  "/home/aisever/models/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw/maya-ds4",
+  "/home/USER/models/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw/maya-ds4",
   "--max-context",
   "262144",
   "--tp",
@@ -16,8 +16,8 @@
   "--threads",
   "on"
  ],
- "cwd": "/home/aisever/maya-ds4-main",
- "tokenizer": "/home/aisever/models/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw/maya-ds4/tokenizer",
+ "cwd": "/home/USER/maya-ds4-main",
+ "tokenizer": "/home/USER/models/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw/maya-ds4/tokenizer",
  "model_name": "deepseek-v4.1-flash",
  "gpu": [
   0,
@@ -33,13 +33,13 @@
  ],
  "port": 8080,
  "host": "0.0.0.0",
- "log": "/home/aisever/maya-ds4-main/ds4-baseline.log",
+ "log": "/home/USER/maya-ds4-main/ds4-baseline.log",
  "installer": {
   "family": "deepseek",
-  "models_dir": "/home/aisever/models",
+  "models_dir": "/home/USER/models",
   "quant": "DeepSeek-V4.1-Flash-1017",
   "ds4_quant": "exl3",
-  "model_dir": "/home/aisever/models/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw",
+  "model_dir": "/home/USER/models/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw",
   "written": "2026-10-21 manual"
  },
  "env": {

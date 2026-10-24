@@ -1,10 +1,21 @@
 # DeepSeek-inference research → maya-ds4 speed campaign (2026-10-24)
 
-Full day's work: DeepSeek paper/kernel research → apply ladder → decode-regression RCA → restored + verified production config.
-Hardware: 2× RTX 3090, Threadripper PRO 3955WX (Zen2, no AVX-512), 247 GB RAM. Model: DeepSeek-V4.1-Flash EXL3-2.9bpw.
+Full day's work: DeepSeek paper/kernel research → apply ladder → decode-regression RCA → multi-GPU prompt-skip discovery → restored + verified production config.
+Hardware: 2× RTX 3090, Threadripper PRO 3955WX (Zen2, no AVX-512), 247 GB RAM. Model: DeepSeek-V4.1-Flash EXL3-2.9bpw (320B MoE, 262k context).
 Server: `~/maya-ds4-main`, port 8080. Everything reproducible from this folder.
 
-## FINAL production config (verified live, 2026-10-24 evening)
+## Result: speed growth through the day
+
+| stage | decode (warm / fresh) | prefill @33k | prefill @103k |
+|---|---|---|---|
+| morning: campaign config (v1.1.24, TP2, STREAM unpinned) | ~21-23 / 20-22 t/s | 1166 t/s | — |
+| evening: RCA'd + restored (pr344, TP1, old pins) | 30.8-32.5 / 26-29 t/s | 737 t/s | 835 t/s |
+| **+ multi-GPU prompt-skip verified active (mode 1, exact)** | unchanged | unchanged | **+8% (~810-870)** |
+| **FINAL, quality gate 7/7** | **30.8-32.5 / 26-29 t/s** | **737** | **~810-870** |
+
+Decode recovered **+45-50%** vs the morning config; TP2 remains a one-command flip for prefill-heavy work (1145-1167 t/s @33k, 1149 @103k — the prefill king shape).
+
+## FINAL production config (verified live, 2026-10-24 night)
 
 ```json
 // ~/maya-ds4-main/maya-ds4.json  (launcher: bash serve-v1124-baseline.sh under sudo systemd-run --unit=maya-ds4)
@@ -14,62 +25,46 @@ Server: `~/maya-ds4-main`, port 8080. Everything reproducible from this folder.
           "--prefill-chunk","8192","--dspark-conf","0.5","--threads","on"],
 "env":   {"MAYA_DS4_DSPARK_CUM":"0.5", "DS4_CACHE_THREADS":"4",
           "MAYA_DS4_STREAM":"0",        // TP1 WIN: the PCIe stream lane loses on this 176 GB-RAM rig
-          "MAYA_DS4_PROMPT_SKIP":"2",   // applies on single-engine (TP1) boots; inert on TP2
+          "MAYA_DS4_PROMPT_SKIP":"1",   // exact skip — VERIFIED ACTIVE on multi-GPU (see discovery below)
           "MAYA_DS4_Q8_BATCH":"1",      // new this campaign: batched int8 rounding, same bits
           "MAYA_DS4_SLOT_KEEP":"1"}     // new this campaign: conversations survive restarts
 ```
 
 **Measured on this config (engine-side lines, the honest number):**
+- decode warm (cache 80%+): 30.8-32.5 t/s · fresh: 26-29 t/s
+- prefill: 737 t/s @33k · ~810-870 t/s @103k (skip amortizes with length)
+- quality gate 7/7: chain-math, 17×19, greedy determinism, needle @2k, **needle @30k (exercises the skip path over the cut)**, ASCII, exact line count
 
-| workload | rate |
-|---|---|
-| decode, same-prompt repeats (cache 80%+ hot) | 30.8 – 32.5 t/s (ladder: 26.1→29.4→30.0→30.8→32.5) |
-| decode, fresh asks (cache 60-70%) | 26 – 29 t/s |
-| prefill @33k high-entropy prompt | ~700 t/s |
+`flip-tp.sh 1|2` switches decode-shape ↔ prefill-shape in one command (~5 min boot; SLOT_KEEP keeps conversations alive across the flip).
 
-TP2 variant (flip `--tp` for prompt-heavy work): decode 23.5-27.2 t/s, prefill @33k 1145-1167 t/s.
+## Timeline (what happened, in order)
 
-## Decode "regression" RCA (why 33-35 read as 20-22)
+1. **Research fan-out (3 agents)**: DeepGEMM repo+design notes; DeepSeek inference overview + V3/V3.2/FlashMLA/DeepInfer; DeepEP + co-design paper arXiv 2505.09343. Output: what's dead on SM86, what the engine already has, what's config-reachable. Full table in `DEEPSEEK-RESEARCH-APPLY.md`.
+2. **Apply ladder L1-L7** (one lever per boot, fixed bench, 2-run means): v1.1.25 tie · STREAM unpin tie-on-TP2 · Q8_BATCH kept · CPU_LANE=smt **REJECTED (21.6→13.5)** · AHEAD=2 neutral · chunk 16384 **REJECTED** · DSPARK_CUM 0.3 **REJECTED**. SLOT_KEEP added.
+3. **Decode regression RCA**: the remembered "33-35 t/s" decomposed into (a) cache-hot repeat asks, (b) my STREAM unpin costing ~3-4 t/s on TP1, (c) campaign running TP2. Binaries (pr344 vs v1.1.24/25) measured ties — no engine regression. Restored pr344 + TP1 + old pins → 30.8-32.5 warm verified.
+4. **TP2-for-prefill research**: runtime TP flip is impossible (boot-time weight layout); PROMPT_SKIP measured inert-looking on TP2; shipped `flip-tp.sh` profile switcher instead.
+5. **Engine-patch attempt → no patch needed**: reading `yoco_layer()` closely showed the multi-GPU skip path is already implemented (cut at chunk boundary); its guards only block flow chunks (STREAM lane) and Engram layers at/after the cut (layer 20). Our pack has Engram at layers 1/14 and STREAM=0 → **the skip was already active on our TP1 split**. A/B @103k: 769 (on) vs 710 (off) = **+8%, answers bit-exact**. Docs' "one GPU only" is the guard's condition, not a hard limit. Production moved to mode 1 (exact) over mode 2 (DeepSeek's 128-replay, shifts answers slightly).
+6. **Determinism investigation** (quality): thinking-prose rewording between runs traced to DSpark drafting + CPU-lane expert-path variance (documented upstream trait); with dspark off, structured probes are 4/4 identical; final answers converge identically. Gate chain-math expected value was my arithmetic error (362, not 465 — the model was right). FINAL gate 7/7.
 
-Three stacked causes, **no engine regression** — pr344 vs v1.1.24/25 binaries measured ties at both TP1 and TP2:
-
-1. **STREAM unpin (L2) was wrong on TP1.** Default-on streaming engages the PCIe lane on single-engine boots and loses ~3-4 t/s when the RAM tier holds every expert. Pin `MAYA_DS4_STREAM=0` restored.
-2. **--tp 2 was the campaign shape** (chosen for prefill). TP2 costs 4-6 t/s decode vs TP1 layer-split on this engine+pack.
-3. **Bench-method artifact.** The old "33-35" lines were the SAME 65-token prompt's 4th-5th repeat with the expert cache 80%+ hot and CPU lane at 16-20%. Fresh asks are 26-29 on ANY binary; first ask after boot 24-26. Client-side t/s also reads ~4-5 under engine lines on fresh prompts (it includes the ~1-2 s prompt read) — always compare engine lines.
-
-## The apply ladder (one lever per boot, fixed bench, 2-run means)
-
-Baseline v1.1.24 TP2: essay 21.6 / code 21.8 t/s client-side, prefill 1166 @33k.
-
-| lever | verdict |
-|---|---|
-| L1 v1.1.24→v1.1.25 binary | tie — kept 1125 path available |
-| L2 STREAM default-on (unpin) | tie on TP2; **REVERTED after RCA: TP1 loss ~3-4 t/s** |
-| L3 Q8_BATCH=1 (#382) | tie (same-bits) — kept, free |
-| L4 CPU_LANE=smt (32 threads) | **REJECTED 21.6→13.5 t/s** (SMT siblings belong to readers; docs were right) |
-| L5 DS4_AHEAD=2 (+EXTRA 2) | tie (all-RAM, nothing to prefetch) |
-| L6 prefill-chunk 16384 | **REJECTED** (8192 wins decode AND prefill) |
-| L7 DSPARK_CUM 0.3 | **REJECTED** (acceptance 5/5→1/2 kept) |
-| SLOT_KEEP=1 | kept (latency win for agent workloads, no t/s claim) |
-
-## Research findings that mattered (3 parallel agents; full reports in ~/.hermes/cache/delegation/)
+## What's dead / what's next
 
 Dead on SM86 (never chase): FP8 tensor cores, TMA/clusters/DSMEM, UE8M0 HW path, TMEM/tcgen05, PDL, setmaxnreg.
-Already in the engine (no action): grouped/masked MoE GEMM, hot-expert tiering, MTP+confidence scheduling (= DSpark+CUM exactly), prefix-cache (= SLOT_KEEP), CUDA graphs, cuBLASLt tiering.
-Config-reachable and measured above; the remaining decode lever is engine work: DS4_PROF splits the 125 ms token into attention 20 / routing+shared 5 / gate-up 6 / **CPU-lane wait 45** / down+post 49 — and the decode PCIe stream lane is source-gated `nm == 1 && mx` (single-GPU + MXFP4), so TP2+EXL3 can't engage it. Port that gate or AcceptMoE verify-reranking = the next jump.
+Config space: exhausted (this README is the map of it). Next decode jump = engine work:
+- CPU-lane wait is 45 ms of a 125 ms token (DS4_PROF) — port the decode PCIe stream lane to `nm > 1` + EXL3 packs (currently gated `nm == 1 && mx`)
+- AcceptMoE-style verify-window expert reranking (from the earlier EXL3-50Tps research)
+- Multi-GPU prompt-skip already active; TP2 prefill ceiling is the allreduce staging path (~1.7 ms/copy)
 
-## Gotchas hit today
+## Gotchas (learned the hard way)
 
 - `maya.sh` failed-venv bootstrap does `rm -rf .venv` — it wiped the serve venv mid-day. Rebuild: `uv venv .venv --python 3.12 && uv pip install --python .venv/bin/python -r requirements-serve.txt`.
-- Bench probes: repeated-sentence prefill fillers compress ~4× in tokens (use high-entropy word soup); a needle with an arithmetic PATTERN in the filler invites compute-not-retrieve (use un-patterned magic strings); cap `max_tokens` or early-stop answers deflate t/s.
-- Official `--bench` needs the server STOPPED and the venv present; engine boot facts ("ds4:" lines) ride stderr to the config `log` path, per-request stats to the pump (see `[maya] done:` lines).
+- Bench probes: repeated-sentence prefill fillers compress ~4× in tokens (use high-entropy word soup); a needle with an arithmetic PATTERN invites compute-not-retrieve (use un-patterned magic strings); cap `max_tokens` or early-stop answers deflate t/s; client-side t/s reads ~4-5 under engine lines on fresh prompts (prompt-read included).
+- Compare engine `done:` lines, never client wall-clock alone, when judging decode.
 
 ## Files
 
-- `DEEPSEEK-RESEARCH-APPLY.md` — the raw research table + ladder as run (working notes)
-- `baseline-v1124.out … RESTORED-tp1-oldenv.out` — every bench receipt, in run order
-- `official-bench-tp1.out`, `maya-bench.log` — repo official bench receipts
-- `quality-gate.out` — 4/4 gate (17×19=323, greedy determinism, needle BANANA-7741, ASCII)
+- `DEEPSEEK-RESEARCH-APPLY.md` — raw research table + ladder + RCA working notes
+- `baseline-v1124.out … FINAL-prod` — every bench receipt, in run order
+- `quality-gate*.out` — the 7/7 gate receipts (incl. the 30k needle)
 - `ds4-bench.jsonl` — machine-readable per-probe results
-- `bench_ds4.py` — the fixed bench (probes + prefill + repeats)
-- `maya-ds4.json` — the final config as shipped
+- `bench_ds4.py`, `quality_gate.py`, `prefill100k.py` — the fixed bench + gate tools
+- `maya-ds4.json`, `flip-tp.sh` — final config + shape switcher
