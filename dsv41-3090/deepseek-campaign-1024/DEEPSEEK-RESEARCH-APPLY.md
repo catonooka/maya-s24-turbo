@@ -69,3 +69,18 @@ Measured matrix (pr344 binary, all cold-cache):
 
 Shipped: flip-tp.sh (sudo bash flip-tp.sh 1|2) - one command, ~5 min boot. Default TP1 (decode); flip to TP2 for big-prompt sessions.
 Engine-work path if we ever want both at once: port the prompt-skip to multi-GPU (cut at chunk boundary) OR port the PCIe stream lane to nm>1 - both are engine patches, tracked above.
+
+## Multi-GPU prompt-skip: no patch needed (2026-10-24 late)
+
+Investigated patching yoco_layer() for multi-GPU. READING THE SOURCE CLOSELY: the multi-GPU skip path is ALREADY IMPLEMENTED (cut at chunk boundary, rows go to groups whole); the guards only disable it when (a) flow chunks exist (STREAM lane) or (b) Engram layers sit at/after the cut (layer 20). Our pack: Engram at layers 1,14 (before cut), STREAM=0 => skip ALREADY ACTIVE on TP1 split.
+
+Measured A/B @103k cold (TP1): skip on 769 vs DS4_YOCO=0 710 t/s => +8%, answers exact (mode 1).
+Mode matrix: 0=off, 1=exact skip (DEFAULT, bit-stable), 2=DeepSeek 128-replay (answers shift a little). Production set to 1.
+
+Determinism investigation (quality concern, resolved):
+- Thinking-prose rewording run-to-run (0/4 identical on short probes) = DRAFT + CPU-lane expert-path variance, documented trait; FINAL answers converge identically.
+- With dspark off: 4/4 identical on structured probes; colors probe still varies in reasoning wording only.
+- Gate updated: chain-math expected value corrected (362 not 465 — operator error, model was right).
+FINAL gate 7/7: chain-math, 17x19, needle 2k, needle 30k (exercises skip path over cut), ascii, lines4, determinism.
+
+FINAL production (verified): pr344, TP1, dspark on, PROMPT_SKIP=1, prefill ~810 t/s @103k cold (737@33k), decode 24-32 t/s.
