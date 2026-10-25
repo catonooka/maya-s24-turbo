@@ -17,6 +17,10 @@ the engine that makes running GLM-5.3-Flash on consumer GPUs possible at all.
 All credit for the engine, the Maya-S24 quant, the MTP drafting, KV streaming, and the
 CPU/PCIe expert lanes belongs to its author (**@mw00**) and contributors — see [Credits](#credits).
 
+**Hermes Agent** ([Nous Research](https://hermes-agent.nousresearch.com)) is the main harness for the
+research and code in this repo — campaigns, patches, benches, and validation runs are all driven
+through it, with human review at every gate.
+
 ## The result (2026-10-13/14)
 
 | metric | stock v1.1.5 (this rig) | + this repo's tuning | repo README reference¹ |
