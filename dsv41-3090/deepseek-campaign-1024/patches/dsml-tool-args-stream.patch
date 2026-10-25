@@ -1,0 +1,467 @@
+From 0128fb3ec758a808599bcf6ed5c128003bf68bd7 Mon Sep 17 00:00:00 2001
+From: hermes <hermes@local>
+Date: Sun, 25 Oct 2026 11:53:00 +0000
+Subject: [PATCH] DSML tool args stream: a string parameter's argument deltas
+ now flow as the model writes them (was: the whole value held to its closing
+ tag - a 10k-token write was byte-silent for minutes and pi-ai's 300000ms
+ stream idle timeout killed every long tool call). DsmlRewriter streams the
+ escaped JSON body with only a possible closer-prefix held back; the scanner
+ gets a verbatim 'stre' state via a new <arg_stre> open; parse_tool_call
+ decodes it the same. Closing-tag rule matches the reference decoder exactly
+ (only the complete token is structural). Also fixes the queue-heartbeats
+ counter leak: a client leaving while queued now gives back status[queued] and
+ its FIFO place (test_server.GoneClients was failing since 7b093f53).
+ Parser/DSML suites green incl. 3 new streaming tests; GoneClients 3x stable.
+
+---
+ probe_stream_gap.py            | 109 ++++++++++++++++++++++++++
+ serve/frontend.py              | 136 ++++++++++++++++++++++++++-------
+ serve/server.py                |  18 +++--
+ serve/test_ds41_conformance.py |  41 ++++++++++
+ 4 files changed, 273 insertions(+), 31 deletions(-)
+ create mode 100644 probe_stream_gap.py
+
+diff --git a/probe_stream_gap.py b/probe_stream_gap.py
+new file mode 100644
+index 00000000..3fe2d1d3
+--- /dev/null
++++ b/probe_stream_gap.py
+@@ -0,0 +1,109 @@
++#!/usr/bin/env python3
++"""probe_stream_gap.py - measure the longest silent gap on the SSE wire during a forced
++tool call with a large string parameter.
++
++This is the pi-ai killer: the client's streamIdleTimeoutMs (300000 ms) fires when the
++server sends no bytes for 5 minutes. A tool call whose string parameter buffers server-side
++(the DSML rewriter held the whole value until the closing tag) is byte-silent for the
++entire argument write - minutes at ~27 tok/s.
++
++Usage: python3 probe_stream_gap.py [url] [stanzas]
++Prints wall time, recv count, the largest inter-recv gaps, and an arguments-integrity
++check. RED (unpatched): max gap ~= the whole argument write, few arg recvs.
++GREEN (streamed args): max gap a few seconds, many arg recvs.
++"""
++import http.client
++import json
++import sys
++import time
++import urllib.parse
++
++URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8080/v1/chat/completions"
++STANZAS = int(sys.argv[2]) if len(sys.argv) > 2 else 150
++
++body = {
++    "model": "deepseek-v4.1-flash",
++    "stream": True,
++    "stream_options": {"include_usage": True},
++    "reasoning_effort": "none",
++    "max_tokens": 12288,
++    "temperature": 0,
++    "tools": [{
++        "type": "function",
++        "function": {
++            "name": "write_file",
++            "parameters": {"type": "object", "properties": {
++                "path": {"type": "string"},
++                "content": {"type": "string"}},
++                "required": ["path", "content"]}}}],
++    "tool_choice": {"type": "function", "function": {"name": "write_file"}},
++    "messages": [{
++        "role": "user",
++        "content": f"Write a file poems.txt containing exactly {STANZAS} different four-line "
++                    "stanzas about the sea. Only the tool call, no commentary."}],
++}
++
++u = urllib.parse.urlparse(URL)
++conn = http.client.HTTPConnection(u.hostname or "127.0.0.1", u.port or 80, timeout=900)
++conn.request("POST", u.path, body=json.dumps(body),
++             headers={"Content-Type": "application/json"})
++resp = conn.getresponse()
++if resp.status != 200:
++    print(f"HTTP {resp.status}: {resp.read(400)!r}")
++    sys.exit(1)
++
++t0 = time.monotonic()
++last = t0
++recvs = 0
++gaps = []
++max_gap = (0.0, 0.0)
++args_recvs = []          # (t, cumulative arg chars)
++args_buf = ""
++first_arg_t = None
++buf = b""
++while True:
++    chunk = resp.read(512)     # returns as soon as bytes are available (chunked SSE)
++    if not chunk:
++        break
++    now = time.monotonic()
++    gap = now - last
++    if gap > max_gap[0]:
++        max_gap = (gap, now - t0)
++    gaps.append(gap)
++    last = now
++    recvs += 1
++    buf += chunk
++    while b"\n" in buf:
++        line, buf = buf.split(b"\n", 1)
++        line = line.strip()
++        if not line.startswith(b"data: ") or line[6:] == b"[DONE]":
++            continue
++        try:
++            obj = json.loads(line[6:])
++        except ValueError:
++            continue
++        d = (obj.get("choices") or [{}])[0].get("delta") or {}
++        for tc in d.get("tool_calls") or []:
++            fn = tc.get("function") or {}
++            piece = fn.get("arguments") or ""
++            if piece:
++                args_buf += piece
++                if first_arg_t is None:
++                    first_arg_t = now - t0
++                args_recvs.append((round(now - t0, 1), len(args_buf)))
++
++wall = time.monotonic() - t0
++gaps.sort(reverse=True)
++print(f"wall {wall:.1f}s  recvs {recvs}  arg-delta recvs {len(args_recvs)}")
++print(f"max silent gap {max_gap[0]:.1f}s at t+{max_gap[1]:.1f}s   top gaps: {[round(g, 1) for g in gaps[:6]]}")
++print(f"first arg byte at t+{first_arg_t}s" if first_arg_t is not None else "NO ARG BYTES")
++if args_recvs:
++    print(f"last  arg byte at t+{args_recvs[-1][0]}s, {args_recvs[-1][1]} arg chars")
++try:
++    parsed = json.loads(args_buf)
++    content = parsed.get("content") or ""
++    print(f"arguments parse OK: path={parsed.get('path')!r} content={len(content)} chars, "
++          f"~{len(content.splitlines())} lines")
++except ValueError as e:
++    print(f"ARGUMENTS PARSE FAIL: {e} ({len(args_buf)} chars)")
++conn.close()
+diff --git a/serve/frontend.py b/serve/frontend.py
+index 85cb11fb..8f286a6f 100644
+--- a/serve/frontend.py
++++ b/serve/frontend.py
+@@ -566,6 +566,7 @@ CALL_END = "</tool_call>"
+ FUNC_START = "<function="                       # Qwen's form: <function=NAME><parameter=P>V</parameter>...</function>
+ ARG_KEY, ARG_KEY_END = "<arg_key>", "</arg_key>"   # GLM's form: NAME<arg_key>K</arg_key><arg_value>V</arg_value>...
+ ARG_VAL, ARG_VAL_END = "<arg_value>", "</arg_value>"
++ARG_STRE = "<arg_stre>"       # DsmlRewriter only: a pre-escaped, quoted JSON string value, streamed as written
+ 
+ 
+ def _arg_value(value: str, declared) -> object:
+@@ -606,14 +607,25 @@ def parse_tool_call(body: str, schema: dict | None = None) -> ToolCall:
+             if end < 0:
+                 raise ValueError("malformed tool call: " + body[:80])
+             key, rest = rest[:end].strip(), rest[end + len(ARG_KEY_END):]
+-            v0 = rest.find(ARG_VAL)
++            v0, stre = rest.find(ARG_VAL), False
++            s0 = rest.find(ARG_STRE)                    # DsmlRewriter: a pre-escaped streamed value
++            if s0 >= 0 and (v0 < 0 or s0 < v0):
++                v0, stre = s0, True
+             if v0 < 0 or rest[:v0].strip():
+                 raise ValueError("malformed tool call: " + body[:80])
+-            rest = rest[v0 + len(ARG_VAL):]
++            rest = rest[v0 + (len(ARG_STRE) if stre else len(ARG_VAL)):]
+             end = rest.find(ARG_VAL_END)
+             value = rest[:end] if end >= 0 else rest
+             rest = rest[end + len(ARG_VAL_END):] if end >= 0 else ""
+-            args[key] = _arg_value(value, (props.get(key) or {}).get("type"))
++            if stre:
++                if end >= 0 and value.endswith('"'):       # the rewriter's closing quote rides along
++                    value = value[:-1]
++                try:
++                    args[key] = json.loads('"' + value + '"')   # already the inside of a JSON string
++                except ValueError:
++                    raise ValueError("malformed tool call: " + body[:80]) from None
++            else:
++                args[key] = _arg_value(value, (props.get(key) or {}).get("type"))
+         return ToolCall(name=name, arguments=args)
+     if ">" not in body:
+         raise ValueError("malformed tool call: " + body[:80])
+@@ -646,6 +658,22 @@ DSML = "｜DSML｜"
+ _DSML_ATTR = re.compile(r'(\w+)="([^"]*)"')
+ 
+ 
++def _json_body(s: str) -> str:
++    """`s` as the inside of a JSON string, escaped exactly as json.dumps writes it - and with every
++    `<` as \\u003c, so a streamed value can never contain a legacy parser delimiter (the same escape
++    the whole-value path has always applied; it is why a streamed body holds no structure at all)."""
++    return json.dumps(s, ensure_ascii=False)[1:-1].replace("<", "\\u003c") if s else ""
++
++
++def prefix_len(s: str, tag: str) -> int:
++    """Length of the longest suffix of `s` that is a proper prefix of `tag` (0 if none)."""
++    best = 0
++    for n in range(1, min(len(tag), len(s)) + 1):
++        if s.endswith(tag[:n]):
++            best = max(best, n)
++    return best
++
++
+ class DsmlRewriter:
+     """DeepSeek-V4.1's tool calls (DSML: `<｜DSML｜ calls>` around `<｜DSML｜ invoke name="N">` blocks of
+     `<｜DSML｜ parameter name="K" string="true|false">V</｜DSML｜ parameter>`) rewritten, as they stream, into GLM's form
+@@ -657,13 +685,32 @@ class DsmlRewriter:
+     def __init__(self):
+         self.buf = ""
+         self.in_calls = self.in_param = False
+-        self.parameter_text = ""
++        self.parameter_text = ""     # the whole value, always (the raw/whole-parse source)
+         self.parameter_string = False
++        self.streamed = ""           # a string value's prefix already forwarded to the parser
++
++    CLOSER = "</" + DSML + " parameter>"    # the only structural token inside a value
+ 
+     def feed(self, text: str) -> str:
+         self.buf += text
+         out = []
+         while self.buf:
++            if self.in_param:
++                # Inside a parameter value the ONLY structural token is the complete closing tag -
++                # the reference decoder's rule (it reads until that exact token; an embedded
++                # opening tag, a partial closer prefix or a lone "<" is argument data).
++                i = self.buf.find(self.CLOSER)
++                if i < 0:
++                    hold = prefix_len(self.buf, self.CLOSER)
++                    if len(self.buf) > hold:
++                        data, self.buf = self.buf[:len(self.buf) - hold], self.buf[len(self.buf) - hold:]
++                        out.append(self._value(data))
++                    break               # the rest may still grow into the closing tag: hold it
++                data, self.buf = self.buf[:i], self.buf[i + len(self.CLOSER):]
++                if data:
++                    out.append(self._value(data))
++                out.append(self._close())
++                continue
+             i = self.buf.find("<")
+             if i < 0:
+                 out.append(self._plain(self.buf))
+@@ -688,21 +735,38 @@ class DsmlRewriter:
+ 
+     def finish(self) -> str:
+         rest, self.buf = self.buf, ""
++        if self.in_param and rest:
++            return self._value(rest)                        # unterminated: it is all value text
+         return self._plain(rest)
+ 
++    def _value(self, s: str) -> str:
++        """Text inside the parameter's value: data for the whole value, and - for a string
++        parameter - argument bytes out NOW (a 10k-token write must not be silent)."""
++        self.parameter_text += s
++        if self.parameter_string:
++            self.streamed += s
++            return _json_body(s)
++        return ""
++
++    def _close(self) -> str:
++        self.in_param = False
++        if self.parameter_string:
++            rest = self.parameter_text[len(self.streamed):]  # held-back tail (a partial closer prefix)
++            self.parameter_text, self.streamed, self.parameter_string = "", "", False
++            return _json_body(rest) + '"' + ARG_VAL_END
++        value = self.parameter_text
++        self.parameter_text = ""
++        # A JSON string can contain a literal legacy parser delimiter
++        # (e.g. a tool writing an XML example). JSON's Unicode escape
++        # keeps those values intact across this internal rewrite.
++        value = value.replace("<", "\\u003c")
++        return value + ARG_VAL_END
++
+     def _plain(self, s: str) -> str:
+-        if self.in_param:
+-            self.parameter_text += s
+-            return ""
+-        return "" if self.in_calls and not self.in_param and not s.strip() else s
++        return "" if self.in_calls and not s.strip() else s
+ 
+     def _tag(self, tag: str, closing: bool, body: str) -> str:
+         kind = body.split(None, 1)[0] if body.strip() else ""
+-        if self.in_param and not (closing and kind == "parameter"):
+-            # Like the reference decoder, only the parameter's closing tag is
+-            # structural here. Other DSML tags can be literal argument data.
+-            self.parameter_text += tag
+-            return ""
+         attrs = dict(_DSML_ATTR.findall(body))
+         if kind == "calls":
+             self.in_calls = not closing
+@@ -710,18 +774,10 @@ class DsmlRewriter:
+         if kind == "invoke":
+             return "</tool_call>" if closing else CALL_START + attrs.get("name", "")
+         if kind == "parameter":
+-            self.in_param = not closing
+-            if closing:
+-                value = json.dumps(self.parameter_text, ensure_ascii=False) if self.parameter_string else self.parameter_text
+-                # A JSON string can contain a literal legacy parser delimiter
+-                # (e.g. a tool writing an XML example). JSON's Unicode escape
+-                # keeps those values intact across this internal rewrite.
+-                value = value.replace("<", "\\u003c")
+-                self.parameter_text = ""
+-                return value + ARG_VAL_END
+             self.parameter_string = attrs.get("string") == "true"
+-            self.parameter_text = ""
+-            return ARG_KEY + attrs.get("name", "") + ARG_KEY_END + ARG_VAL
++            self.parameter_text, self.streamed, self.in_param = "", "", True
++            return (ARG_KEY + attrs.get("name", "") + ARG_KEY_END + ARG_STRE) if self.parameter_string \
++                else (ARG_KEY + attrs.get("name", "") + ARG_KEY_END + ARG_VAL)
+         return tag
+ 
+ 
+@@ -829,12 +885,20 @@ class OutputParser:
+                     return out
+                 after = stripped[k1 + len(ARG_KEY_END):]
+                 v0 = len(after) - len(after.lstrip())
+-                if not after[v0:].startswith(ARG_VAL):
++                if not after[v0:].startswith(ARG_VAL) and not after[v0:].startswith(ARG_STRE):
+                     return out
+                 pname = stripped[len(ARG_KEY):k1].strip()
+                 args(("" if self.sfirst else ",") + json.dumps(pname) + ":")
+                 self.sfirst = False
+                 self.sp += (len(rest) - len(stripped)) + k1 + len(ARG_KEY_END) + v0 + len(ARG_VAL)
++                if after[v0:].startswith(ARG_STRE):
++                    # DsmlRewriter: a string value the rewriter already escaped and is streaming as
++                    # written (its "<" is \u003c, so the body can hold no structure at all). The
++                    # rewriter emits no opening quote - it goes here, the closing one at the tag.
++                    self.sp += len(ARG_STRE) - len(ARG_VAL)
++                    args('"')
++                    self.ss, self.sval_started = "stre", True
++                    continue
+                 if self.sdeclared.get(pname) == "string":
+                     args('"')
+                     self.ss, self.sval_started = "str", True     # GLM's values are written as they are
+@@ -886,6 +950,26 @@ class OutputParser:
+                     args(json.dumps(rest[:safe])[1:-1])
+                     self.sp += safe
+                 return out
++            elif self.ss == "stre":
++                # a streamed, pre-escaped string value (DsmlRewriter via ARG_STRE): the text is
++                # already the inside of a JSON string and holds no "<" (escaped to \u003c at the
++                # source), so the only structure is the closing tag - and a "<" that has not
++                # resolved into one yet can only be its still-arriving start: hold from there.
++                end = rest.find(ARG_VAL_END)
++                if end >= 0:
++                    args(rest[:end])                     # the rewriter's closing quote is in here
++                    self.sp += end + len(ARG_VAL_END)
++                    self.ss = "between"
++                    continue
++                lt = rest.find("<")
++                if lt < 0:
++                    args(rest)
++                    self.sp += len(rest)
++                    return out
++                if lt:
++                    args(rest[:lt])
++                    self.sp += lt
++                return out
+             elif self.ss == "raw":
+                 end = rest.find(self.vend)
+                 if end < 0:
+@@ -912,7 +996,7 @@ class OutputParser:
+         if self.scall is None or self.ss == "done":
+             return out
+         tail = ""
+-        if self.ss == "str":
++        if self.ss in ("str", "stre"):
+             tail += '"'
+         elif self.ss == "raw":
+             tail += json.dumps(self.buf[self.sp:].strip("\n"))
+diff --git a/serve/server.py b/serve/server.py
+index 73b0c8e5..f6df6dbb 100644
+--- a/serve/server.py
++++ b/serve/server.py
+@@ -2246,23 +2246,28 @@ class Service:
+         with self.status_lock:
+             self.status["queued"] += 1
+         hold = [False, False]                           # holds the FIFO (fair slices let go of it); counts as active
++        queue_counted = True                            # status["queued"] raised; the finally gives it back
++        place = None
+         try:
+             # Local patch (queue heartbeats): the initial FIFO wait used to be byte-silent, so
+             # streaming clients with an idle timeout (pi-ai streamIdleTimeoutMs, 300000 ms) killed
+             # queued requests. Inlined from `with self._turn(hold, cancel):` so the wait can yield
+             # None (an SSE keep-alive comment) - the same behavior as the fair-slice re-queue below.
+-            place = self.fifo.enqueue(units=1)
+-            while not cancel.is_set():
+-                if self.fifo.wait_turn(place, timeout=0.05):
+-                    break
+-                yield "ping", None
++            # The try starts BEFORE the wait: a client that leaves while queued throws GeneratorExit
++            # at that ping yield, and the FIFO place and the queue count must still be given back.
+             try:
++                place = self.fifo.enqueue(units=1)
++                while not cancel.is_set():
++                    if self.fifo.wait_turn(place, timeout=0.05):
++                        break
++                    yield "ping", None
+                 if cancel.is_set():
+                     yield "done", {"finish": "cancel", "completion_tokens": 0}
+                     return
+                 hold[0] = True
+                 with self.status_lock:
+                     self.status["queued"] -= 1
++                    queue_counted = False
+                 if cancel.is_set():
+                     yield "done", {"finish": "cancel", "completion_tokens": 0}
+                     return
+@@ -2405,6 +2410,9 @@ class Service:
+             finish = "disconnect"
+             raise
+         finally:
++            if queue_counted:                           # left while still queued: the count goes back
++                with self.status_lock:
++                    self.status["queued"] -= 1
+             if emb:
+                 Path(emb).unlink(missing_ok=True)
+             with self.status_lock:
+diff --git a/serve/test_ds41_conformance.py b/serve/test_ds41_conformance.py
+index 5c6316a9..904fe26b 100644
+--- a/serve/test_ds41_conformance.py
++++ b/serve/test_ds41_conformance.py
+@@ -311,6 +311,47 @@ class Parsing(unittest.TestCase):
+             if stream:
+                 self.assertEqual(next(e.call.id for e in events if e.kind == "tool_start"), call.id)
+ 
++    def test_streamed_string_parameter_bytes_arrive_before_the_call_ends(self):
++        """A string parameter's argument deltas must flow while it is being written, not only once its
++        closing tag arrives (pi-ai streamIdleTimeoutMs 300000 ms: a buffered 10k-token `write` was
++        byte-silent for minutes and every long tool call timed out)."""
++        big = "\n".join(f"stanza {i} about the sea" for i in range(400))   # ~8k chars
++        text = dsml(f'<｜DSML｜ parameter name="q" string="true">{big}</｜DSML｜ parameter>')
++        for step in (1, 7, 64, len(text)):
++            with self.subTest(step=step):
++                events = parse(text, stream=True, step=step)
++                args = [e for e in events if e.kind == "tool_args"]
++                self.assertTrue(args)
++                self.assertTrue(any(len(e.text) > 1 for e in args), "no argument piece moved early")
++                # a piece before the final tool_call event: bytes flowed while the call was open
++                last_call = max(i for i, e in enumerate(events) if e.kind == "tool_call")
++                self.assertLess(max(i for i, e in enumerate(events) if e.kind == "tool_args"), last_call)
++                self.assertEqual(json.loads("".join(e.text for e in args)), {"q": big})
++
++    def test_streamed_parameter_never_splits_a_closing_tag(self):
++        """Streamed value pieces must never leak a partial structural token: a closing-tag PREFIX at
++        the end of a piece stays held until it resolves as data. (A COMPLETE embedded closing tag is
++        structural in the reference decoder too - not data - so it is not tested as data here.)"""
++        for value in ("ends with a lone lt <", "ends with </\uff5cDSML\uff5c para",
++                      "ends with </\uff5cDSML\uff5c parameter", "two lines\nand < chars <", "clean text"):
++            with self.subTest(value=value):
++                text = dsml(f'<｜DSML｜ parameter name="q" string="true">{value}</｜DSML｜ parameter>')
++                events = parse(text, stream=True, step=1)
++                streamed = "".join(e.text for e in events if e.kind == "tool_args")
++                self.assertEqual(json.loads(streamed), {"q": value})
++                calls = [e.call for e in events if e.kind == "tool_call"]
++                self.assertEqual(len(calls), 1)
++
++    def test_streamed_raw_parameter_stays_whole(self):
++        """string="false" values (numbers/bools/objects) keep the whole-value path: they are short and
++        must arrive as one JSON scalar, byte-identical to the unstreamed parse."""
++        text = dsml('<｜DSML｜ parameter name="q" string="false">{"nested": [true, null, 2]}</｜DSML｜ parameter>')
++        for step in (1, 7, len(text)):
++            with self.subTest(step=step):
++                events = parse(text, stream=True, step=step)
++                self.assertEqual(json.loads("".join(e.text for e in events if e.kind == "tool_args")),
++                                 {"q": {"nested": [True, None, 2]}})
++
+ 
+ class ResponseSerialization(unittest.TestCase):
+     def service(self):
+-- 
+2.53.0
+

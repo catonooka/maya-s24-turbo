@@ -68,3 +68,9 @@ Config space: exhausted (this README is the map of it). Next decode jump = engin
 - `ds4-bench.jsonl` — machine-readable per-probe results
 - `bench_ds4.py`, `quality_gate.py`, `prefill100k.py` — the fixed bench + gate tools
 - `maya-ds4.json`, `flip-tp.sh` — final config + shape switcher
+- `FIX-queue-heartbeats.md` + `FIX-dsml-tool-args-stream.md` — the two idle-timeout
+  fixes (queue wait; tool-arg buffering), root causes measured on the wire
+- `probe_stream_gap.py` — socket probe: timestamps every SSE read, prints the max
+  silent gap (the tool that found both bugs)
+- `patches/` — `queue-heartbeats.patch`, `dsml-tool-args-stream.patch` (git
+  format-patch, apply to `serve/server.py` / `serve/frontend.py`)

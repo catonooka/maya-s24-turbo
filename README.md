@@ -9,8 +9,8 @@ the 748B MoE served on the same rig — 10.4 → 33-35 t/s decode, 144 → **783
 fully validated for quality and vision — and to the **EXL3-2.9 quality tier campaign**
 ([`dsv41-3090/`](dsv41-3090/)): the same 320B-class MoE at KL≈0.03 vs FP, 262k context,
 decode 30.8-32.5 t/s warm / prefill 835 t/s @103k, a verified multi-GPU prompt-skip (+8% free),
-LAN serving with four thinking tiers, and the queue-heartbeats fix that stops idle-timeout
-kills on streaming clients. See the History log below.
+LAN serving with four thinking tiers, and the two stream-timeout fixes that stop idle-timeout
+kills on streaming clients (queue heartbeats + streamed tool arguments). See the History log below.
 
 This is a **tuning + verification record** on top of [mw00/project-maya](https://github.com/mw00/project-maya),
 the engine that makes running GLM-5.3-Flash on consumer GPUs possible at all.
@@ -100,12 +100,34 @@ benchkit/         self-benchmark toolkit (model-authored, human-reviewed)
 results/          full_results.json, functest 8/8, monitor samples, HTML report
 agent-session/    PLAN.md, the agent driver, session/stage logs
 dsv41-3090/       DSV41 EXL3-2.9 campaign: research→apply ladder, receipts, quality gates,
-                  LAN tutorial, rig writeups, queue-heartbeats patch + fix doc
+                  LAN tutorial, rig writeups, stream-timeout patches + fix docs
 deepseek-v41-flash/  earlier DSV41 campaign (748B, S24-class quant)
 p2p-campaign/     PCIe BAR1 P2P driver work
 ```
 
 ## History log
+
+### 2026-10-25 — DSML tool-arg streaming: the second idle-timeout fix
+
+The queue-heartbeats fix (below) stopped queue-wait timeouts, but long turns still
+died at `pi-ai stream idle timeout after 300000ms` whenever the model wrote a
+**large tool call**. Root cause: the DSML rewriter buffered the entire parameter
+value until its closing tag — a 12k-token `write` was byte-silent for ~6 minutes
+(max silent gap **367.6 s** measured on the wire; engine healthy at 33 t/s
+throughout, all 9 cancelled generations in the log died mid tool-call, exactly
+~300 s after their last streamed byte).
+
+Fix ([`FIX-dsml-tool-args-stream.md`](dsv41-3090/deepseek-campaign-1024/FIX-dsml-tool-args-stream.md),
+[`patches/dsml-tool-args-stream.patch`](dsv41-3090/deepseek-campaign-1024/patches/)):
+string-parameter values now stream as the model writes them (JSON-escaped body
+out incrementally, only a possible closer-prefix held back; new verbatim `stre`
+scanner state via `<arg_stre>`; raw values stay whole). Closing-tag semantics
+verified identical to DeepSeek's reference decoder. After: max silent gap
+**11.3 s** (= the prefill), 12,269 argument deltas, args intact (51,830 chars),
+throughput unchanged. Also fixes the queue-heartbeats counter leak
+(`test_server.GoneClients`, failing since that patch). 71/71 parser/DSML tests
+green incl. 3 new **timing** tests — the old suite only checked the sum of
+deltas, which is why a fully-buffered implementation passed it.
 
 ### 2026-10-24/25 — DSV41 EXL3-2.9 (320B, 262k ctx): research→apply campaign + serving hardening
 
