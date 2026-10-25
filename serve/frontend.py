@@ -566,6 +566,7 @@ CALL_END = "</tool_call>"
 FUNC_START = "<function="                       # Qwen's form: <function=NAME><parameter=P>V</parameter>...</function>
 ARG_KEY, ARG_KEY_END = "<arg_key>", "</arg_key>"   # GLM's form: NAME<arg_key>K</arg_key><arg_value>V</arg_value>...
 ARG_VAL, ARG_VAL_END = "<arg_value>", "</arg_value>"
+ARG_STRE = "<arg_stre>"       # DsmlRewriter only: a pre-escaped, quoted JSON string value, streamed as written
 
 
 def _arg_value(value: str, declared) -> object:
@@ -606,14 +607,25 @@ def parse_tool_call(body: str, schema: dict | None = None) -> ToolCall:
             if end < 0:
                 raise ValueError("malformed tool call: " + body[:80])
             key, rest = rest[:end].strip(), rest[end + len(ARG_KEY_END):]
-            v0 = rest.find(ARG_VAL)
+            v0, stre = rest.find(ARG_VAL), False
+            s0 = rest.find(ARG_STRE)                    # DsmlRewriter: a pre-escaped streamed value
+            if s0 >= 0 and (v0 < 0 or s0 < v0):
+                v0, stre = s0, True
             if v0 < 0 or rest[:v0].strip():
                 raise ValueError("malformed tool call: " + body[:80])
-            rest = rest[v0 + len(ARG_VAL):]
+            rest = rest[v0 + (len(ARG_STRE) if stre else len(ARG_VAL)):]
             end = rest.find(ARG_VAL_END)
             value = rest[:end] if end >= 0 else rest
             rest = rest[end + len(ARG_VAL_END):] if end >= 0 else ""
-            args[key] = _arg_value(value, (props.get(key) or {}).get("type"))
+            if stre:
+                if end >= 0 and value.endswith('"'):       # the rewriter's closing quote rides along
+                    value = value[:-1]
+                try:
+                    args[key] = json.loads('"' + value + '"')   # already the inside of a JSON string
+                except ValueError:
+                    raise ValueError("malformed tool call: " + body[:80]) from None
+            else:
+                args[key] = _arg_value(value, (props.get(key) or {}).get("type"))
         return ToolCall(name=name, arguments=args)
     if ">" not in body:
         raise ValueError("malformed tool call: " + body[:80])
@@ -646,6 +658,22 @@ DSML = "｜DSML｜"
 _DSML_ATTR = re.compile(r'(\w+)="([^"]*)"')
 
 
+def _json_body(s: str) -> str:
+    """`s` as the inside of a JSON string, escaped exactly as json.dumps writes it - and with every
+    `<` as \\u003c, so a streamed value can never contain a legacy parser delimiter (the same escape
+    the whole-value path has always applied; it is why a streamed body holds no structure at all)."""
+    return json.dumps(s, ensure_ascii=False)[1:-1].replace("<", "\\u003c") if s else ""
+
+
+def prefix_len(s: str, tag: str) -> int:
+    """Length of the longest suffix of `s` that is a proper prefix of `tag` (0 if none)."""
+    best = 0
+    for n in range(1, min(len(tag), len(s)) + 1):
+        if s.endswith(tag[:n]):
+            best = max(best, n)
+    return best
+
+
 class DsmlRewriter:
     """DeepSeek-V4.1's tool calls (DSML: `<｜DSML｜ calls>` around `<｜DSML｜ invoke name="N">` blocks of
     `<｜DSML｜ parameter name="K" string="true|false">V</｜DSML｜ parameter>`) rewritten, as they stream, into GLM's form
@@ -657,13 +685,32 @@ class DsmlRewriter:
     def __init__(self):
         self.buf = ""
         self.in_calls = self.in_param = False
-        self.parameter_text = ""
+        self.parameter_text = ""     # the whole value, always (the raw/whole-parse source)
         self.parameter_string = False
+        self.streamed = ""           # a string value's prefix already forwarded to the parser
+
+    CLOSER = "</" + DSML + " parameter>"    # the only structural token inside a value
 
     def feed(self, text: str) -> str:
         self.buf += text
         out = []
         while self.buf:
+            if self.in_param:
+                # Inside a parameter value the ONLY structural token is the complete closing tag -
+                # the reference decoder's rule (it reads until that exact token; an embedded
+                # opening tag, a partial closer prefix or a lone "<" is argument data).
+                i = self.buf.find(self.CLOSER)
+                if i < 0:
+                    hold = prefix_len(self.buf, self.CLOSER)
+                    if len(self.buf) > hold:
+                        data, self.buf = self.buf[:len(self.buf) - hold], self.buf[len(self.buf) - hold:]
+                        out.append(self._value(data))
+                    break               # the rest may still grow into the closing tag: hold it
+                data, self.buf = self.buf[:i], self.buf[i + len(self.CLOSER):]
+                if data:
+                    out.append(self._value(data))
+                out.append(self._close())
+                continue
             i = self.buf.find("<")
             if i < 0:
                 out.append(self._plain(self.buf))
@@ -688,21 +735,38 @@ class DsmlRewriter:
 
     def finish(self) -> str:
         rest, self.buf = self.buf, ""
+        if self.in_param and rest:
+            return self._value(rest)                        # unterminated: it is all value text
         return self._plain(rest)
 
+    def _value(self, s: str) -> str:
+        """Text inside the parameter's value: data for the whole value, and - for a string
+        parameter - argument bytes out NOW (a 10k-token write must not be silent)."""
+        self.parameter_text += s
+        if self.parameter_string:
+            self.streamed += s
+            return _json_body(s)
+        return ""
+
+    def _close(self) -> str:
+        self.in_param = False
+        if self.parameter_string:
+            rest = self.parameter_text[len(self.streamed):]  # held-back tail (a partial closer prefix)
+            self.parameter_text, self.streamed, self.parameter_string = "", "", False
+            return _json_body(rest) + '"' + ARG_VAL_END
+        value = self.parameter_text
+        self.parameter_text = ""
+        # A JSON string can contain a literal legacy parser delimiter
+        # (e.g. a tool writing an XML example). JSON's Unicode escape
+        # keeps those values intact across this internal rewrite.
+        value = value.replace("<", "\\u003c")
+        return value + ARG_VAL_END
+
     def _plain(self, s: str) -> str:
-        if self.in_param:
-            self.parameter_text += s
-            return ""
-        return "" if self.in_calls and not self.in_param and not s.strip() else s
+        return "" if self.in_calls and not s.strip() else s
 
     def _tag(self, tag: str, closing: bool, body: str) -> str:
         kind = body.split(None, 1)[0] if body.strip() else ""
-        if self.in_param and not (closing and kind == "parameter"):
-            # Like the reference decoder, only the parameter's closing tag is
-            # structural here. Other DSML tags can be literal argument data.
-            self.parameter_text += tag
-            return ""
         attrs = dict(_DSML_ATTR.findall(body))
         if kind == "calls":
             self.in_calls = not closing
@@ -710,18 +774,10 @@ class DsmlRewriter:
         if kind == "invoke":
             return "</tool_call>" if closing else CALL_START + attrs.get("name", "")
         if kind == "parameter":
-            self.in_param = not closing
-            if closing:
-                value = json.dumps(self.parameter_text, ensure_ascii=False) if self.parameter_string else self.parameter_text
-                # A JSON string can contain a literal legacy parser delimiter
-                # (e.g. a tool writing an XML example). JSON's Unicode escape
-                # keeps those values intact across this internal rewrite.
-                value = value.replace("<", "\\u003c")
-                self.parameter_text = ""
-                return value + ARG_VAL_END
             self.parameter_string = attrs.get("string") == "true"
-            self.parameter_text = ""
-            return ARG_KEY + attrs.get("name", "") + ARG_KEY_END + ARG_VAL
+            self.parameter_text, self.streamed, self.in_param = "", "", True
+            return (ARG_KEY + attrs.get("name", "") + ARG_KEY_END + ARG_STRE) if self.parameter_string \
+                else (ARG_KEY + attrs.get("name", "") + ARG_KEY_END + ARG_VAL)
         return tag
 
 
@@ -829,12 +885,20 @@ class OutputParser:
                     return out
                 after = stripped[k1 + len(ARG_KEY_END):]
                 v0 = len(after) - len(after.lstrip())
-                if not after[v0:].startswith(ARG_VAL):
+                if not after[v0:].startswith(ARG_VAL) and not after[v0:].startswith(ARG_STRE):
                     return out
                 pname = stripped[len(ARG_KEY):k1].strip()
                 args(("" if self.sfirst else ",") + json.dumps(pname) + ":")
                 self.sfirst = False
                 self.sp += (len(rest) - len(stripped)) + k1 + len(ARG_KEY_END) + v0 + len(ARG_VAL)
+                if after[v0:].startswith(ARG_STRE):
+                    # DsmlRewriter: a string value the rewriter already escaped and is streaming as
+                    # written (its "<" is \u003c, so the body can hold no structure at all). The
+                    # rewriter emits no opening quote - it goes here, the closing one at the tag.
+                    self.sp += len(ARG_STRE) - len(ARG_VAL)
+                    args('"')
+                    self.ss, self.sval_started = "stre", True
+                    continue
                 if self.sdeclared.get(pname) == "string":
                     args('"')
                     self.ss, self.sval_started = "str", True     # GLM's values are written as they are
@@ -886,6 +950,26 @@ class OutputParser:
                     args(json.dumps(rest[:safe])[1:-1])
                     self.sp += safe
                 return out
+            elif self.ss == "stre":
+                # a streamed, pre-escaped string value (DsmlRewriter via ARG_STRE): the text is
+                # already the inside of a JSON string and holds no "<" (escaped to \u003c at the
+                # source), so the only structure is the closing tag - and a "<" that has not
+                # resolved into one yet can only be its still-arriving start: hold from there.
+                end = rest.find(ARG_VAL_END)
+                if end >= 0:
+                    args(rest[:end])                     # the rewriter's closing quote is in here
+                    self.sp += end + len(ARG_VAL_END)
+                    self.ss = "between"
+                    continue
+                lt = rest.find("<")
+                if lt < 0:
+                    args(rest)
+                    self.sp += len(rest)
+                    return out
+                if lt:
+                    args(rest[:lt])
+                    self.sp += lt
+                return out
             elif self.ss == "raw":
                 end = rest.find(self.vend)
                 if end < 0:
@@ -912,7 +996,7 @@ class OutputParser:
         if self.scall is None or self.ss == "done":
             return out
         tail = ""
-        if self.ss == "str":
+        if self.ss in ("str", "stre"):
             tail += '"'
         elif self.ss == "raw":
             tail += json.dumps(self.buf[self.sp:].strip("\n"))

@@ -2246,23 +2246,28 @@ class Service:
         with self.status_lock:
             self.status["queued"] += 1
         hold = [False, False]                           # holds the FIFO (fair slices let go of it); counts as active
+        queue_counted = True                            # status["queued"] raised; the finally gives it back
+        place = None
         try:
             # Local patch (queue heartbeats): the initial FIFO wait used to be byte-silent, so
             # streaming clients with an idle timeout (pi-ai streamIdleTimeoutMs, 300000 ms) killed
             # queued requests. Inlined from `with self._turn(hold, cancel):` so the wait can yield
             # None (an SSE keep-alive comment) - the same behavior as the fair-slice re-queue below.
-            place = self.fifo.enqueue(units=1)
-            while not cancel.is_set():
-                if self.fifo.wait_turn(place, timeout=0.05):
-                    break
-                yield "ping", None
+            # The try starts BEFORE the wait: a client that leaves while queued throws GeneratorExit
+            # at that ping yield, and the FIFO place and the queue count must still be given back.
             try:
+                place = self.fifo.enqueue(units=1)
+                while not cancel.is_set():
+                    if self.fifo.wait_turn(place, timeout=0.05):
+                        break
+                    yield "ping", None
                 if cancel.is_set():
                     yield "done", {"finish": "cancel", "completion_tokens": 0}
                     return
                 hold[0] = True
                 with self.status_lock:
                     self.status["queued"] -= 1
+                    queue_counted = False
                 if cancel.is_set():
                     yield "done", {"finish": "cancel", "completion_tokens": 0}
                     return
@@ -2405,6 +2410,9 @@ class Service:
             finish = "disconnect"
             raise
         finally:
+            if queue_counted:                           # left while still queued: the count goes back
+                with self.status_lock:
+                    self.status["queued"] -= 1
             if emb:
                 Path(emb).unlink(missing_ok=True)
             with self.status_lock:
