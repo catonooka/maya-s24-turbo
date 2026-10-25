@@ -2247,7 +2247,20 @@ class Service:
             self.status["queued"] += 1
         hold = [False, False]                           # holds the FIFO (fair slices let go of it); counts as active
         try:
-            with self._turn(hold, cancel):
+            # Local patch (queue heartbeats): the initial FIFO wait used to be byte-silent, so
+            # streaming clients with an idle timeout (pi-ai streamIdleTimeoutMs, 300000 ms) killed
+            # queued requests. Inlined from `with self._turn(hold, cancel):` so the wait can yield
+            # None (an SSE keep-alive comment) - the same behavior as the fair-slice re-queue below.
+            place = self.fifo.enqueue(units=1)
+            while not cancel.is_set():
+                if self.fifo.wait_turn(place, timeout=0.05):
+                    break
+                yield "ping", None
+            try:
+                if cancel.is_set():
+                    yield "done", {"finish": "cancel", "completion_tokens": 0}
+                    return
+                hold[0] = True
                 with self.status_lock:
                     self.status["queued"] -= 1
                 if cancel.is_set():
@@ -2381,6 +2394,13 @@ class Service:
                     gen.close()                         # STOP+drain to THIS request's DONE while still holding the
                     #                                     fifo, so a stop-token break can't leave the shared engine
                     #                                     queue mid-drain for the next request to read as its own DONE
+
+            finally:
+                if place is not None:
+                    self.fifo.leave(place)
+                if hold[0]:
+                    hold[0] = False
+                    self.fifo.release(units=1)
         except GeneratorExit:                           # the client disconnected mid-stream
             finish = "disconnect"
             raise
