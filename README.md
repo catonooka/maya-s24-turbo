@@ -6,7 +6,11 @@ and hard receipts for every lever accepted or rejected.**
 
 Now also home to the **DeepSeek-V4.1-Flash-1017 campaign** ([`deepseek-v41-flash/`](deepseek-v41-flash/)):
 the 748B MoE served on the same rig — 10.4 → 33-35 t/s decode, 144 → **783 t/s** cold prefill,
-fully validated for quality and vision. See the History log below.
+fully validated for quality and vision — and to the **EXL3-2.9 quality tier campaign**
+([`dsv41-3090/`](dsv41-3090/)): the same 320B-class MoE at KL≈0.03 vs FP, 262k context,
+decode 30.8-32.5 t/s warm / prefill 835 t/s @103k, a verified multi-GPU prompt-skip (+8% free),
+LAN serving with four thinking tiers, and the queue-heartbeats fix that stops idle-timeout
+kills on streaming clients. See the History log below.
 
 This is a **tuning + verification record** on top of [mw00/project-maya](https://github.com/mw00/project-maya),
 the engine that makes running GLM-5.3-Flash on consumer GPUs possible at all.
@@ -95,9 +99,45 @@ tuning/           lever history, launcher, config snapshot, official bench logs
 benchkit/         self-benchmark toolkit (model-authored, human-reviewed)
 results/          full_results.json, functest 8/8, monitor samples, HTML report
 agent-session/    PLAN.md, the agent driver, session/stage logs
+dsv41-3090/       DSV41 EXL3-2.9 campaign: research→apply ladder, receipts, quality gates,
+                  LAN tutorial, rig writeups, queue-heartbeats patch + fix doc
+deepseek-v41-flash/  earlier DSV41 campaign (748B, S24-class quant)
+p2p-campaign/     PCIe BAR1 P2P driver work
 ```
 
 ## History log
+
+### 2026-10-24/25 — DSV41 EXL3-2.9 (320B, 262k ctx): research→apply campaign + serving hardening
+
+The quality tier moves to EXL3-2.9bpw (KL≈0.03 vs FP). Full campaign in
+[`dsv41-3090/deepseek-campaign-1024/`](dsv41-3090/deepseek-campaign-1024/) — DeepSeek-paper/kernel
+research (DeepGEMM, inference overview, DeepEP) distilled into an apply ladder, one lever per boot,
+every step measured and quality-gated.
+
+- **Decode restored 21 → 30.8-32.5 t/s warm** (26-29 fresh) — RCA of a 33-35 "regression": three
+  stacked causes (STREAM unpin −3-4, tp2 shape −4-6, cache-hot bench method −4-5); production
+  shape = pr344 binary + tp1 + old env pins (STREAM=0, PROMPT_SKIP=2) + Q8_BATCH + SLOT_KEEP
+- **Ladder verdicts**: v1.1.25 binary tie · Q8_BATCH free · SLOT_KEEP free (conversations survive
+  restarts) · lane-SMT REJECTED (21.6→13.5) · chunk 16k REJECTED · DSPARK_CUM 0.3 REJECTED
+  (draft acceptance 5/5→1/2) · DS4_AHEAD tie (all-RAM)
+- **Multi-GPU prompt-skip verified active** (+8% prefill @103k, answers bit-exact in mode 1):
+  docs said "one GPU only" — source showed the multi-GPU path exists; our pack's Engram layers
+  sit before the cut, so skip engages on the tp1 split with no patch at all
+- **TP flip workflow**: `flip-tp.sh` — tp2 prefill shape (1149 t/s @100k) ↔ tp1 decode shape,
+  one command, conversations survive (SLOT_KEEP)
+- **Queue-heartbeats fix** ([`FIX-queue-heartbeats.md`](dsv41-3090/deepseek-campaign-1024/FIX-queue-heartbeats.md)):
+  queued requests were byte-silent → pi-ai clients died at streamIdleTimeoutMs 300000;
+  now 50 ms keep-alives (2104 over a 105 s queue wait measured), both OpenAI + Anthropic dialects
+- **LAN serving**: 0.0.0.0 + OpenAI/Anthropic dialects + vision, four Hermes thinking tiers
+  (`dsv41`/`-high`/`-low`/`-fast`), `reasoning_effort` none/low/high/max or 1-100 budget
+  ([tutorial](dsv41-3090/deepseek-campaign-1024/DSV41-LAN-TUTORIAL.md))
+- **Profile (DS4_PROF)**: 124.85 ms/token = attention 19.6 + CPU-lane wait 44.9 + down+post 49.3
+  → next decode jump is engine work (CPU-lane wait), not config
+- **Quality gates 4/4 and 7/7** (17×19, greedy, needle BANANA-7741 @30k across the skip band, ASCII);
+  thinking-prose nondeterminism traced to DSpark drafting + CPU lane (final answers stable, gate
+  re-verified) — plus one gate bug caught (expected chain-math value was wrong, model was right)
+- **Rig part-selection writeups** for the campaign's hardware choices (boring parts carry the
+  result: 8-channel RAM = the RAM tier, 128 PCIe lanes = the fetch path)
 
 ### 2026-10-20/21 — DeepSeek-V4.1-Flash-1017: 10.4 → 33-35 t/s decode, 144 → 783 t/s prefill
 
