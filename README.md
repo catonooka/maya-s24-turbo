@@ -111,6 +111,28 @@ p2p-campaign/     PCIe BAR1 P2P driver work
 
 ## History log
 
+### 2026-10-25 (II) — TensorFold research applied: Recall record drafter (+40% on repeats), TCP_NODELAY, indexer-skip
+
+A full research pass over [ashhart/TensorFold](https://github.com/ashhart/TensorFold) (MIT) — docs,
+kernels, changelog — cross-checked against our engine's source before ranking. Three applies landed
+([FIX doc](dsv41-3090/deepseek-campaign-1024/FIX-tensorfold-recall.md),
+[patch](dsv41-3090/deepseek-campaign-1024/patches/tensorfold-recall.patch)):
+
+- **Recall** — TensorFold's `--recall` on our unused `SuffixDrafter`: a persistent token-id record
+  across requests and restarts proposes earlier continuations before the DSpark drafter; every copied
+  token is target-verified, so replies are byte-identical by construction. Their offer policy ported
+  (match-length land-rate buckets, expected-tokens vs DSpark rate, cooldown + probe decay, dedup).
+  Measured live: repeat prompts **+40% (21.3→12.7 s)**, code probe **26.1 t/s vs 22.0 baseline**,
+  byte-identical answers 5/5, quality gate 7/7 unchanged
+- **TCP_NODELAY** on the serve socket (their #929) — streamed chunks leave immediately
+- **QSA indexer scoring skip** below the dense boundary (their #1054) — micro-win on this pack
+  (`index_topk 512`), real on the GLM tier and prefill's early chunks; bit-identical (identity
+  selections never read the scores)
+
+Rejected with evidence (in the FIX doc): split-K down-proj (our grid isn't idle-bound), grouped
+experts + cancelled-prefill retention (already owned), FP8 prompts (their own KL tables), NVFP4 /
+speed-up mode / RoCE (wrong hardware).
+
 ### 2026-10-25 — DSML tool-arg streaming: the second idle-timeout fix
 
 The queue-heartbeats fix (below) stopped queue-wait timeouts, but long turns still

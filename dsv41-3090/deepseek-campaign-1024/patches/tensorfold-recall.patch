@@ -1,0 +1,595 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d8b61390..fdaed859 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -447,7 +447,7 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
+                               src/ds4/ds4_gguf.cu src/ds4/ds4_gguf_cpu.cpp src/ds4/ds4_iq.cu src/ds4/ds4_iq_cpu.cpp)
+     target_include_directories(maya-ds4 PRIVATE ${_strata_gpu_include_directories} third_party/ggml)
+     target_link_libraries(maya-ds4 PRIVATE strata_kernels strata_kernels_cpu ${_strata_gpu_runtime_target}
+-                          ${_strata_gpu_blas_target})
++                          ${_strata_gpu_blas_target} strata_spec)
+     if(NOT WIN32)   # mmap / mbind (NUMA)
+       add_executable(ds4_cpu_bench tests/ds4_cpu_bench.cpp)
+       target_link_libraries(ds4_cpu_bench PRIVATE strata_kernels_cpu)
+@@ -823,12 +823,16 @@ endif()
+ #     worse opt-out.  `cpu_require_expert_support()` therefore refuses at startup on a CPU without the
+ #     features, and the fallback exists for tests, exactly as P2.S3 specifies.
+ # Plan v0.3 P6: speculation components that need no GPU.
+-add_library(strata_spec STATIC src/spec/suffix_drafter.cpp src/spec/controller.cpp src/spec/draft_policy.cpp)
++add_library(strata_spec STATIC src/spec/suffix_drafter.cpp src/spec/controller.cpp src/spec/draft_policy.cpp
++                           src/spec/recall_drafter.cpp)
+ target_include_directories(strata_spec PUBLIC include)
+ if(STRATA_BUILD_TESTS)
+   add_executable(suffix_drafter_test src/spec/suffix_drafter_test.cpp)
+   target_link_libraries(suffix_drafter_test PRIVATE strata_spec)
+   add_test(NAME suffix_drafter_test COMMAND suffix_drafter_test)
++  add_executable(recall_drafter_test src/spec/recall_drafter_test.cpp)
++  target_link_libraries(recall_drafter_test PRIVATE strata_spec)
++  add_test(NAME recall_drafter_test COMMAND recall_drafter_test)
+   add_executable(controller_test src/spec/controller_test.cpp)
+   target_link_libraries(controller_test PRIVATE strata_spec)
+   add_test(NAME controller_test COMMAND controller_test)
+diff --git a/serve/server.py b/serve/server.py
+index f6df6dbb..05f58ab4 100644
+--- a/serve/server.py
++++ b/serve/server.py
+@@ -3732,6 +3732,10 @@ class Server(ThreadingHTTPServer):
+     # "connection reset by peer" on the first ones (Strata 0.1.41); the requests wait in the server's queue instead
+     # (STRATA_HTTP_BACKLOG overrides it)
+     request_queue_size = _backlog()
++    # TCP_NODELAY on every accepted connection (TensorFold #929's fix): a streamed reply's small writes
++    # leave as they are written instead of waiting behind Nagle's algorithm for an ACK that a LAN client
++    # has no reason to send soon.  Disabled with STRATA_TCP_NODELAY=0.
++    disable_nagle_algorithm = os.environ.get("STRATA_TCP_NODELAY", "1") != "0"
+ 
+     def server_close(self):
+         service = getattr(self, "response_service", None)
+diff --git a/src/ds4/ds4_main.cpp b/src/ds4/ds4_main.cpp
+index 015ebc71..410207a2 100644
+--- a/src/ds4/ds4_main.cpp
++++ b/src/ds4/ds4_main.cpp
+@@ -23,7 +23,9 @@
+ #include <cstdlib>
+ #include <cstring>
+ #include <deque>
++#include <filesystem>
+ #include <iostream>
++#include <memory>
+ #include <mutex>
+ #include <string>
+ #include <thread>
+@@ -35,6 +37,8 @@
+ #include <cerrno>
+ #endif
+ 
++#include "strata/spec/recall_drafter.hpp"
++
+ namespace {
+ 
+ double now_ms() {
+@@ -174,6 +178,25 @@ float dspark_cum_default() {
+ // One round of decoding after `tok` (the token at pos(), not fed yet): with the drafter, its drafts while their
+ // confidence holds (at most `room` - 1 of them), verified together; else a plain step.  `out` gets the tokens that follow
+ // tok (the accepted drafts, then the trunk's next), the last of them the next round's tok.
++// A copy round: the record's continuation for the current suffix, verified by the target.  The bits are
++// the model's own picks - a copy that misses costs only the round's drafts (land()/miss() bookkeeping is
++// the caller's).  Returns false on an engine error only.
++bool copy_round(strata::ds4::Model& m, int tok, const std::vector<int>& drafts, float temperature, float top_p,
++                int top_k, float min_p, unsigned long long seed, unsigned long long& counter,
++                std::vector<int>& out, int& offered, int& accepted, std::string& err) {
++    out.clear();
++    offered = accepted = 0;
++    if (drafts.empty()) return true;
++    int acc = 0, next = -1;
++    if (!m.verify(tok, drafts, temperature, top_p, top_k, min_p, seed, counter, acc, next, err)) return false;
++    counter += (unsigned long long) acc + 1;
++    for (int i = 0; i < acc; ++i) out.push_back(drafts[(size_t) i]);
++    out.push_back(next);
++    offered = (int) drafts.size();
++    accepted = acc;
++    return true;
++}
++
+ bool round(strata::ds4::Model& m, int tok, int room, bool spec, float conf_min, float temperature, float top_p, int top_k,
+            float min_p, unsigned long long seed, unsigned long long& counter, std::vector<int>& out, int& offered,
+            int& accepted, std::string& err, float cum_min = -1.0f) {
+@@ -344,6 +367,26 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
+         if (dump_f != nullptr && m.logits(dump_lg)) std::fwrite(dump_lg.data(), 4, dump_lg.size(), dump_f);
+     };
+     SpanCache spans;
++    // Recall (TensorFold's --recall idea on this engine's SuffixDrafter): one token-id record across
++    // requests and restarts, proposed before the DSpark drafter when its match is long enough.  Every
++    // copied token is verified by the target, so replies are the same tokens as without it.
++    // DS4_RECALL=0: off.  DS4_RECALL_DIR: the record's directory (default ~/.cache/maya-ds4/recall).
++    const bool recall_on = [] {
++        const char* v = std::getenv("DS4_RECALL");
++        return v == nullptr || std::atoi(v) != 0;
++    }();
++    std::unique_ptr<strata::spec::RecallDrafter> recall;
++    if (recall_on) {
++        std::string rdir = std::getenv("DS4_RECALL_DIR") ? std::getenv("DS4_RECALL_DIR")
++                                                         : std::string(getenv("HOME") ? getenv("HOME") : ".") +
++                                                               "/.cache/maya-ds4/recall";
++        std::error_code ec;
++        std::filesystem::create_directories(rdir, ec);
++        recall = std::make_unique<strata::spec::RecallDrafter>((size_t) m.max_context() + (1u << 20),
++                                                               rdir + "/record.bin");
++        std::fprintf(stderr, "maya ds4 serve: recall %s (%zu tokens held)\n",
++                     recall->size() > 0 ? "resumed" : "started", recall->size());
++    }
+     const int img_tok = m.image_token();
+     while (in.next(line)) {
+         if (line == "QUIT") break;
+@@ -506,6 +549,9 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
+         }
+         held = std::move(pics);
+         m.checkpoint(0);
++        // the record: this prompt's newly-read tokens (from `from` on; the reused part the record
++        // already holds from the request that read it first)
++        if (recall && total > from) recall->append(r.ids.data() + from, total - from);
+         const double t1 = now_ms();
+         long long produced = 0;
+         const char* finish = "length";
+@@ -555,6 +601,11 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
+                 std::snprintf(b, sizeof b, " drafts=%.3f", (double) d_acc / (double) d_off);
+                 out += b;
+             }
++            if (recall && recall->offers() > 0) {   // (the record drafter: how its copies are landing)
++                std::snprintf(b, sizeof b, " recall=%lld/%lld kept=%lld", (long long) recall->lands(),
++                              (long long) recall->offers(), (long long) recall->kept_tokens());
++                out += b;
++            }
+             if (s.skipped > s_dec.skipped) {   // (STRATA_DS4_DISK_SKIP_W: experts left out a token)
+                 std::snprintf(b, sizeof b, " skipped=%.3f", (double) (s.skipped - s_dec.skipped) / fed);
+                 out += b;
+@@ -572,6 +623,7 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
+             }
+             std::printf("T %d\n", tok);
+             ++produced;
++            if (recall) recall->append(tok);   // the record: every committed token as it is published
+             if (produced % 8 == 0) stat_line();
+             std::fflush(stdout);
+             bool end = false;
+@@ -587,15 +639,42 @@ int serve(strata::ds4::Model& m, const std::string& eos_list, bool spec, float c
+                 // a round whose drafts were all below the confidence floor: the next one does without the drafter
+                 // (a request's spec / dspark_conf keys over the engine's: the speed calibration measures both ways)
+                 const bool try_spec = (r.spec < 0 ? spec : r.spec != 0) && !cool;
+-                if (!round(m, tok, room, try_spec, r.conf >= 0 ? r.conf : conf_min, r.temperature, r.top_p, r.top_k,
++                // Recall first: a copy from the record costs no drafter pass, and its expected kept
++                // tokens (its own land rates at this match length) beat the DSpark rate.  The target
++                // verifies every copied token, so the reply's tokens never change.
++                bool copied = false;
++                if (recall && room > 1) {
++                    const int dspark_kept = d_off > 0 ? (int) ((double) d_acc / (double) d_off * 5.0) : 0;
++                    if (recall->offer(dspark_kept)) {
++                        std::vector<int32_t> rb((size_t) std::min(room - 1, 64));
++                        const int rk = recall->propose((int) rb.size(), rb.data(), dspark_kept);
++                        if (rk > 0) {
++                            std::vector<int> rd(rb.begin(), rb.begin() + rk);
++                            if (!copy_round(m, tok, rd, r.temperature, r.top_p, r.top_k, r.min_p, r.seed,
++                                            counter, got, off, acc, err)) {
++                                std::fprintf(stderr, "ds4: %s\n", err.c_str());
++                                finish = "cancel";
++                                break;
++                            }
++                            copied = true;
++                            recall->land(off, acc);
++                            d_off += off;
++                            d_acc += acc;
++                        }
++                    }
++                }
++                if (!copied &&
++                    !round(m, tok, room, try_spec, r.conf >= 0 ? r.conf : conf_min, r.temperature, r.top_p, r.top_k,
+                            r.min_p, r.seed, counter, got,
+                            off, acc, err, r.cum)) {
+                     std::fprintf(stderr, "ds4: %s\n", err.c_str());
+                     finish = "cancel";
+                     break;
+                 }
+-                d_off += off;
+-                d_acc += acc;
++                if (!copied) {
++                    d_off += off;
++                    d_acc += acc;
++                }
+                 cool = try_spec && off == 0;
+                 std::reverse(got.begin(), got.end());
+                 dump_rows();
+diff --git a/src/kernels/cuda/qsa_select.cu b/src/kernels/cuda/qsa_select.cu
+index 85b7342c..d3fd12db 100644
+--- a/src/kernels/cuda/qsa_select.cu
++++ b/src/kernels/cuda/qsa_select.cu
+@@ -29,6 +29,12 @@ __global__ void __launch_bounds__(SCORE_WARPS * 32) block_scores_kernel(const fl
+     const int64_t qi = blockIdx.y;
+     const int32_t* st = steps + qi * kStepCount;
+     const int64_t n_kv = st[kStepNKv], n_bid = st[kStepNBid];
++    // The identity selection (n_kv <= width, qsa.hpp: the selection is every visible cell) never reads
++    // the scores - block_topk writes the ids 0..n_kv-1 itself.  Skipping the dot products below the
++    // dense boundary is TensorFold #1054's finding (a 16,384-key scan took 11x less on their Metal
++    // kernel); here the whole launch returns when its query is in that state, so a captured graph's
++    // capacity grid is unchanged and the kernel simply does no work.
++    if (n_kv <= st[kStepWidth]) return;
+     const int64_t b = (int64_t) blockIdx.x * SCORE_WARPS + (threadIdx.x >> 5);
+     if (b > n_bid || b >= max_blocks) return;
+     const int lane = threadIdx.x & 31;
+@@ -206,6 +212,12 @@ __global__ void __launch_bounds__(128) block_scores_tc_kernel(const float* __res
+         *reinterpret_cast<float4*>(sQ + r * TC_QS + c * 4) = v;
+     }
+     if (t < TC_QT) s_nbid[t] = q0 + t < nq ? steps[(q0 + t) * kStepCount + kStepNBid] : 0;
++    __shared__ int s_ident[TC_QT];   // (a query in the identity state: its scores are never read)
++    if (t < TC_QT) s_ident[t] = q0 + t < nq && steps[(q0 + t) * kStepCount + kStepNKv] <=
++                                                 steps[(q0 + t) * kStepCount + kStepWidth];
++    int ident_all = 1;
++    for (int i = 0; i < TC_QT; ++i) ident_all = ident_all && s_ident[i];
++    if (ident_all) return;           // (no query of this tile needs scores)
+     int lo_nbid = 0x7fffffff, hi_nbid = 0;
+     __syncthreads();
+     for (int i = 0; i < TC_QT; ++i) {
+@@ -284,6 +296,7 @@ __global__ void __launch_bounds__(32) block_scores_tail_kernel(const float* __re
+     const int64_t qi = blockIdx.x;
+     const int32_t* st = steps + qi * kStepCount;
+     const int64_t n_kv = st[kStepNKv], n_bid = st[kStepNBid];
++    if (n_kv <= st[kStepWidth]) return;   // (the identity selection never reads the scores)
+     if (n_bid >= max_blocks) return;
+     const int lane = threadIdx.x & 31;
+     const float4 k4 = *reinterpret_cast<const float4*>(dead + lane * 4);
+diff --git a/include/strata/spec/recall_drafter.hpp b/include/strata/spec/recall_drafter.hpp
+new file mode 100644
+index 00000000..24a7ae88
+--- /dev/null
++++ b/include/strata/spec/recall_drafter.hpp
+@@ -0,0 +1,83 @@
++// include/strata/spec/recall_drafter.hpp - a persistent record drafter for maya-ds4's serve loop.
++//
++// TensorFold's `--recall` (docs/recall.md, MIT) cross-request idea, on this engine's own suffix-lookup
++// drafter (suffix_drafter.hpp): the serve loop keeps one token-id record across requests and restarts,
++// and when the stream's own history has a long enough match into the record, the earlier continuation
++// is proposed instead of (before) the DSpark drafter.  The target model verifies every copied token, so
++// a reply's tokens are the same with Recall on, off or read-only - the only thing that changes is how
++// many tokens a round commits.
++//
++// The offer policy is Recall's: land rates kept apart for matches of 16-31, 32-63 and 64+ tokens, a
++// copy is offered only when its expected kept tokens beat the drafter's recently kept-tokens-a-round,
++// a miss costs the round its drafts (cooldown, and probes come rarer while they miss), and runs the
++// record already holds are not re-added.
++#pragma once
++
++#include "strata/spec/suffix_drafter.hpp"
++
++#include <cstdint>
++#include <cstdio>
++#include <string>
++#include <vector>
++
++namespace strata::spec {
++
++class RecallDrafter {
++public:
++    /// `capacity_tokens` bounds the in-memory record (the suffix drafter's table); `persist_path`
++    /// empty: this process only.
++    RecallDrafter(size_t capacity_tokens, std::string persist_path);
++    ~RecallDrafter();
++
++    /// Tokens into the record: a prompt's newly-read part, then every committed token.  A run the
++    /// record already holds at its end is not added again.
++    void append(const int32_t* tokens, size_t n);
++    void append(int32_t token) { append(&token, 1); }
++
++    /// May a copy be offered this round?  `dspark_kept` is the drafter's recently kept-tokens-a-round
++    /// (0: nothing measured yet - then a long enough match is offered once).
++    bool offer(int dspark_kept);
++
++    /// Up to `max_k` proposal tokens into `out` (0: nothing worth verifying).  `dspark_kept` is the
++    /// same as offer()'s: a copy whose expected kept tokens do not beat it proposes nothing.
++    int propose(int max_k, int32_t* out, int dspark_kept);
++
++    /// A copy landed `kept` of its `offered` tokens.  `kept == 0` is a miss: cooldown, slower probes.
++    void land(int offered, int kept);
++
++    /// The record's last match length (0: none) - for STAT and tests.
++    int last_match() const { return sfx_.last_match(); }
++    size_t size() const { return sfx_.size(); }
++
++    /// Counters for the serve loop's STAT line.
++    int64_t offers() const { return offers_; }
++    int64_t lands() const { return lands_; }
++    int64_t kept_tokens() const { return kept_tokens_; }
++
++    static constexpr int dedup_run = 128;   // Recall's rule: a held run of this length is not re-added
++
++private:
++    static constexpr int kBuckets = 3;          // 16-31, 32-63, 64+
++    static constexpr int kMinOfferMatch = 16;   // Recall's own floor
++    static constexpr int kCooldownRounds = 4;   // a missed copy leaves the record alone this long
++    static constexpr double kPriorQ[kBuckets] = {0.75, 0.88, 0.93};
++    static constexpr double kPriorN = 4.0;
++
++    int bucket(int match) const { return match < 32 ? 0 : match < 64 ? 1 : 2; }
++    double land_rate(int match) const {
++        const int b = bucket(match);
++        return (landed_[b] + kPriorN * kPriorQ[b]) / (landed_[b] + missed_[b] + kPriorN);
++    }
++    void flush();
++
++    SuffixDrafter sfx_;            // the record (its history IS the record)
++    std::string path_;
++    std::FILE* f_ = nullptr;
++    std::vector<int32_t> tail_;    // the record's last dedup_run tokens (the dedup check)
++    std::vector<int32_t> pending_; // tokens not yet on disk (flushed in batches and at the end)
++    int64_t landed_[kBuckets] = {}, missed_[kBuckets] = {};
++    int cooldown_ = 0, probe_every_ = 1, since_probe_ = 1;
++    int64_t offers_ = 0, lands_ = 0, kept_tokens_ = 0;
++};
++
++}  // namespace strata::spec
+diff --git a/src/spec/recall_drafter.cpp b/src/spec/recall_drafter.cpp
+new file mode 100644
+index 00000000..ee08210b
+--- /dev/null
++++ b/src/spec/recall_drafter.cpp
+@@ -0,0 +1,157 @@
++// src/spec/recall_drafter.cpp - see include/strata/spec/recall_drafter.hpp.
++#include "strata/spec/recall_drafter.hpp"
++
++#include <algorithm>
++#include <cerrno>
++#include <cstring>
++
++namespace strata::spec {
++namespace {
++// The record on disk: an identity header, then appended chunks of [int64 n][n int32 tokens].  A record
++// made by another build (or a truncated tail) never loads as this one's: the header check rejects the
++// file, a short chunk stops the load at the last whole chunk.
++constexpr uint64_t kMagic = 0x52454341'4C4C3031ull;   // "RECALL01"
++
++// Does the record's held tail already end with this exact run of `n` tokens?
++bool run_held(const std::vector<int32_t>& tail, const int32_t* tokens, int n) {
++    if ((int) tail.size() < n) return false;
++    const size_t off = tail.size() - (size_t) n;
++    for (int i = 0; i < n; ++i)
++        if (tail[(size_t) i + off] != tokens[i]) return false;
++    return true;
++}
++}  // namespace
++
++RecallDrafter::RecallDrafter(size_t capacity_tokens, std::string persist_path)
++    : sfx_(3, 256, capacity_tokens), path_(std::move(persist_path)) {
++    // (min_match 3: the drafter finds the longest match itself; the OFFER floor is this class's rule)
++    tail_.reserve((size_t) dedup_run + 1);
++    if (path_.empty()) return;
++
++    bool fresh = true;
++    if (std::FILE* in = std::fopen(path_.c_str(), "rb")) {
++        uint64_t magic = 0;
++        if (std::fread(&magic, sizeof magic, 1, in) == 1 && magic == kMagic) {
++            fresh = false;
++            int64_t total = 0;
++            std::vector<int32_t> buf;
++            for (;;) {
++                int64_t n = 0;
++                if (std::fread(&n, sizeof n, 1, in) != 1 || n <= 0) break;
++                buf.assign((size_t) n, 0);
++                if (std::fread(buf.data(), 4, (size_t) n, in) != (size_t) n) break;
++                sfx_.append(buf.data(), (size_t) n);
++                for (int32_t t : buf) {
++                    tail_.push_back(t);
++                    if ((int) tail_.size() > dedup_run) tail_.erase(tail_.begin());
++                }
++                total += n;
++            }
++            if (total > 0)
++                std::fprintf(stderr, "recall: loaded %lld tokens from %s\n", (long long) total, path_.c_str());
++        }
++        std::fclose(in);
++    }
++
++    f_ = std::fopen(path_.c_str(), fresh ? "w+b" : "ab");
++    if (f_ == nullptr) {
++        std::fprintf(stderr, "recall: %s: %s (the record stays in memory)\n", path_.c_str(),
++                     std::strerror(errno));
++        return;
++    }
++    if (fresh) {
++        const uint64_t magic = kMagic;
++        if (std::fwrite(&magic, sizeof magic, 1, f_) != 1) {
++            std::fclose(f_);
++            f_ = nullptr;
++        }
++    }
++}
++
++RecallDrafter::~RecallDrafter() {
++    if (f_ != nullptr) {
++        flush();
++        std::fclose(f_);
++    }
++}
++
++void RecallDrafter::flush() {
++    if (f_ == nullptr || pending_.empty()) return;
++    const int64_t cnt = (int64_t) pending_.size();
++    if (std::fwrite(&cnt, sizeof cnt, 1, f_) != 1 ||
++        std::fwrite(pending_.data(), 4, pending_.size(), f_) != pending_.size()) {
++        std::fprintf(stderr, "recall: %s: write failed (%s)\n", path_.c_str(), std::strerror(errno));
++        pending_.clear();
++        return;
++    }
++    pending_.clear();
++}
++
++void RecallDrafter::append(const int32_t* tokens, size_t n) {
++    if (n == 0) return;
++    // Recall's dedup: a run the record already holds at its end is not added again (a request sent
++    // twice adds nothing the second time).  The tail holds the record's last dedup_run tokens for this.
++    const int run = (int) std::min<size_t>(n, (size_t) dedup_run);
++    if (run >= 8 && run_held(tail_, tokens, run)) return;
++
++    sfx_.append(tokens, n);
++    for (size_t i = 0; i < n; ++i) {
++        tail_.push_back(tokens[i]);
++        if ((int) tail_.size() > dedup_run) tail_.erase(tail_.begin());
++    }
++    if (f_ == nullptr) return;
++    pending_.insert(pending_.end(), tokens, tokens + n);
++    if (pending_.size() >= 256) flush();   // a prompt's new part, a reply's end, a burst of tokens
++}
++
++bool RecallDrafter::offer(int dspark_kept) {
++    if (cooldown_ > 0) {
++        --cooldown_;
++        return false;
++    }
++    if (since_probe_ < probe_every_) {   // while probes miss they come rarer (Recall's decay)
++        ++since_probe_;
++        return false;
++    }
++    // The expected-tokens check needs the match length, so it happens in propose(): offer() only says
++    // whether the record may be asked at all this round.
++    (void) dspark_kept;
++    return true;
++}
++
++int RecallDrafter::propose(int max_k, int32_t* out, int dspark_kept) {
++    // A cheap probe first: the drafter's own history gives the match length without copying.
++    int32_t scratch[1];
++    const int m = sfx_.propose(1, scratch);
++    if (m <= 0) return 0;
++    const int match = sfx_.last_match();
++    if (match < kMinOfferMatch) return 0;
++    // Recall's rule: a copy is offered when its expected kept tokens beat the drafter's measured
++    // kept-tokens-a-round.  The expectation is the bucket's land rate times a typical landing (the
++    // matched run's length is the ceiling; the rate is how often copies at this length land at all).
++    const double expect = land_rate(match) * (double) std::min(match, 16);
++    if (dspark_kept > 0 && expect <= (double) dspark_kept) return 0;
++    const int k = sfx_.propose(max_k, out);
++    if (k <= 0) return 0;
++    ++offers_;
++    return k;
++}
++
++void RecallDrafter::land(int offered, int kept) {
++    if (offered <= 0) return;
++    const int b = bucket(last_match());
++    if (kept > 0) {
++        ++landed_[b];
++        ++lands_;
++        kept_tokens_ += kept;
++        cooldown_ = 0;
++        probe_every_ = 1;
++    } else {
++        ++missed_[b];
++        cooldown_ = kCooldownRounds;
++        probe_every_ = std::min(probe_every_ * 2, 64);
++    }
++    since_probe_ = 1;
++}
++
++}  // namespace strata::spec
+diff --git a/src/spec/recall_drafter_test.cpp b/src/spec/recall_drafter_test.cpp
+new file mode 100644
+index 00000000..d1665a3a
+--- /dev/null
++++ b/src/spec/recall_drafter_test.cpp
+@@ -0,0 +1,101 @@
++// src/spec/recall_drafter_test.cpp - the persistent record drafter's gates, in suffix_drafter_test's
++// style.  What must hold (TensorFold's recall.md contract, adapted):
++//   1. the copy case: a request whose suffix matches an earlier long run proposes that run's
++//      continuation, in order;
++//   2. the dedup rule: a run the record already holds is not appended again;
++//   3. persistence: a second instance on the same file proposes from the first's record;
++//   4. the offer policy: a landed copy keeps offers coming, a miss cools the record down for the
++//      next kCooldownRounds rounds and the probes grow rarer;
++//   5. the floor: matches under 16 tokens never propose;
++//   6. the rate rule: a copy whose expected tokens do not beat the drafter's kept-tokens-a-round
++//      proposes nothing (the drafter stays in charge when it is winning).
++#include "strata/spec/recall_drafter.hpp"
++
++#include <cstdio>
++#include <string>
++#include <vector>
++
++using strata::spec::RecallDrafter;
++
++namespace {
++int g_fail = 0;
++void check(bool ok, const char* what) {
++    std::printf("  %-66s %s\n", what, ok ? "ok" : "FAIL");
++    if (!ok) ++g_fail;
++}
++}  // namespace
++
++int main(int argc, char** argv) {
++    const char* dir = argc > 1 ? argv[1] : ".";
++    std::string path = std::string(dir) + "/recall-test.rec";
++
++    std::printf("recall_drafter_test\n");
++    std::remove(path.c_str());
++    {
++        std::printf("  copy + dedup + the offer policy (file %s)\n", path.c_str());
++        RecallDrafter r(1u << 20, path);
++        // an earlier turn: a 40-token verbatim run, then a distinct 200-token tail
++        std::vector<int32_t> run(40), filler(200);
++        for (int i = 0; i < 40; ++i) run[(size_t) i] = 1000 + i;
++        for (int i = 0; i < 200; ++i) filler[(size_t) i] = 5000 + i;
++        r.append(run.data(), run.size());
++        r.append(filler.data(), filler.size());
++
++        // a later request replays the same run and asks for a continuation: the record's earlier
++        // continuation (the filler) is what it should propose
++        r.append(run.data(), run.size());
++        int32_t out[64];
++        check(r.offer(0), "an offer is possible with no dspark rate measured");
++        const int k = r.propose(64, out, 0);
++        check(k >= 16, "a match into an earlier run proposes its continuation");
++        check(r.last_match() >= 16, "the match is at the offer floor or longer");
++        bool same = k > 0;
++        for (int i = 0; i < k && same; ++i) same = out[(size_t) i] == filler[(size_t) i];
++        check(same, "the proposal is the earlier continuation, in order");
++
++        // dedup: appending the record's own tail run again adds nothing (a request re-sent)
++        const size_t before = r.size();
++        r.append(run.data(), run.size());   // the tail IS this run now (the last append)
++        check(r.size() == before, "a held run is not appended again");
++
++        // the rate rule: when the DSpark drafter keeps more tokens a round than a copy can expect,
++        // the copy is not offered
++        int32_t out2[64];
++        check(r.propose(64, out2, 1000000) == 0, "a copy below the drafter's rate proposes nothing");
++
++        // land + cooldown
++        r.land(k, k / 2);
++        check(r.offer(0), "a landed copy keeps offers coming");
++        r.land(1, 0);
++        bool cooled = !r.offer(0);
++        for (int i = 0; i < 3 && !cooled; ++i) cooled = cooled || !r.offer(0);
++        check(cooled, "a miss cools the record down for the next rounds");
++    }
++    {
++        std::printf("  persistence: a second instance reads the first's record\n");
++        RecallDrafter r2(1u << 20, path);
++        int32_t out[64];
++        std::vector<int32_t> run(40);
++        for (int i = 0; i < 40; ++i) run[(size_t) i] = 1000 + i;
++        r2.append(run.data(), run.size());
++        check(r2.offer(0), "the loaded record may be asked");
++        const int k = r2.propose(64, out, 0);
++        check(k >= 16, "the loaded record proposes from the first instance's history");
++    }
++    {
++        std::printf("  the floor: a short match never proposes\n");
++        RecallDrafter r(1u << 18, "");
++        std::vector<int32_t> a(30), b(8);
++        for (int i = 0; i < 30; ++i) a[(size_t) i] = 7000 + i;
++        for (int i = 0; i < 8; ++i) b[(size_t) i] = 7000 + i;
++        r.append(a.data(), a.size());
++        r.append(b.data(), b.size());
++        int32_t out[64];
++        const int k = r.propose(64, out, 0);
++        check(k == 0 || r.last_match() < 16, "matches under 16 propose nothing");
++    }
++
++    std::remove(path.c_str());
++    std::printf("%s\n", g_fail ? "FAILURES" : "all ok");
++    return g_fail ? 1 : 0;
++}
