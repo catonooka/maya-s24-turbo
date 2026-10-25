@@ -1,0 +1,11 @@
+[RESTORED-tp1-oldenv r1] essay: 49p 256t in 12.5s = 20.45 t/s
+[RESTORED-tp1-oldenv r1] facts: 46p 159t in 7.3s = 21.71 t/s
+[RESTORED-tp1-oldenv r1] code: 46p 256t in 11.9s = 21.60 t/s
+[RESTORED-tp1-oldenv r2] essay: 49p 256t in 11.5s = 22.24 t/s
+[RESTORED-tp1-oldenv r2] facts: 46p 161t in 6.9s = 23.38 t/s
+[RESTORED-tp1-oldenv r2] code: 46p 256t in 11.4s = 22.38 t/s
+[RESTORED-tp1-oldenv] prefill25k: 33030 tokens in 47.6s = 693.4 t/s
+== essay: mean 21.34 t/s (runs: [20.45, 22.24])
+== facts: mean 22.55 t/s (runs: [21.71, 23.38])
+== code: mean 21.99 t/s (runs: [21.6, 22.38])
+repeat battery done

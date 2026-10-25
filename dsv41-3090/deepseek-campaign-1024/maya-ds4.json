@@ -1,0 +1,51 @@
+{
+ "exe": "/home/USER/v1121-tree/build/maya-ds4-v1125",
+ "args": [
+  "--pack",
+  "/home/USER/models/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw/maya-ds4",
+  "--max-context",
+  "262144",
+  "--tp",
+  "2",
+  "--dspark",
+  "on",
+  "--prefill-chunk",
+  "8192",
+  "--dspark-conf",
+  "0.5",
+  "--threads",
+  "on"
+ ],
+ "cwd": "/home/USER/maya-ds4-main",
+ "tokenizer": "/home/USER/models/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw/maya-ds4/tokenizer",
+ "model_name": "deepseek-v4.1-flash",
+ "gpu": [
+  0,
+  1
+ ],
+ "sampling": {
+  "temperature": 1.0,
+  "top_p": 1.0
+ },
+ "reasoning_effort": "high",
+ "lib_dirs": [
+  "/usr/local/cuda/targets/x86_64-linux/lib"
+ ],
+ "port": 8080,
+ "host": "0.0.0.0",
+ "log": "/home/USER/maya-ds4-main/ds4-baseline.log",
+ "installer": {
+  "family": "deepseek",
+  "models_dir": "/home/USER/models",
+  "quant": "DeepSeek-V4.1-Flash-1017",
+  "ds4_quant": "exl3",
+  "model_dir": "/home/USER/models/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw",
+  "written": "2026-10-21 manual"
+ },
+ "env": {
+  "MAYA_DS4_DSPARK_CUM": "0.5",
+  "DS4_CACHE_THREADS": "4",
+  "MAYA_DS4_Q8_BATCH": "1",
+  "MAYA_DS4_SLOT_KEEP": "1"
+ }
+}

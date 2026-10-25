@@ -1,0 +1,10 @@
+[FINAL-best r1] essay: 49p 188t in 10.2s = 18.41 t/s
+[FINAL-best r1] facts: 46p 50t in 4.1s = 12.29 t/s
+[FINAL-best r1] code: 46p 256t in 12.7s = 20.13 t/s
+[FINAL-best r2] essay: 49p 230t in 10.6s = 21.75 t/s
+[FINAL-best r2] facts: 46p 50t in 3.7s = 13.40 t/s
+[FINAL-best r2] code: 46p 256t in 11.6s = 22.10 t/s
+[FINAL-best] prefill25k: 33030 tokens in 28.5s = 1160.9 t/s
+== essay: mean 20.08 t/s (runs: [18.41, 21.75])
+== facts: mean 12.84 t/s (runs: [12.29, 13.4])
+== code: mean 21.12 t/s (runs: [20.13, 22.1])

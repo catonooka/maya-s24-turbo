@@ -1,0 +1,4 @@
+17x19: '323We' PASS
+determinism: PASS 'Red, blue, yellowWe'
+needle2k: FAIL '2750We'
+ascii-gate: PASS 'A hammer is a tool for driving nails, striking objects, and '

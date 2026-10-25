@@ -1,0 +1,10 @@
+[L2-stream-on r1] essay: 49p 215t in 10.9s = 19.71 t/s
+[L2-stream-on r1] facts: 46p 50t in 4.0s = 12.49 t/s
+[L2-stream-on r1] code: 46p 256t in 12.3s = 20.84 t/s
+[L2-stream-on r2] essay: 49p 164t in 8.5s = 19.19 t/s
+[L2-stream-on r2] facts: 46p 50t in 3.8s = 13.11 t/s
+[L2-stream-on r2] code: 46p 256t in 11.8s = 21.79 t/s
+[L2-stream-on] prefill25k: 33030 tokens in 28.8s = 1145.2 t/s
+== essay: mean 19.45 t/s (runs: [19.71, 19.19])
+== facts: mean 12.80 t/s (runs: [12.49, 13.11])
+== code: mean 21.31 t/s (runs: [20.84, 21.79])

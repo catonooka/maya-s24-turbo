@@ -1,0 +1,67 @@
+{"tag": "baseline-v1124", "run": 1, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 256, "wall_s": 13.04, "tps": 19.63}
+{"tag": "baseline-v1124", "run": 1, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 107, "wall_s": 6.03, "tps": 17.73}
+{"tag": "baseline-v1124", "run": 1, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 12.15, "tps": 21.06}
+{"tag": "baseline-v1124", "run": 2, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 256, "wall_s": 10.89, "tps": 23.5}
+{"tag": "baseline-v1124", "run": 2, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 153, "wall_s": 6.61, "tps": 23.14}
+{"tag": "baseline-v1124", "run": 2, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 11.37, "tps": 22.52}
+{"tag": "baseline-v1124", "probe": "prefill25k", "prompt_tokens": 6341, "wall_s": 8.14, "tps": 779.26}
+{"tag": "baseline-prefill-fix", "run": 1, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 256, "wall_s": 11.01, "tps": 23.26}
+{"tag": "baseline-prefill-fix", "run": 1, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 197, "wall_s": 7.76, "tps": 25.38}
+{"tag": "baseline-prefill-fix", "run": 1, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 11.35, "tps": 22.56}
+{"tag": "baseline-prefill-fix", "probe": "prefill25k", "prompt_tokens": 33200, "wall_s": 28.46, "tps": 1166.7}
+{"tag": "L1-v1125", "run": 1, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 231, "wall_s": 11.46, "tps": 20.16}
+{"tag": "L1-v1125", "run": 1, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 49, "wall_s": 3.93, "tps": 12.46}
+{"tag": "L1-v1125", "run": 1, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 12.37, "tps": 20.69}
+{"tag": "L1-v1125", "run": 2, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 158, "wall_s": 8.39, "tps": 18.83}
+{"tag": "L1-v1125", "run": 2, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 50, "wall_s": 3.78, "tps": 13.23}
+{"tag": "L1-v1125", "run": 2, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 11.45, "tps": 22.35}
+{"tag": "L1-v1125", "probe": "prefill25k", "prompt_tokens": 33030, "wall_s": 28.86, "tps": 1144.49}
+{"tag": "L2-stream-on", "run": 1, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 215, "wall_s": 10.91, "tps": 19.71}
+{"tag": "L2-stream-on", "run": 1, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 50, "wall_s": 4.0, "tps": 12.49}
+{"tag": "L2-stream-on", "run": 1, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 12.28, "tps": 20.84}
+{"tag": "L2-stream-on", "run": 2, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 164, "wall_s": 8.55, "tps": 19.19}
+{"tag": "L2-stream-on", "run": 2, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 50, "wall_s": 3.82, "tps": 13.11}
+{"tag": "L2-stream-on", "run": 2, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 11.75, "tps": 21.79}
+{"tag": "L2-stream-on", "probe": "prefill25k", "prompt_tokens": 33030, "wall_s": 28.84, "tps": 1145.2}
+{"tag": "L3-q8batch", "run": 1, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 232, "wall_s": 11.15, "tps": 20.81}
+{"tag": "L3-q8batch", "run": 1, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 50, "wall_s": 3.93, "tps": 12.71}
+{"tag": "L3-q8batch", "run": 1, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 12.59, "tps": 20.34}
+{"tag": "L3-q8batch", "run": 2, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 214, "wall_s": 9.59, "tps": 22.33}
+{"tag": "L3-q8batch", "run": 2, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 49, "wall_s": 3.73, "tps": 13.12}
+{"tag": "L3-q8batch", "run": 2, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 11.66, "tps": 21.96}
+{"tag": "L3-q8batch", "probe": "prefill25k", "prompt_tokens": 33030, "wall_s": 28.91, "tps": 1142.7}
+{"tag": "L4-lane-smt", "run": 1, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 159, "wall_s": 12.21, "tps": 13.02}
+{"tag": "L4-lane-smt", "run": 1, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 50, "wall_s": 4.95, "tps": 10.09}
+{"tag": "L4-lane-smt", "run": 1, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 16.4, "tps": 15.61}
+{"tag": "L4-lane-smt", "run": 2, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 171, "wall_s": 12.2, "tps": 14.02}
+{"tag": "L4-lane-smt", "run": 2, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 50, "wall_s": 4.93, "tps": 10.14}
+{"tag": "L4-lane-smt", "run": 2, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 15.12, "tps": 16.93}
+{"tag": "L4-lane-smt", "probe": "prefill25k", "prompt_tokens": 33030, "wall_s": 28.72, "tps": 1150.16}
+{"tag": "L5-ahead2", "run": 1, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 218, "wall_s": 10.69, "tps": 20.39}
+{"tag": "L5-ahead2", "run": 1, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 50, "wall_s": 3.89, "tps": 12.84}
+{"tag": "L5-ahead2", "run": 1, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 12.39, "tps": 20.66}
+{"tag": "L5-ahead2", "run": 2, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 202, "wall_s": 9.86, "tps": 20.49}
+{"tag": "L5-ahead2", "run": 2, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 50, "wall_s": 3.89, "tps": 12.87}
+{"tag": "L5-ahead2", "run": 2, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 11.74, "tps": 21.81}
+{"tag": "L5-ahead2", "probe": "prefill25k", "prompt_tokens": 33030, "wall_s": 28.6, "tps": 1154.71}
+{"tag": "L6-chunk16k", "run": 1, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 220, "wall_s": 11.54, "tps": 19.06}
+{"tag": "L6-chunk16k", "run": 1, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 50, "wall_s": 4.19, "tps": 11.95}
+{"tag": "L6-chunk16k", "run": 1, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 13.11, "tps": 19.52}
+{"tag": "L6-chunk16k", "run": 2, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 178, "wall_s": 9.67, "tps": 18.4}
+{"tag": "L6-chunk16k", "run": 2, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 50, "wall_s": 3.98, "tps": 12.57}
+{"tag": "L6-chunk16k", "run": 2, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 12.47, "tps": 20.53}
+{"tag": "L6-chunk16k", "probe": "prefill25k", "prompt_tokens": 33030, "wall_s": 28.78, "tps": 1147.72}
+{"tag": "L7-cum03", "run": 1, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 175, "wall_s": 10.12, "tps": 17.29}
+{"tag": "L7-cum03", "run": 1, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 50, "wall_s": 4.09, "tps": 12.24}
+{"tag": "L7-cum03", "run": 1, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 12.78, "tps": 20.02}
+{"tag": "L7-cum03", "run": 2, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 195, "wall_s": 9.5, "tps": 20.52}
+{"tag": "L7-cum03", "run": 2, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 50, "wall_s": 3.89, "tps": 12.84}
+{"tag": "L7-cum03", "run": 2, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 11.9, "tps": 21.52}
+{"tag": "L7-cum03", "probe": "prefill25k", "prompt_tokens": 33030, "wall_s": 28.63, "tps": 1153.53}
+{"tag": "FINAL-best", "run": 1, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 188, "wall_s": 10.21, "tps": 18.41}
+{"tag": "FINAL-best", "run": 1, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 50, "wall_s": 4.07, "tps": 12.29}
+{"tag": "FINAL-best", "run": 1, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 12.72, "tps": 20.13}
+{"tag": "FINAL-best", "run": 2, "probe": "essay", "prompt_tokens": 49, "completion_tokens": 230, "wall_s": 10.57, "tps": 21.75}
+{"tag": "FINAL-best", "run": 2, "probe": "facts", "prompt_tokens": 46, "completion_tokens": 50, "wall_s": 3.73, "tps": 13.4}
+{"tag": "FINAL-best", "run": 2, "probe": "code", "prompt_tokens": 46, "completion_tokens": 256, "wall_s": 11.58, "tps": 22.1}
+{"tag": "FINAL-best", "probe": "prefill25k", "prompt_tokens": 33030, "wall_s": 28.45, "tps": 1160.94}

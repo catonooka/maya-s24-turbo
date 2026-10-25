@@ -1,0 +1,10 @@
+[L6-chunk16k r1] essay: 49p 220t in 11.5s = 19.06 t/s
+[L6-chunk16k r1] facts: 46p 50t in 4.2s = 11.95 t/s
+[L6-chunk16k r1] code: 46p 256t in 13.1s = 19.52 t/s
+[L6-chunk16k r2] essay: 49p 178t in 9.7s = 18.40 t/s
+[L6-chunk16k r2] facts: 46p 50t in 4.0s = 12.57 t/s
+[L6-chunk16k r2] code: 46p 256t in 12.5s = 20.53 t/s
+[L6-chunk16k] prefill25k: 33030 tokens in 28.8s = 1147.7 t/s
+== essay: mean 18.73 t/s (runs: [19.06, 18.4])
+== facts: mean 12.26 t/s (runs: [11.95, 12.57])
+== code: mean 20.02 t/s (runs: [19.52, 20.53])
