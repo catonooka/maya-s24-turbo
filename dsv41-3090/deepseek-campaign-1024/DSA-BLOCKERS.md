@@ -38,6 +38,21 @@ Would kill the per-window rescore (16× fewer full scans). Only pays when R1 pay
 
 **Determinism wobble on exact-repeat probes after the record warms: 'Red, blue, yellow' vs 'red,...' (3–4 of 8 trials).** Root cause chain: Recall drafts depend on RECORD STATE, which grows between trials → accepted drafts change 16-token window composition → FP4 group boundaries shift → last-bit logit ties flip. Fresh record → deterministic (all earlier 7/7 gates). DSpark alone is deterministic (model drafts, same every trial). Needle/chain-math/ascii unaffected — only exact-repeat tie tokens. Options: (a) accept + document (chosen for now: answers stay correct), (b) offer-floor bump for response-position matches, (c) per-conversation record scoping (kills the cross-request copy win). Recorded here; decision left explicit.
 
+## Full research ranking (agent report, verbatim verdicts + engine-shape corrections)
+
+The research pass (12 primary sources cached in `dsa_research/`) ranked all training-free DSA techniques. Items not already covered above:
+
+- **#5 DeepSelect fused top-k kernel** — threshold+refine topk (no sort), topk=512 is literally our config; 2–20× vs torch.topk. Our engine already has a custom topk (block a row + segmented variant ≥32k rows), so the win here is porting DeepSelect's threshold-refine INSIDE our kernels. Low effort (2–4d), low priority (topk not measured binding).
+- **#6 INT8 indexer-key storage** — halves key-cache traffic (dequant in-kernel, bf16 GEMM unchanged). Our keys are ALREADY FP4-packed (kKvFp4p, 0.5B/row × 128-d) — we're 4× past INT8. Already owned.
+- **#8 MISA head-subset routing** — router picks 8 of H_I indexer heads per query; 1.47× e2e prefill at 256K, claims to beat HISA on avg quality. Our indexer: 32 heads × 128-d. Worth benching in the 512K era alongside HISA — the two compose (MISA cuts heads, HISA cuts tokens).
+- **#9 JSSA low-rank projected score cache** — r=64 projection of the 2048-d score space, ~32× score-traffic cut, 6.43× decode vs full-KV (B200, GLM-4.7-Flash). Needs offline SVD calibration on captured q·k. Again a 512K-era item; pairs with #1.
+- **#10 Batched score GEMMs** — layer-batch the 8 shared source indexers' scoring into one wide GEMM per window (scheduling only). Cheap, do if profiling ever shows the score stage.
+- **#11 References** — llama.cpp PR #21149 is a complete hand-rolled CPU DSA (closest analog to our engine, incl. lightning indexer + lineage-bench validation method); vLLM issue #30644 confirms NO ready SM86 sparse-MLA kernel exists (FlashMLA sparse = SM90/100 only) — validates "keep our custom kernel" stance.
+- **#3 dense/sparse crossover** — llama.cpp: "DSA works exactly like MLA up to 2048 tokens"; SGLang switches at index_topk threshold. Ours: nsel = min(512, (p+1)/R) naturally saturates at ~1k tokens (R=2) — the crossover is emergent in our engine, no dispatch needed.
+- **#12 excluded (need training)**: NSA (natively trained, 943.7B tokens), HashAttention (learned hashes), Quest-as-is (page min/max, coarser than our per-token indexer), DSA-from-dense. Our model HAS the trained V4-lineage indexer — everything above exploits it without touching weights.
+
+**Correction to the agent's derived numbers**: its "65GB/step indexer traffic at 262K ⇒ ~70ms/step" assumed V3.2's 2048-d per-layer keys × 61 layers. Our engine: 128-d FP4-packed keys, 8 shared source layers, ≤16-query windows, candidate-filtered above 32k — the real scan cost is orders below that, which is exactly what the flat decode curve (25.9–28.8 t/s to 190k) confirms empirically. Ranking logic survives; the traffic math does not apply to our shape.
+
 ## Bottom line
 
 DSA machinery in this engine is already at/near the quality-optimal config for ≤256K ctx, and the decode wall is expert PCIe traffic, not attention. The two real levers remain: #476 single-GPU 2× decode path (untested, needs a one-GPU boot) and expert-side work. HISA-style indexer rework is the one DSA item worth doing — when 512K prompts become a workload.
