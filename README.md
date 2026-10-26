@@ -111,6 +111,14 @@ p2p-campaign/     PCIe BAR1 P2P driver work
 
 ## History log
 
+### 2026-10-26 (II) — Successful distill from Maya repo
+
+Our fixes went upstream, and upstream's came back — the loop closed cleanly:
+
+- **Up absorbed ours**: v1.1.28 ships our queue-heartbeats and DSML tool-arg streaming fixes (theirs cite #403). Our standalone commits for both were dropped in the rebase as redundant; repo patches + FIX docs remain for the record. Verified their version passes our socket-level probe (`probe_stream_gap.py`: max silent gap 367.6 s → **8.8 s** = think time only, 4,775 incremental arg-delta reads on a 21k-char `write`).
+- **We absorbed theirs**: v1.1.28's conversation slots, 512K/1M contexts, tensor-core prompt attention (prefill **947 t/s @25k**), plus two upstream bugs we found and fixed on the way (#363 thinking-budget clamp; see the entry below).
+- Engine = `v1.1.28 + 6 commits` (branch `recall-tensorfold`), all catonooka; everything gated before swap (quality 7/7 at small max_tokens, recall PASS, 14/14 unit). Live on `:8080`.
+
 ### 2026-10-26 — Upstream v1.1.28 looted: slots, 512K ctx, prefill 947 t/s; 2 upstream bugs fixed
 
 Rebased our Recall work onto project-maya **v1.1.28** (from base 0128fb3e ≈ v1.1.20; upstream had absorbed our queue-heartbeat and DSML-streaming fixes, so only Recall carries). Took: conversation slots across restarts, 512K/1M contexts, tensor-core prompt attention (+14–28% prefill: **947.6 t/s @25k**, was 737–835). Fixed upstream **#363 thinking-budget clamp** (any max_tokens ≤ 1024 got a 1-token think budget → chain-math 362→323; now a small request reserves a quarter of its own tokens). Fixed our Recall record loader (a damaged record tail sized a 4.6 TB allocation and aborted the engine at boot; lengths now capped + regression test, 14/14). #476's one-GPU 2× decode path doesn't apply to our 2-GPU layer-split (flags `DS4_STREAM_WIN/DS4_LAND/DS4_STREAM_ZC` noted for a single-GPU bench later). Gates: quality 7/7 at small max_tokens, recall PASS, decode 21.2–23.5 t/s warm. Details: `FIX-v1128-upgrade.md`; patch regenerated vs v1.1.28.
