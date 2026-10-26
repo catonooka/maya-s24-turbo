@@ -1,0 +1,667 @@
+
+ Testing DeepSeek V3.2 Lightning Indexer and Sparse Attention implementation · ggml-org/llama.cpp · Discussion #21183 · GitHub 
+ Skip to content 
+ Navigation Menu Sign in Appearance settings Platform AI CODE CREATION GitHub Copilot Write better code with AI GitHub Copilot app Direct agents from issue to merge MCP Registry Integrate external tools DEVELOPER WORKFLOWS Actions Automate any workflow Codespaces Instant dev environments Issues Plan and track work Code Review Manage code changes Code Quality Enforce quality at merge APPLICATION SECURITY GitHub Advanced Security Find and fix vulnerabilities Code security Secure your code as you build Secret protection Stop leaks before they start EXPLORE Why GitHub Documentation Blog Changelog Marketplace View all features Solutions BY COMPANY SIZE Enterprises Small and medium teams Startups Nonprofits BY USE CASE App Modernization DevSecOps DevOps CI/CD View all use cases BY INDUSTRY Healthcare Financial services Manufacturing Government See all industries View all solutions Resources EXPLORE BY TOPIC AI Software Development DevOps Security View all topics EXPLORE BY TYPE Customer stories Events & webinars Ebooks & reports Business insights GitHub Skills SUPPORT & SERVICES Documentation Customer support Community forum Trust center Partners View all resources Open Source COMMUNITY GitHub Sponsors Fund open source developers PROGRAMS Security Lab Maintainer Community GitHub Stars Archive Program REPOSITORIES Topics Trending Collections Enterprise ENTERPRISE SOLUTIONS Enterprise platform AI-powered developer platform AVAILABLE ADD-ONS GitHub Advanced Security Enterprise-grade security features Copilot for Business Enterprise-grade AI features Premium Support Enterprise-grade 24/7 support Pricing Search / Sign in Sign up Appearance settings 
+ You signed in with another tab or window. Reload to refresh your session. 
+ You signed out in another tab or window. Reload to refresh your session. 
+ You switched accounts on another tab or window. Reload to refresh your session. 
+ Dismiss alert 
+ {{ message }} 
+ ggml-org llama.cpp Repository navigation Code Issues 777  ( 777 ) Pull requests 1.8k  ( 1.8k ) Discussions Actions Projects Wiki Security and quality 13  ( 13 ) Insights More items 
+ Testing DeepSeek V3.2 Lightning Indexer and Sparse Attention implementation
+ #21183 
+ fairydreaming
+ started this conversation in
+ General 
+ Testing DeepSeek V3.2 Lightning Indexer and Sparse Attention implementation
+ #21183 
+ fairydreaming
+ Mar 30, 2026 
+ · 
+ 3 comments
+ · 
+ 52 replies
+ Return to top 
+ Discussion options 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{title}}
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ Quote reply 
+ edited 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{editor}}'s edit
+ {{actor}} deleted this content
+ .
+ {{editor}}'s edit
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ fairydreaming 
+ Mar 30, 2026 
+ Collaborator
+ Recently I submitted PR #21149 that adds support for DeepseekV32ForCausalLM with lightning indexer and DeepSeek Sparse Attention (DSA) implementation. I'd like to have it properly tested to confirm that the implementation works correctly and can serve as a reference for further optimizations. 
+ Some background: in DeepSeek V3.2 (and related) DSA attention works exactly like MLA up to 2048 tokens, then they may start slightly diverge. So benchmarks with short/moderate length questions and answers are not good for this. What we need are very long reasoning chains where a slight mistake is fatal for the final answer or maybe some other long-context tests. 
+ My initial idea is to use lineage-bench with very large number of lineage graph nodes (at least 512). I already used lineage-bench to test DeepSeek V3.2 Speciale in sglang with both dense (MLA) and sparse (DSA) attention up to lineage-1024, results are here : 
+ If we can reproduce this result (whole or limited subset) with llama.cpp this is convincing enough for me. But running this requires a lot of VRAM (at least 8x RTX PRO 6000 for Q8_0) and may take a long time. So if anyone has a better idea let me know. 
+ During my work on the implementation I did some lineage-128 tests with DeepSeek V3.2 Exp model (20 quizzes due to limited compute). I found that the model underperformed (accuracy around 70%) compared to OpenRouter benchmark run (accuracy 90%). This allowed to me to find a bug in Hadamard transform implementation, after fixing it accuracy in the limited local benchmark run went up to 95%. This is may be anecdotal evidence, but it's a data point confirming that lineage-bench is well suited for detecting subtle flaws in the implementation. 
+ Detailed steps for reproducing the benchmark results: 
+ Environment 
+ I confirmed that the implementation works without problems with CUDA 13.2 and CCCL 13.2.27. Earlier versions of CUDA currently have problems with ggml_top_k() implementation. 
+ I rebased PR, so fix for ggml_top_k() is already present. CCCL is no longer needed, CUDA should work even for 12.X versions. 
+ Downloading the model 
+ uvx hf auth login
+uvx hf download "sszymczyk/DeepSeek-V3.2-Speciale-light-GGUF" --include="Q8_0/*"
+uvx hf download "sszymczyk/DeepSeek-V3.2-Speciale-light-GGUF" --include="Q4_K_M/*"
+ Building llama.cpp 
+ git clone https://github.com/fairydreaming/llama.cpp -b deepseek-dsa --single-branch
+cd llama.cpp
+uv pip install nvidia-cuda-cccl
+mkdir build
+cd build
+cmake .. -DGGML_CUDA=ON -DGGML_CUDA_USE_CUB=ON
+make -j16
+ Starting llama-server 
+ ./bin/llama-server -m /workspace/.hf_home/hub/models--sszymczyk--DeepSeek-V3.2-Speciale-light-GGUF/snapshots/d8151a1c295b0bd7f9ee10e7d88d2b36baaf5257/Q4_K_M/DeepSeek-V3.2-Speciale-light-Q4_K_M-00001-of-00031.gguf --no-warmup --mmap --host 127.0.0.1 --port 6666 --jinja --chat-template-file ../models/templates/deepseek-ai-DeepSeek-V3.2.jinja -c $((128*1024)) -np 1 -ub 512 -fit off -ngl 99
+ Exact context size and the number of parallel sequences to be set later. 
+ Installing lineage-bench 
+ git clone https://github.com/fairydreaming/lineage-bench
+cd lineage-bench
+uv venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
+mkdir results
+ Running lineage-bench 
+ Full benchmark run: 
+ for length in 8 128 256 512 1024; do ./lineage_bench.py -s -l $length -n 25 -r 42|./run_openrouter.py --url http://127.0.0.1:6666/v1/chat/completions -t 1 -m "deepseek-ai/DeepSeek-V3.2-Speciale" -r --temp 1.0 --top-p 0.95 --max-tokens $((128*1024)) -o "results/DeepSeek-V3.2-Speciale_DSA_$length"|tee "results/DeepSeek-V3.2-Speciale_DSA_$length.csv"; done|./compute_metrics.py
+ Limited lineage-512 benchmark run: 
+ for length in 512; do ./lineage_bench.py -s -l $length -n 25 -r 42|./run_openrouter.py --url http://127.0.0.1:6666/v1/chat/completions -t 1 -m "deepseek-ai/DeepSeek-V3.2-Speciale" -r --temp 1.0 --top-p 0.95 --max-tokens $((128*1024)) -o "results/DeepSeek-V3.2-Speciale_DSA_$length"|tee "results/DeepSeek-V3.2-Speciale_DSA_$length.csv"; done|./compute_metrics.py
+ cc @AesSedai who volunteered his hardware for the benchmark runs. 
+ 3 
+ You must be logged in to vote 
+ 👍 
+ 6 
+ All reactions 
+ 👍 
+ 6 
+ Replies: 
+ 3 comments
+ · 
+ 52 replies
+ Oldest 
+ Newest 
+ Top 
+ Comment options 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{title}}
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ Quote reply 
+ AesSedai 
+ Mar 30, 2026 
+ Thank you for the details and the reproduction instructions. I'll follow up in the next few days with my findings and results. 
+ 1 
+ You must be logged in to vote 
+ All reactions 
+ 0 replies
+ Comment options 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{title}}
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ Quote reply 
+ edited 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{editor}}'s edit
+ {{actor}} deleted this content
+ .
+ {{editor}}'s edit
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ fairydreaming 
+ Mar 31, 2026 
+ Collaborator
+ Author
+ @AesSedai I rented 8x RTX PRO 6000S instance and did some experiments to see what llama-server parameters would be best. Since we don't care much about prompt processing (prompts are short in lineage-bench, from few hundred tokens for lineage-8 up to a few thousands tokens for lineage-1024) I think the best approach is to lower ubatch size so that the model compute buffer is small (but prompt processing rate will suck) and this way we can fit larger context for more concurrent sequences. 
+ I included rough estimates of how much time lineage-512 run would take with -n 25 (100 quizzes). These numbers look very bad. I guess Q8_0 is out of the question and we should go either with Q4_K_M with 32 parallel requests in case we want to do 100 quizzes or with 8 parallel requests in case we want to do only 40 quizzes (that's the absolute minimum I'd like to do, I think it would take ~13 hours). 
+ Let me know how much compute time you are willing to spend on this. Don't worry about power consumption, from what I saw in nvidia-smi all GPUs used below 150W even for 32 parallel requests, so it shouldn't be a problem. There may be higher spikes during prompt processing, though. I suppose it's best to start small and see if results are worth continuing. 
+ Q8_0 
+ NP 1 
+ Command: 
+ ./bin/llama-server -m /workspace/.hf_home/hub/models--sszymczyk--DeepSeek-V3.2-Speciale-light-GGUF/snapshots/d8151a1c295b0bd7f9ee10e7d88d2b36baaf5257/Q8_0/DeepSeek-V3.2-Speciale-light-Q8_0-00001-of-00031.gguf --no-warmup --mmap --host 127.0.0.1 --port 6666 --jinja --chat-template-file ../ds32.jinja --chat-template-kwargs '{"thinking": true}' -c $((96*1024)) -np 1 -ub 128
+ Used memory: 
+ llama_memory_breakdown_print: | memory breakdown [MiB] | total free self model context compute unaccounted |
+llama_memory_breakdown_print: | - CUDA0 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 5013 + (91573 = 83790 + 1452 + 6331) + 662 |
+llama_memory_breakdown_print: | - CUDA1 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3765 + (92822 = 85587 + 924 + 6310) + 661 |
+llama_memory_breakdown_print: | - CUDA2 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3757 + (92829 = 85594 + 924 + 6310) + 662 |
+llama_memory_breakdown_print: | - CUDA3 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3427 + (93160 = 85792 + 1056 + 6311) + 661 |
+llama_memory_breakdown_print: | - CUDA4 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3765 + (92822 = 85587 + 924 + 6310) + 661 |
+llama_memory_breakdown_print: | - CUDA5 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3757 + (92829 = 85594 + 924 + 6310) + 662 |
+llama_memory_breakdown_print: | - CUDA6 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3427 + (93160 = 85792 + 1056 + 6311) + 661 |
+llama_memory_breakdown_print: | - CUDA7 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 6985 + (89601 = 82498 + 792 + 6310) + 662 |
+llama_memory_breakdown_print: | - Host | 1041 = 938 + 0 + 103 |
+ Example performance: 
+ prompt eval time = 499.92 ms / 104 tokens ( 4.81 ms per token, 208.03 tokens per second)
+ eval time = 36156.75 ms / 844 tokens ( 42.84 ms per token, 23.34 tokens per second)
+ total time = 36656.68 ms / 948 tokens
+ Expected lineage-512 run time: ~107 hours 
+ NP 4: 
+ Command: 
+ ./bin/llama-server -m /workspace/.hf_home/hub/models--sszymczyk--DeepSeek-V3.2-Speciale-light-GGUF/snapshots/d8151a1c295b0bd7f9ee10e7d88d2b36baaf5257/Q8_0/DeepSeek-V3.2-Speciale-light-Q8_0-00001-of-00031.gguf --no-warmup --mmap --host 127.0.0.1 --port 6666 --jinja --chat-template-file ../ds32.jinja --chat-template-kwargs '{"thinking": true}' -c $((4*128*1024)) -np 4 -ub 32
+ Used memory: 
+ llama_memory_breakdown_print: | memory breakdown [MiB] | total free self model context compute una
+ccounted |
+llama_memory_breakdown_print: | - CUDA0 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 7681 + (88905 = 79762 + 7040 + 2102) +
+ 663 |
+llama_memory_breakdown_print: | - CUDA1 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3067 + (93520 = 85792 + 5632 + 2095) +
+ 661 |
+llama_memory_breakdown_print: | - CUDA2 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3945 + (92611 = 85587 + 4928 + 2095) +
+ 692 |
+llama_memory_breakdown_print: | - CUDA3 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3937 + (92618 = 85594 + 4928 + 2095) +
+ 693 |
+llama_memory_breakdown_print: | - CUDA4 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3067 + (93520 = 85792 + 5632 + 2095) +
+ 661 |
+llama_memory_breakdown_print: | - CUDA5 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3945 + (92611 = 85587 + 4928 + 2095) +
+ 692 |
+llama_memory_breakdown_print: | - CUDA6 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3937 + (92618 = 85594 + 4928 + 2095) +
+ 693 |
+llama_memory_breakdown_print: | - CUDA7 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3037 + (93550 = 86526 + 4928 + 2095) +
+ 661 |
+llama_memory_breakdown_print: | - Host | 972 = 938 + 0 + 33
+ |
+ Example performance: 
+ prompt eval time = 2263.16 ms / 113 tokens ( 20.03 ms per token, 49.93 tokens per second)
+ eval time = 138786.73 ms / 1545 tokens ( 89.83 ms per token, 11.13 tokens per second)
+ total time = 141049.89 ms / 1658 tokens
+ Expected lineage-512 run time: ~56 hours 
+ Q4_K_M 
+ NP 4 
+ Command: 
+ ./bin/llama-server -m /workspace/.hf_home/hub/models--sszymczyk--DeepSeek-V3.2-Speciale-light-GGUF/snapshots/d8151a1c295b0bd7f9ee10e7d88d2b36baaf5257/Q4_K_M/DeepSeek-V3.2-Speciale-light-Q4_K_M-00001-of-00031.gguf --no-warmup --mmap --host 127.0.0.1 --port 6666 --jinja --chat-template-file ../ds32.jinja --chat-template-kwargs '{"thinking": true}' -c $((4*128*1024)) -np 4 -ub 512
+ Used memory: 
+ llama_memory_breakdown_print: | memory breakdown [MiB] | total free self model context compute unaccounted |
+llama_memory_breakdown_print: | - CUDA0 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 19837 + (76735 = 35722 + 5632 + 35381) + 676 |
+llama_memory_breakdown_print: | - CUDA1 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3907 + (92665 = 52295 + 5632 + 34738) + 676 |
+llama_memory_breakdown_print: | - CUDA2 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 4835 + (91737 = 51367 + 5632 + 34738) + 676 |
+llama_memory_breakdown_print: | - CUDA3 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3907 + (92665 = 52295 + 5632 + 34738) + 676 |
+llama_memory_breakdown_print: | - CUDA4 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3907 + (92665 = 52295 + 5632 + 34738) + 676 |
+llama_memory_breakdown_print: | - CUDA5 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 4835 + (91737 = 51367 + 5632 + 34738) + 676 |
+llama_memory_breakdown_print: | - CUDA6 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 2979 + (93592 = 53222 + 5632 + 34738) + 677 |
+llama_memory_breakdown_print: | - CUDA7 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 22005 + (74566 = 36308 + 3520 + 34738) + 677 |
+llama_memory_breakdown_print: | - Host | 2573 = 497 + 0 + 2076
+ Example performance: 
+ prompt eval time = 741.31 ms / 113 tokens ( 6.56 ms per token, 152.43 tokens per second)
+ eval time = 107662.45 ms / 1533 tokens ( 70.23 ms per token, 14.24 tokens per second)
+ total time = 108403.76 ms / 1646 tokens
+ Expected lineage-512 run time: 43 hours 
+ NP 8 
+ Command: 
+ ./bin/llama-server -m /workspace/.hf_home/hub/models--sszymczyk--DeepSeek-V3.2-Speciale-light-GGUF/snapshots/d8151a1c295b0bd7f9ee10e7d88d2b36baaf5257/Q4_K_M/DeepSeek-V3.2-Speciale-light-Q4_K_M-00001-of-00031.gguf --no-warmup --mmap --host 127.0.0.1 --port 6666 --jinja --chat-template-file ../ds32.jinja --chat-template-kwargs '{"thinking": true}' -c $((8*128*1024)) -np 8 -ub 512
+ Used memory: 
+ llama_memory_breakdown_print: | memory breakdown [MiB] | total free self model context compute unaccounted |
+llama_memory_breakdown_print: | - CUDA0 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 2755 + (93803 = 46076 + 14080 + 33647) + 690 |
+llama_memory_breakdown_print: | - CUDA1 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 1495 + (95062 = 50264 + 11264 + 33534) + 691 |
+llama_memory_breakdown_print: | - CUDA2 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 1495 + (95065 = 50271 + 11264 + 33530) + 688 |
+llama_memory_breakdown_print: | - CUDA3 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 1915 + (94643 = 51257 + 9856 + 33530) + 690 |
+llama_memory_breakdown_print: | - CUDA4 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 1493 + (95065 = 50271 + 11264 + 33530) + 690 |
+llama_memory_breakdown_print: | - CUDA5 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 2423 + (94134 = 49336 + 11264 + 33534) + 691 |
+llama_memory_breakdown_print: | - CUDA6 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 2085 + (94474 = 51088 + 9856 + 33530) + 689 |
+llama_memory_breakdown_print: | - CUDA7 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 19679 + (76878 = 36308 + 7040 + 33530) + 691 |
+llama_memory_breakdown_print: | - Host | 1037 = 497 + 0 + 540 |
+ Example performance: 
+ prompt eval time = 1575.64 ms / 113 tokens ( 13.94 ms per token, 71.72 tokens per second)
+ eval time = 110743.05 ms / 1082 tokens ( 102.35 ms per token, 9.77 tokens per second)
+ total time = 112318.69 ms / 1195 tokens
+ Expected lineage-512 run time: 32 hours 
+ NP 16 
+ Command: 
+ ./bin/llama-server -m /workspace/.hf_home/hub/models--sszymczyk--DeepSeek-V3.2-Speciale-light-GGUF/snapshots/d8151a1c295b0bd7f9ee10e7d88d2b36baaf5257/Q4_K_M/DeepSeek-V3.2-Speciale-light-Q4_K_M-00001-of-00031.gguf --no-warmup --mmap --host 127.0.0.1 --port 6666 --jinja --chat-template-file ../ds32.jinja --chat-template-kwargs '{"thinking": true}' -c $((16*128*1024)) -np 16 -ub 128
+ Used memory: 
+ llama_memory_breakdown_print: | memory breakdown [MiB] | total free self model context compute unaccounted |
+llama_memory_breakdown_print: | - CUDA0 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 29493 + (67095 = 35722 + 22528 + 8845) + 660 |
+llama_memory_breakdown_print: | - CUDA1 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 13079 + (83507 = 52295 + 22528 + 8684) + 662 |
+llama_memory_breakdown_print: | - CUDA2 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 14007 + (82580 = 51367 + 22528 + 8684) + 662 |
+llama_memory_breakdown_print: | - CUDA3 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 13079 + (83507 = 52295 + 22528 + 8684) + 662 |
+llama_memory_breakdown_print: | - CUDA4 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 13079 + (83507 = 52295 + 22528 + 8684) + 662 |
+llama_memory_breakdown_print: | - CUDA5 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 14007 + (82580 = 51367 + 22528 + 8684) + 662 |
+llama_memory_breakdown_print: | - CUDA6 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 12151 + (84435 = 53222 + 22528 + 8684) + 662 |
+llama_memory_breakdown_print: | - CUDA7 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 37515 + (59072 = 36308 + 14080 + 8684) + 661 |
+llama_memory_breakdown_print: | - Host | 1016 = 497 + 0 + 519 |
+ Example performance: 
+ prompt eval time = 3041.55 ms / 113 tokens ( 26.92 ms per token, 37.15 tokens per second)
+ eval time = 130195.34 ms / 704 tokens ( 184.94 ms per token, 5.41 tokens per second)
+ total time = 133236.89 ms / 817 tokens
+ Expected lineage-512 run time: 29 hours 
+ NP 32 
+ Command: 
+ ./bin/llama-server -m /workspace/.hf_home/hub/models--sszymczyk--DeepSeek-V3.2-Speciale-light-GGUF/snapshots/d8151a1c295b0bd7f9ee10e7d88d2b36baaf5257/Q4_K_M/DeepSeek-V3.2-Speciale-light-Q4_K_M-00001-of-00031.gguf --no-warmup --mmap --host 127.0.0.1 --port 6666 --jinja --chat-template-file ../ds32.jinja --chat-template-kwargs '{"thinking": true}' -c $((32*128*1024)) -np 32 -ub 32
+ Used memory: 
+ llama_memory_breakdown_print: | memory breakdown [MiB] | total free self model context compute unaccounted |
+llama_memory_breakdown_print: | - CUDA0 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3941 + (92678 = 39887 + 50688 + 2102) + 629 |
+llama_memory_breakdown_print: | - CUDA1 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 1227 + (95392 = 48240 + 45056 + 2095) + 629 |
+llama_memory_breakdown_print: | - CUDA2 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 3843 + (92776 = 51257 + 39424 + 2095) + 629 |
+llama_memory_breakdown_print: | - CUDA3 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 1227 + (95392 = 48240 + 45056 + 2095) + 630 |
+llama_memory_breakdown_print: | - CUDA4 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 5867 + (90752 = 49233 + 39424 + 2095) + 629 |
+llama_memory_breakdown_print: | - CUDA5 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 1227 + (95392 = 48240 + 45056 + 2095) + 630 |
+llama_memory_breakdown_print: | - CUDA6 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 5867 + (90752 = 49233 + 39424 + 2095) + 629 |
+llama_memory_breakdown_print: | - CUDA7 (RTX PRO 6000 Blackwell Server Edition) | 97249 = 4559 + (92061 = 50541 + 39424 + 2095) + 628 |
+llama_memory_breakdown_print: | - Host | 530 = 497 + 0 + 33 |
+ Example performance: 
+ prompt eval time = 7558.14 ms / 113 tokens ( 66.89 ms per token, 14.95 tokens per second)
+ eval time = 188868.92 ms / 699 tokens ( 270.20 ms per token, 3.70 tokens per second)
+ total time = 196427.05 ms / 812 tokens
+ Expected lineage-512 run time: 21 hours 
+ 1 
+ You must be logged in to vote 
+ All reactions 
+ 28 replies
+ --> 
+ Show 23 previous replies 
+ Comment options 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{title}}
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ Quote reply 
+ fairydreaming 
+ Apr 28, 2026 
+ Collaborator
+ Author
+ @AesSedai I tested 40 prompts of lineage-512 with DeepSeek V3.2 Speciale Q8_0 (4 parallel streams, took 20 hours) and got accuracy 0.85. So I suppose it's Q4_K_M quantization that lowered your score. Implementation is optimized now so generation doesn't slow down much with long context size. 
+ All reactions 
+ Comment options 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{title}}
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ Quote reply 
+ edited 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{editor}}'s edit
+ {{actor}} deleted this content
+ .
+ {{editor}}'s edit
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ AesSedai 
+ May 2, 2026 
+ @fairydreaming 👀 sorry I don't check notifs often, interesting that the Q4_K_M was the culprit. I saw that you posted a couple of things about speeding up the inference so that is good to see, I could try a Q8_0 run sometime in the near future if that's what you're thinking again. The 100 prompt run was a little much but I'd do a 50 prompt run (or similar) if you'd like. 
+ All reactions 
+ Comment options 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{title}}
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ Quote reply 
+ fairydreaming 
+ May 2, 2026 
+ Collaborator
+ Author
+ @fairydreaming 👀 sorry I don't check notifs often, interesting that the Q4_K_M was the culprit. I saw that you posted a couple of things about speeding up the inference so that is good to see, I could try a Q8_0 run sometime in the near future if that's what you're thinking again. The 100 prompt run was a little much but I'd do a 50 prompt run (or similar) if you'd like. 
+ @AesSedai It would be great to have an independent evaluation of the implementation but there's no hurry, I'd like to finish it first so that the implementation is tested in its final form. 
+ 👍 
+ 1 
+ All reactions 
+ 👍 
+ 1 
+ Comment options 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{title}}
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ Quote reply 
+ AesSedai 
+ May 3, 2026 
+ @fairydreaming okay, send me a ping when you want me to re-test it. Will you have a Q8_0 uploaded to HF to test with? 
+ All reactions 
+ Comment options 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{title}}
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ Quote reply 
+ fairydreaming 
+ May 4, 2026 
+ Collaborator
+ Author
+ @fairydreaming okay, send me a ping when you want me to re-test it. Will you have a Q8_0 uploaded to HF to test with? 
+ @AesSedai Q8_0 was there right from the beginning. Will let you know when the implementation is ready for testing, thanks! 
+ 👍 
+ 1 
+ All reactions 
+ 👍 
+ 1 
+ Comment options 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{title}}
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ Quote reply 
+ createthis 
+ Apr 4, 2026 
+ @fairydreaming I have some spare time this weekend, so I dusted off my LLM rig and ran your branch at commit a7820f . The first thing I noticed was that I had to reduce the context length from 163840 (works with 3.1-Terminus) to 10840 in order to get it running, otherwise I get: 
+ ggml_backend_cuda_buffer_type_alloc_buffer: allocating 335634.23 MiB on device 0: cudaMalloc failed: out of memory
+ggml_gallocr_reserve_n_impl: failed to allocate CUDA0 buffer of size 351938003456
+ This is with the following startup command: 
+ Details 
+ ./build/bin/llama-server \
+ --model /data2/DeepSeek-V3.2-light-GGUF/Q4_K_M/DeepSeek-V3.2-light-Q4_K_M-00001-of-00031.gguf \
+ --alias DeepSeek-V3.2-light-GGUF:671b-q4_k_m \
+ --numa numactl \
+ --threads 32 \
+ --ctx-size 163840 \
+ --n-gpu-layers 62 \
+ -ot " blk\.(3|4|5|6|7|8|9|10)\.ffn_.*=CUDA0 " \
+ -ot exps=CPU \
+ -ub 4096 -b 4096 \
+ --seed 3407 \
+ --temp 0.6 \
+ --top-p 0.95 \
+ --min-p 0.1 \
+ --log-colors on \
+ --flash-attn on \
+ --host 0.0.0.0 \
+ --prio 2 \
+ --jinja \
+ --verbose \
+ --port 11434 \
+ --chat-template-file /data2/DeepSeek-V3.2/chat_template.jinja 
+ I have 768gb of system ram and a 96gb blackwell 6000 pro. 
+ 1 
+ You must be logged in to vote 
+ All reactions 
+ 24 replies
+ --> 
+ Show 19 previous replies 
+ Comment options 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{title}}
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ Quote reply 
+ edited 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{editor}}'s edit
+ {{actor}} deleted this content
+ .
+ {{editor}}'s edit
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ createthis 
+ Apr 15, 2026 
+ @fairydreaming yes, I always run with -ub 4096 -b 4096 because it gives the best performance. 
+ nvtop tends to stay pretty steady ^ 
+ All reactions 
+ Comment options 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{title}}
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ Quote reply 
+ createthis 
+ Apr 17, 2026 
+ @fairydreaming I had to restart it 20 or 30 times to slog through the tests. It failed on the last test five or six times, so I eventually gave up. I even tried lowering ubatch to 512 on the last one, but it didn't help. The results are good, other than the reliability issues: 
+ ────────────────────────────────── /benchmarks/2026-04-13-21-46-06--DeepSeek-V3.2-light-GGUF-q4_k_m ───────────────────────────────────
+- dirname: 2026-04-13-21-46-06--DeepSeek-V3.2-light-GGUF-q4_k_m
+ test_cases: 224
+ model: openai/DeepSeek-V3.2-light-GGUF-q4_k_m
+ edit_format: diff
+ commit_hash: bdb4d9f
+ pass_rate_1: 42.0
+ pass_rate_2: 82.1
+ pass_num_1: 94
+ pass_num_2: 184
+ percent_cases_well_formed: 100.0
+ error_outputs: 0
+ num_malformed_responses: 0
+ num_with_malformed_responses: 0
+ user_asks: 106
+ lazy_comments: 1
+ syntax_errors: 0
+ indentation_errors: 0
+ exhausted_context_windows: 0
+ prompt_tokens: 2724373
+ completion_tokens: 2124732
+ test_timeouts: 1
+ total_tests: 225
+ command: aider --model openai/DeepSeek-V3.2-light-GGUF-q4_k_m
+ date: 2026-04-13
+ versions: 0.86.3.dev
+ seconds_per_case: 716.3
+ total_cost: 0.0000
+costs: $0.0000/test-case, $0.00 total, $0.00 projected
+ I'm going to reboot the machine so it'll run a self check, just to make sure I didn't fry an RDIMM. 
+ All reactions 
+ Comment options 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{title}}
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ Quote reply 
+ fairydreaming 
+ Apr 17, 2026 
+ Collaborator
+ Author
+ @createthis was it always with the same stacktrace (alloc in top_k)? 
+ All reactions 
+ Comment options 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{title}}
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ Quote reply 
+ createthis 
+ Apr 17, 2026 
+ I take it back... it didn't crash when I switched to ubatch 512. I got this message in Aider, which is the same message I got when it would crash with ubatch 4096: 
+ Tests failed: /benchmarks/2026-04-13-21-46-06--DeepSeek-V3.2-light-GGUF-q4_k_m/cpp/exercises/practice/spiral-matrix
+make: *** [Makefile:91: all] Error 2
+litellm.Timeout: APITimeoutError - Request timed out. Error_str: Request timed out.
+The API provider timed out without returning a response. They may be down or overloaded.
+Retrying in 0.2 seconds...
+ But looking at the server logs, it never stack traced, it just kept going. This is the server log when it times out: 
+ slot update_slots: id 3 | task 17953 | n_tokens = 94208, memory_seq_rm [94208, end)
+slot update_slots: id 3 | task 17953 | prompt processing progress, n_tokens = 98304, batch.n_tokens = 4096, progress = 0.625447
+srv stop: cancel task, id_task = 17953
+srv log_server_r: done request: POST /v1/chat/completions 192.168.0.201 200
+srv params_from_: Chat format: peg-native
+ So maybe it's just hitting the Aider timeout. I'll try increasing it. 
+ All reactions 
+ Comment options 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{title}}
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ Quote reply 
+ edited 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ {{editor}}'s edit
+ {{actor}} deleted this content
+ .
+ {{editor}}'s edit
+ Something went wrong.
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ createthis 
+ Apr 18, 2026 
+ @fairydreaming Increasing the timeout to 3200 and lowering the ublock to 512 worked. Final score: 
+ ────────────────────────────────── /benchmarks/2026-04-13-21-46-06--DeepSeek-V3.2-light-GGUF-q4_k_m ───────────────────────────────────
+- dirname: 2026-04-13-21-46-06--DeepSeek-V3.2-light-GGUF-q4_k_m
+ test_cases: 225
+ model: openai/DeepSeek-V3.2-light-GGUF-q4_k_m
+ edit_format: diff
+ commit_hash: bdb4d9f
+ pass_rate_1: 41.8
+ pass_rate_2: 82.2
+ pass_num_1: 94
+ pass_num_2: 185
+ percent_cases_well_formed: 100.0
+ error_outputs: 1
+ num_malformed_responses: 0
+ num_with_malformed_responses: 0
+ user_asks: 112
+ lazy_comments: 1
+ syntax_errors: 0
+ indentation_errors: 0
+ exhausted_context_windows: 1
+ prompt_tokens: 2898038
+ completion_tokens: 2136977
+ test_timeouts: 1
+ total_tests: 225
+ command: aider --model openai/DeepSeek-V3.2-light-GGUF-q4_k_m
+ date: 2026-04-13
+ versions: 0.86.3.dev
+ seconds_per_case: 782.7
+ total_cost: 0.0000
+costs: $0.0000/test-case, $0.00 total, $0.00 projected
+ This is very similar to the run itsmeknt made against deepseek's API back in December: https://discord.com/channels/1131200896827654144/1422153923493498902/1445389872889331724 
+ Run command: 
+ ./build/bin/llama-server \
+ --model /data2/DeepSeek-V3.2-light-GGUF/Q4_K_M/DeepSeek-V3.2-light-Q4_K_M-00001-of-00031.gguf \
+ --alias DeepSeek-V3.2-light-GGUF:671b-q4_k_m \
+ --numa numactl \
+ --threads 32 \
+ --ctx-size 163840 \
+ --n-gpu-layers 62 \
+ -ot " blk\.(3|4|5|6|7|8|9|10)\.ffn_.*=CUDA0 " \
+ -ot exps=CPU \
+ -ub 512 -b 4096 \
+ --seed 3407 \
+ --temp 0.6 \
+ --top-p 0.95 \
+ --min-p 0.1 \
+ --log-colors on \
+ --flash-attn on \
+ --host 0.0.0.0 \
+ --prio 2 \
+ --jinja \
+ --port 11434 \
+ --chat-template-file ./models/templates/deepseek-ai-DeepSeek-V3.2.jinja \
+ --chat-template-kwargs ' {"thinking": true} ' 
+ .aider.model.settings.yml 
+ - name : openai/DeepSeek-V3.2-light-GGUF-q4_k_m 
+ use_temperature : 0.6 
+ extra_params :
+ top_p : 0.95 
+ temperature : 0.6 
+ min_p : 0.1 
+ top_k : 0.0 
+ timeout : 3200 
+ 👍 
+ 1 
+ All reactions 
+ 👍 
+ 1 
+ --> 
+ Sign up for free 
+ to join this conversation on GitHub .
+ Already have an account?
+ Sign in to comment 
+ Category
+ 💬 
+ General
+ Labels
+ None yet
+ 3 participants
+ Heading 
+ Bold 
+ Italic 
+ Quote 
+ Code 
+ Link 
+ Numbered list 
+ Unordered list 
+ Task list 
+ Attach files 
+ Mention 
+ Reference 
+ Menu 
+ Heading
+ Bold
+ Italic
+ Quote
+ Code
+ Link
+ Numbered list
+ Unordered list
+ Task list
+ Attach files
+ Mention
+ Reference
+ Select a reply
+ Loading 
+ Uh oh!
+ There was an error while loading. Please reload this page . 
+ Create a new saved reply 
+ 👍 
+ 1 
+ reacted with thumbs up emoji 
+ 👎 
+ 1 
+ reacted with thumbs down emoji 
+ 😄 
+ 1 
+ reacted with laugh emoji 
+ 🎉 
+ 1 
+ reacted with hooray emoji 
+ 😕 
+ 1 
+ reacted with confused emoji 
+ ❤️ 
+ 1 
+ reacted with heart emoji 
+ 🚀 
+ 1 
+ reacted with rocket emoji 
+ 👀 
+ 1 
+ reacted with eyes emoji 
+ Footer 
+ © 2026 GitHub, Inc.
+ Footer navigation 
+ Terms 
+ Privacy 
+ Security 
+ Status 
+ Community 
+ Docs 
+ Contact 
+ Manage cookies
+ Do not share my personal information
+ You can’t perform that action at this time.
