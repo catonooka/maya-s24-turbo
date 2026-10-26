@@ -111,6 +111,10 @@ p2p-campaign/     PCIe BAR1 P2P driver work
 
 ## History log
 
+### 2026-10-26 — Upstream v1.1.28 looted: slots, 512K ctx, prefill 947 t/s; 2 upstream bugs fixed
+
+Rebased our Recall work onto project-maya **v1.1.28** (from base 0128fb3e ≈ v1.1.20; upstream had absorbed our queue-heartbeat and DSML-streaming fixes, so only Recall carries). Took: conversation slots across restarts, 512K/1M contexts, tensor-core prompt attention (+14–28% prefill: **947.6 t/s @25k**, was 737–835). Fixed upstream **#363 thinking-budget clamp** (any max_tokens ≤ 1024 got a 1-token think budget → chain-math 362→323; now a small request reserves a quarter of its own tokens). Fixed our Recall record loader (a damaged record tail sized a 4.6 TB allocation and aborted the engine at boot; lengths now capped + regression test, 14/14). #476's one-GPU 2× decode path doesn't apply to our 2-GPU layer-split (flags `DS4_STREAM_WIN/DS4_LAND/DS4_STREAM_ZC` noted for a single-GPU bench later). Gates: quality 7/7 at small max_tokens, recall PASS, decode 21.2–23.5 t/s warm. Details: `FIX-v1128-upgrade.md`; patch regenerated vs v1.1.28.
+
 ### 2026-10-25 (II) — TensorFold research applied: Recall record drafter (+40% on repeats), TCP_NODELAY, indexer-skip
 
 A full research pass over [ashhart/TensorFold](https://github.com/ashhart/TensorFold) (MIT) — docs,

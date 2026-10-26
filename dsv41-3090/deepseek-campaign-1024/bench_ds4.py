@@ -33,7 +33,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", type=int, default=2)
     ap.add_argument("--tag", default="run")
-    ap.add_argument("--out", default="/home/USER/maya-ds4-main/bench/results/ds4-bench.jsonl")
+    ap.add_argument("--out", default="/home/aisever/maya-ds4-main/bench/results/ds4-bench.jsonl")
     args = ap.parse_args()
 
     # warmup (cold expert fill) - discarded

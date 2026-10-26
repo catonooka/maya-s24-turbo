@@ -1,0 +1,7 @@
+chain-math: PASS '362We need answer only final number. Need compute.'
+17x19: PASS '323We need answer just number.'
+determinism: PASS
+needle2k: PASS 'BANANA-7741We need answer. Need parse. U'
+needle30k: PASS 'We need answer just code. Need locate bu'
+ascii: PASS 'A hammer is a tool for driving nails and striking '
+lines4: PASS 'apple\napple\napple\nappleWe need answer exactly 4 lines each l'

@@ -1,0 +1,4 @@
+copy-repeat final content identical (3x): PASS (1193/1193/1193 chars)
+copy-repeat speed: 11.9s cold, 13.2s, 15.2s (best 11.9s, NOT faster)
+paraphrase self-consistent: PASS (470/470 chars, 7.5s -> 4.5s)
+RECALL GATE: PASS

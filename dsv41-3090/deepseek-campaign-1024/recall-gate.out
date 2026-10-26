@@ -1,0 +1,6 @@
+copy-repeat byte-identical: FAIL (874 vs 919 chars)
+copy-repeat speed: 11.65s cold -> 7.72s warm (faster)
+fresh[0]: 'We need answer just number. 17*19=323. N' (no control; rerun with --control-file)
+fresh[1]: 'We need answer list 10 capital cities wi' (no control; rerun with --control-file)
+fresh[2]: 'We need answer one short sentence. Need ' (no control; rerun with --control-file)
+RECALL GATE: FAIL (1)
