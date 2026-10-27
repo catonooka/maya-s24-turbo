@@ -74,3 +74,31 @@ Config space: exhausted (this README is the map of it). Next decode jump = engin
   silent gap (the tool that found both bugs)
 - `patches/` — `queue-heartbeats.patch`, `dsml-tool-args-stream.patch` (git
   format-patch, apply to `serve/server.py` / `serve/frontend.py`)
+
+## 2026-10-27 (II) — S5: 44.2 t/s (12.1 -> 3.7x), the waterline unlock
+
+The mixed placement was **layer-sequential**: layers 0-2 consumed GPU0's entire expert
+room (384/384 each), layer 3 took the remainder (278), layers 4+ got **zero**. The
+profile's top-60 coverage (89% of routing mass) could never land - 75% of picks still
+hit the CPU lane.
+
+**Fix**: one candidate pool per GPU group - every mixed layer's experts ranked by
+share-of-layer-mass, filled until the room is exhausted (a global heat waterline).
+Engine commit `20d7cab9` (atop S4 `046baad1`, S1 `42393c32`).
+
+| config | t/s | lane ms/tok | lane share |
+|---|---|---|---|
+| S4 baseline | 12.1 | 63.5 | 74.8% |
+| + waterline | 29.6 | 13.1 | 14.9% |
+| + DSpark drafter | **44.2** | ~9 eff | 9.1% |
+
+- Correctness re-verified on the waterline build: ppl 12.16 on the OOD README probe
+  (was 12.19/12.08 pre-S5 - placement does not change logits), greedy "Paris is the
+  capital of France.", counting run ends 318/319/320 identical to non-drafted.
+- Drafter accept: 1: 99%, 2: 34%, 3: 67% (S4's FP8->MXFP4/BF16 conversion holds).
+- Both commits on `mixed-lane`; expert-profile.bin = self-trained (counting runs).
+
+**Next lever toward 50**: the profile is trained on counting traffic only - a mixed
+corpus (chat + code + prose) should push top-60 coverage 89 -> 95%+, worth another
+~15-20%. Also untested: DS4_DRAFT_KEEP sweep, prompt-window path on the waterline
+placement (prompt-side speed).
