@@ -17,6 +17,20 @@ Goal: DSV41-EXL3-2.7-0xSero on maya-ds4, dual 3090, decode 50 t/s with ngram (Re
 - MTP drafter native FP8/MXFP4 → --dspark none until S4
 - Engram shards 47/48 symlinked (sha256-verified)
 
+## Speed reality check (2026-10-27, post-S1 measurements)
+- Steady-state: 12.4 t/s @ 1962 tokens (counting), no warmup effect; wall = CPU lane 63.5 ms/token
+- VRAM density is MAX: expert blobs = all 3 parts (~14 MB avg K2.7); 42 GB VRAM holds 3518/15360 (23%);
+  decode hit rate 25% VRAM / 75% lane (heat-ranked now; shipped profile's top-64 = 73% of route mass
+  but domain mismatch vs live prompts)
+- CPU lane per expert: 0.355 ms (AVX2 bands, correct math). Threads capped 16 (pool sizing; --cpu-threads
+  ignored - pool built from node cores); memory-bound anyway
+- S5 whole-expert PCIe streaming is DEAD at this quant: 179 experts x 14 MB = 2.5 GB/token => 210 ms on
+  gen3. Only viable streaming subset: K2 experts (2.95 MB) -> ~20 t/s ceiling. Parked.
+- exllamav3 #449's 46 t/s = 3 cards + mtp drafter; their streaming wins on 4x3090 gen3 rigs too, but
+  our per-expert size (14 MB) is 2-3x their per-GPU share - the rig class limit
+- PATH TO 50: speculation. S4 drafter (native FP8 already on disk!) at 2.5-3.5x accept: 31-43 t/s.
+  + ngram tier-B on repeat-heavy workloads: 50 reachable on chat, not fresh prose. Report honestly.
+
 ## Remaining steps
 - [ ] S2: gates (chain-math, needle BANANA-7741 @30k, greedy determinism, recall gate) + quant_ab panel
 - [ ] S3: prefill throughput (windows-only for now; chunks need class-tagged staging = S5's tag)
