@@ -102,3 +102,35 @@ Engine commit `20d7cab9` (atop S4 `046baad1`, S1 `42393c32`).
 corpus (chat + code + prose) should push top-60 coverage 89 -> 95%+, worth another
 ~15-20%. Also untested: DS4_DRAFT_KEEP sweep, prompt-window path on the waterline
 placement (prompt-side speed).
+
+## 2026-10-27 (III) — S5: the mixed swap cache; honest prose numbers
+
+**Engine `eeeb9bf4` + `e93e2b11` (mixed-lane).** The static-arena profile could never serve
+unseen text (its profile is another corpus's routing). The fix: mixed layers join the engine's
+adaptive expert cache.
+
+- `DS4_MIX_SWAP=1`: hottest CPU-lane expert per tick copied into the coldest same-class VRAM
+  slot (no spare slots needed - tables switch between windows), evicted expert's region
+  materialized for the lane. Direct table writes in the switch (tick_flush's pair budget
+  drops pairs -> stale tables -> segfault; caught by the lane's loud check).
+- `DS4_PROMPT_SWAPS=k`: after a prompt, queue its own hottest picks (a prompt's routing ~ its
+  continuation's). Lane cost 41 -> 26 ms/token.
+
+**Real held-out prose** (`bench-prose.ids`, no counting):
+
+| config | t/s | swaps | lane ms |
+|---|---|---|---|
+| static arenas | 10.4 | 0 | 77 |
+| + swap cache (300 tok) | 15.9 | 1537 | 41 |
+| + swap cache (800 tok) | 21.1 | 2440 | ~30 |
+| + prompt swaps | 21.1 steady | 1874/495 | 26 |
+
+Degenerate-repeat traffic: 60.2 t/s at lane 4ms (accept 100% all depths) - the ceiling when
+routing concentrates; reported as machinery proof, **not** a prose number.
+
+Boot: 221 -> 162 s (`67706582`: branch-B parallel split reads, merged-extent prewarm,
+`DS4_WARM_CAP_GB=90`).
+
+**Where this leaves the 50 t/s goal:** seen/repetitive 44-60 t/s; unseen prose 21 t/s and
+converging (per-layer serial swaps + the DDR4 lane floor bound it). Remaining levers: swap
+batching per tick, faster repack, boot tail 85 s unexplained.
