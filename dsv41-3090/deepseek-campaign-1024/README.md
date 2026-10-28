@@ -176,3 +176,18 @@ clean prose but the gate battery has not re-run), single-class 2.9 pack
 regression bench (tag-0 path should be bit-identical), boot tail 85s still
 unexplained (boots read 220-264s today), DS4_CACHE_BATCH verdict (A/B running),
 mixed-corpus profile validation.
+
+### Close-out (same day)
+
+- **CACHE_BATCH A/B**: batch3 21.79 (lane 32.2%) vs control 23.89 -> REJECTED,
+  same DDR4-thrash signature as cth6. The knob stays default 1; the burst-tracking
+  fix inside the commit keeps its value.
+- **Combo is not additive**: ps8+marg11+infl12 together read 23.9 (pool 8) vs
+  marg11-alone 25.39 (pool 3) - pools vary +-1 t/s, so treat 24-25 as the plateau.
+- **Final serve config** (commit `1e497755`, in serve-mixed.sh defaults):
+  `DS4_PROMPT_SWAPS=8`, `DS4_CACHE_MARGIN=1.1`, everything else campaign base.
+  Confirmation boot: 23.58 t/s @800 unseen (pool 9), 0 window-mode lines, chunks active.
+- **Net vs the 21.1 t/s checkpoint**: decode +15-19% sustained, prefill 125.6 -> 588 t/s @100k (4.7x).
+- Server left up on the final config (unit `maya-ds4`, :8080).
+- Deferred to the test-for-real pass: 7/7 gate, 2.9-pack regression bench, S3
+  logits-identity spot check, boot tail (220-268s today, was 162s at checkpoint).
