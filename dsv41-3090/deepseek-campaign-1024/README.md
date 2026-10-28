@@ -191,3 +191,22 @@ mixed-corpus profile validation.
 - Server left up on the final config (unit `maya-ds4`, :8080).
 - Deferred to the test-for-real pass: 7/7 gate, 2.9-pack regression bench, S3
   logits-identity spot check, boot tail (220-268s today, was 162s at checkpoint).
+
+## 2026-10-28 (V) — decode push: item 1 (profile retrain) FAILED, items 2-3
+
+Goal: decode 24-25 -> 30+ (2.9-pack warm reference). NVLink found DOWN
+(NVML all links inactive — bridge question for the user; TP2's 1166 t/s
+prefill shape and peer staging are gated on it).
+
+**Item 1 — expert-profile retrain: REJECTED, both variants.**
+- Soft enrich (+9.4k mixed-corpus tok on the old profile): pool 10 = 24.41,
+  lane 27.7, hit 73.1 — noise (+3%).
+- Zero-and-retrain (19.9k tok fresh corpus, `enrich_mixed2.py`): pool 11 =
+  **20.2, lane 35.9, hit 64.7** — clear regression. 20k diverse tokens rank
+  the experts too weakly; the accumulated profile (max count 179k, counting +
+  sweeps + today's pools) places better than a small clean corpus.
+- Restored `expert-profile.enriched1.bak`; retrained kept as
+  `expert-profile.retrain1.bin`. Verdict: profile is not the wall — the
+  DDR4 lane is. A retrain would need ~100k+ tokens to beat the incumbent.
+- Ops note: `sudo tee < /dev/zero` never EOFs (file hit 42.6GB before kill;
+  disk fine, truncated). Zero root-owned files with `dd count=1`.
