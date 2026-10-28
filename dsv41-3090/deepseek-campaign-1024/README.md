@@ -134,3 +134,45 @@ Boot: 221 -> 162 s (`67706582`: branch-B parallel split reads, merged-extent pre
 **Where this leaves the 50 t/s goal:** seen/repetitive 44-60 t/s; unseen prose 21 t/s and
 converging (per-layer serial swaps + the DDR4 lane floor bound it). Remaining levers: swap
 batching per tick, faster repack, boot tail 85 s unexplained.
+
+## 2026-10-28 (IV) — the OOM fix, the upstream ports, and S3: prefill 125 -> 588 t/s
+
+Engine `f3854d67` (mixed-lane, pushed to fork). Config env: `DS4_MIX_SWAP=1`,
+`DS4_PROMPT_SWAPS=8`, `DS4_CACHE_MARGIN=1.1`, `DS4_CACHE_INFLIGHT=12`,
+`DS4_CACHE_THREADS=4` (6 REJECTED), launcher `serve-mixed.sh` via sudo systemd-run.
+
+**The OOM root cause (found live)**: S5's swap cache materialized every evicted
+expert's region into a per-layer buffer that was NEVER freed on swap-back-in
+(~14MB a swap, thousands of swaps). A 40k window-mode prompt grew anon RSS to
+251GB and the kernel took the engine mid-gate. Fix `4304a146`: unique_ptr
+ownership, freed when the expert re-enters VRAM.
+
+**Ports from the base repo (mw00/project-maya, 100 commits ahead)**: layer-split
+parallel prompt reads (`f9fdb4e0`), expert-table swap race #550 (`32f3c8c6`),
+prompt lookup #540/#543 (`23cd6c38`,`1bd23a1c`), TP-wedge fix + serve watchdog +
+NUMA RAM copies (`94747fc6`). Skipped #551 (its condition never holds on a
+swapping rig). 3 conflicts resolved keeping our Recall/slot code.
+
+**S3 chunked prefill for mixed-K (the headline)**: design in
+`S3-CHUNK-STAGING-DESIGN.md`; class tag (cls+1) rides the ring pointers' low
+byte, `mix_cls` reads it first, `plan_streams` gains the mixed vs-scheme,
+`run_set`/`run_vram` take the eptr path, `copy_ahead` ships a tagged pointer
+table, `prompt_active` keeps S5 switches out of a run, `sw_inflight` counted
+once (was double-decremented - the cap never bound).
+
+| probe | windows | S3 chunks |
+|---|---|---|
+| prefill @25k | ~125 t/s | 491 client |
+| prefill @100k | ~125 t/s | **588 t/s engine** |
+| decode after 107k prompt | - | 26.3 t/s, CPU lane 0.0% |
+
+**Decode knob sweep (6 boots, fresh prose pool each)**: fixbase 24.09 ->
+ps8 25.02 / infl12 25.20 / marg11 25.39 / rskip02 24.89 / cth6 **21.02 REJECTED**
+(6 cache threads thrash the lane's DDR4; stay at 4). rskip budget 2% = speed
+wash, left off. Checkpoint was 21.1 -> now ~25 t/s unseen prose @800 (+19%).
+
+**Left for the "test for real" pass**: 7/7 quality gate on `f3854d67` (ran
+clean prose but the gate battery has not re-run), single-class 2.9 pack
+regression bench (tag-0 path should be bit-identical), boot tail 85s still
+unexplained (boots read 220-264s today), DS4_CACHE_BATCH verdict (A/B running),
+mixed-corpus profile validation.

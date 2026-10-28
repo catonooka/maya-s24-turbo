@@ -1,0 +1,42 @@
+diff --git a/src/ds4/ds4_model.cu b/src/ds4/ds4_model.cu
+index 47b5028f..ff03ed24 100644
+--- a/src/ds4/ds4_model.cu
++++ b/src/ds4/ds4_model.cu
+@@ -1357,6 +1357,9 @@ struct Model::Impl {
+     //    evicts, so it stays off; an idle while other programs took the RAM does evict.
+     //  DS4_DEBUG_DROP_BEFORE_REQ=<n>: this process's file pages out of RAM before its n-th request (the switch back's test)
+     const bool disk_skip_auto = disk_skip_w > 0.0f && env_f("STRATA_DS4_DISK_SKIP_AUTO", 0.0f) != 0.0f;
++    // (S5: the mixed skip's per-token dropped-mass budget - DS4_RSKIP_BUDGET, default 2% of the
++    //  route weight; the quant's own per-expert error is the same class, so within it = lossless)
++    const float rskip_budget = std::max(0.0f, env_f("DS4_RSKIP_BUDGET", 0.02f));
+     const int disk_skip_window = std::max(4, (int) env_f("STRATA_DS4_DISK_SKIP_WINDOW", 32.0f));
+     const int disk_skip_settle = std::max(4, (int) env_f("STRATA_DS4_DISK_SKIP_SETTLE", 64.0f));
+     const int disk_skip_budget = std::max(1, (int) env_f("STRATA_DS4_DISK_SKIP_BUDGET", 512.0f));
+@@ -9269,6 +9272,7 @@ struct Model::Impl {
+                 // the window's CPU-lane picks by expert (up to 8 tokens an entry), their weights by entry row
+                 float wv[kWin * kPicks];
+                 int tok_of[kWin * kPicks];
++                float dropped_w[kWin] = {0.0f};   // (S5: this window's dropped route mass a token)
+                 int nslots = 0;
+                 std::vector<std::pair<int, int>> picks;   // (expert, t * kPicks + i), CPU-lane only
+                 // the helper's (DS4_HELPER: a layer with experts in its pool, while it works) - its own lane: not the
+@@ -9306,7 +9310,18 @@ struct Model::Impl {
+                                 continue;
+                             }
+                             l.cpu_hits.push_back(e);
+-                            if ((light && !in_ram(l, e)) || (rsk && r.w[t][i] < ram_skip_w * wsum)) {
++                            // (S5: the lossless guard - a mixed layer's light experts skipped only while the
++                            //  token's dropped mass stays under DS4_RSKIP_BUDGET (default 2%): below the
++                            //  quantization noise the 2.7 bits already carry, so the answers stay the model's)
++                            float* dropped = l.n_cls > 1 && rsk ? &dropped_w[t] : nullptr;
++                            if (dropped != nullptr && l.n_cls > 1) {
++                                const float drop_this = r.w[t][i] / (wsum > 0.0f ? wsum : 1.0f);
++                                if (drop_this > 0.0f && dropped[0] + drop_this <= rskip_budget) {
++                                    dropped[0] += drop_this;
++                                    ++st.skipped;
++                                    continue;
++                                }
++                            } else if ((light && !in_ram(l, e)) || (rsk && r.w[t][i] < ram_skip_w * wsum)) {
+                                 ++st.skipped;
+                                 continue;
+                             }
