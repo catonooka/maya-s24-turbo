@@ -215,3 +215,15 @@ prefill shape and peer staging are gated on it).
 cum75 pool 12 = 23.2; cum90 pool 13 = 24.78; the 0.5 plateau is 24-25.4.
 Drafting more positions buys nothing on unseen prose (pos-1 accept 70-78%
 caps the chain; fixing that needs a better draft model, not a knob).
+
+**Item 3 — cache-heat knobs: NO CHANGE, defaults already optimal.**
+decay95 pool 14 = 20.31 REJECT (stale residents, hit 66); decay80 = 24.20;
+bonus15 = 23.99; recent16 = 23.59 — all inside the 23.5-25.4 pool-noise plateau
+of the defaults (DECAY 0.9, BONUS 1.0, RECENT 2/2/8).
+
+**Decode-push session verdict:** every knob/drafter/profile lever around this
+operating point is exhausted; 24-25 t/s unseen-prose @800 is the plateau for
+TP1 layer-split with ~73-76% hit and ~27-29% lane mass. The remaining decode
+levers are structural: NVLink bridge (hardware, found down), TP2 mixed mode,
+lane-to-GPU streaming experiment, or a stronger draft model. Server restored
+to the final config (ps8+marg11, defaults elsewhere).
