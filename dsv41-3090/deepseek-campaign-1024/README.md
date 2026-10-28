@@ -210,3 +210,8 @@ prefill shape and peer staging are gated on it).
   DDR4 lane is. A retrain would need ~100k+ tokens to beat the incumbent.
 - Ops note: `sudo tee < /dev/zero` never EOFs (file hit 42.6GB before kill;
   disk fine, truncated). Zero root-owned files with `dd count=1`.
+
+**Item 2 — DSpark coverage: REJECTED, keep CUM=0.5.**
+cum75 pool 12 = 23.2; cum90 pool 13 = 24.78; the 0.5 plateau is 24-25.4.
+Drafting more positions buys nothing on unseen prose (pos-1 accept 70-78%
+caps the chain; fixing that needs a better draft model, not a knob).
