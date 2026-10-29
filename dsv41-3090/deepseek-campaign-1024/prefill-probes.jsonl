@@ -16,3 +16,9 @@
 {"tag": "final-c16k-cap350", "probe": "1.6k", "prompt_tokens": 1738, "wall_s": 14.71, "client_tps": 118.1}
 {"tag": "final-c16k-cap350", "probe": "25k", "prompt_tokens": 26841, "wall_s": 44.97, "client_tps": 596.8}
 {"tag": "final-c16k-cap350", "probe": "100k", "prompt_tokens": 107378, "wall_s": 145.54, "client_tps": 737.8}
+{"tag": "split1030", "probe": "1.6k", "prompt_tokens": 1726, "wall_s": 14.71, "client_tps": 117.3}
+{"tag": "split1030", "probe": "25k", "prompt_tokens": 26850, "wall_s": 37.1, "client_tps": 723.7}
+{"tag": "split1030", "probe": "100k", "prompt_tokens": 107170, "wall_s": 87.73, "client_tps": 1221.6}
+{"tag": "split1030-final", "probe": "1.6k", "prompt_tokens": 1685, "wall_s": 14.56, "client_tps": 115.7}
+{"tag": "split1030-final", "probe": "25k", "prompt_tokens": 26830, "wall_s": 36.92, "client_tps": 726.7}
+{"tag": "split1030-final", "probe": "100k", "prompt_tokens": 107416, "wall_s": 89.06, "client_tps": 1206.1}
