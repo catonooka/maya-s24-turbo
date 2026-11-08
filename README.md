@@ -108,7 +108,9 @@ models/                          one folder per MODEL, one subfolder per QUANT (
   glm-5.3-flash/
     exl3-3.05bpw/                QUALITY tier (3x3090): serving exl3-ck0.json + full knob ladder + run-exl3.sh + NOTES.md
     maya-s24/                    SPEED tier (3x3090): serving s24-dflash-p32k.json + ladder + run-s24.sh + NOTES.md
+    maya-s-v2-iq2_xxs/            old 2-GPU quant config (archived)
     maya-xs-iq1_s/               REJECTED (U-curve law) — NOTES.md only
+    2x3090-era/                  original 2-card campaign archive (v1.0.x-v1.1.20, mixed quants)
     reports/                     campaign reports + research (newest: exl3-prefill-ttft-REPORT.md)
   deepseek-v4.1-flash-1017/
     maya-s-gguf/                 earlier DSV41 campaign (748B, S24-class quant)
