@@ -131,6 +131,16 @@ canonical copies; the worktree mirrors them.
 
 ### 2026-11-08 — GLM-5.3-Flash prefill/TTFT/long-context campaign (3x3090, EXL3 tier)
 
+- **Evening additions:** vision enabled (mmproj + on-demand encoder — gate now 8/8); all 7
+  thinking levels verified at parity with the official z.ai API (enabled/low/high/max identical);
+  serving config moved to `exl3-ck0-m15m.json`: 1.5M context pool (256k KV window in VRAM +
+  latent cache pinned in DRAM), conversations capped at 256k (`STRATA_CONV_MAX`, local patch,
+  0.2s rejection), old conversations' KV offloaded to RAM slots (`/dev/shm` tmpfs, 0.1s saves).
+  TTFT root-caused from engine instrumentation: prefill wall = expert-copy lane over PCIe
+  (97% of chunk wall, 24 GB/s saturated, compute fully hidden) — the lever is VRAM/bytes ratio
+  and prefix reuse, not config. Upstream: PR #912 (spec-default + SERVER_ENV registration —
+  config env reaches the engine only) and issue #913 (speed report + CKPT_EVERY + slot-tax).
+
 - **CKPT_EVERY=0 found and promoted**: fresh 100k reads 960 → **1637 t/s** (+70%,
   63s wall). Only the periodic prompt cuts die; system-prompt + last-turn snapshots
   survive, so conversation restore barely degrades. New serving config
