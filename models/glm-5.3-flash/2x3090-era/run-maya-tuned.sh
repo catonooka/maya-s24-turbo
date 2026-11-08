@@ -4,5 +4,5 @@ export STRATA_GLM_RAM_RESIDENT=1
 export STRATA_GLM_PROMOTE_MIN=6
 export STRATA_GLM_KV_INT8=1
 export STRATA_GLM_MTP_KEEP=2
-cd /home/aisever/project-maya
+cd /home/USER/project-maya
 exec ./run-maya-maya-s-v2-iq2_xxs.sh

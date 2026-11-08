@@ -7,7 +7,7 @@ glm pack: CUDA0 EXL3: 17 safetensors, 268 matrices, 43 expert layers
 glm mtp: CUDA1 the NextN block (blk.45) loaded: 128 MB dense, EXL3 experts K 3/3/3
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2023 MB of the expert pool while a prompt runs (activations 1803, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.77 of 23.56 GB in use - dense weights 2.71, state/KV (32768 ctx) 0.33, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.10 GB, 88-117 slots/layer (2165 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2023 MB of the expert pool while a prompt runs (activations 1803, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -26,7 +26,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm pack: CUDA0 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -240,7 +240,7 @@ glm mtp: CUDA1 the NextN block (blk.45) loaded: 128 MB dense, EXL3 experts K 3/3
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.20 GB), the latent cache in 0.81 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2151 MB of the expert pool while a prompt runs (activations 1931, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.84 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.40, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.02 GB, 88-116 slots/layer (2156 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2151 MB of the expert pool while a prompt runs (activations 1931, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -301,7 +301,7 @@ glm mtp: CUDA1 the NextN block (blk.45) loaded: 128 MB dense, EXL3 experts K 3/3
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.20 GB), the latent cache in 0.81 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2151 MB of the expert pool while a prompt runs (activations 1931, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.84 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.40, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.02 GB, 88-116 slots/layer (2156 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2151 MB of the expert pool while a prompt runs (activations 1931, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -408,7 +408,7 @@ glm mtp: CUDA1 the NextN block (blk.45) loaded: 128 MB dense, EXL3 experts K 3/3
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.20 GB), the latent cache in 0.81 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2151 MB of the expert pool while a prompt runs (activations 1931, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.84 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.40, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.02 GB, 88-116 slots/layer (2156 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2151 MB of the expert pool while a prompt runs (activations 1931, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -481,7 +481,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -554,7 +554,7 @@ glm pack: CUDA0 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA1 VRAM before the expert pool: 3.74 of 23.56 GB in use - dense weights 2.67, state/KV (131072 ctx) 0.31, activations 0.07, other (context, MTP, scratch, prompt path) 0.69
@@ -604,7 +604,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -655,7 +655,7 @@ glm pack: CUDA0 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -871,7 +871,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA1 VRAM before the expert pool: 3.74 of 23.56 GB in use - dense weights 2.67, state/KV (131072 ctx) 0.31, activations 0.07, other (context, MTP, scratch, prompt path) 0.69
@@ -939,7 +939,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 5 DSA layers 
 glm pack: CUDA0 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 4.11 of 23.56 GB in use - dense weights 2.91, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.80
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 layers [0,26) expert pool 18.76 GB, 73-110 slots/layer (2126 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA1 VRAM before the expert pool: 4.17 of 23.56 GB in use - dense weights 2.46, state/KV (131072 ctx) 0.26, activations 0.07, other (context, MTP, scratch, prompt path) 1.38
@@ -1009,7 +1009,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -1060,7 +1060,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -1133,7 +1133,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 32768 tokens (--prefill 32768; mixer sub-batches of 2048), borrowing 5422 MB of the expert pool while a prompt runs (activations 5201, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.76 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.67
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (5.37 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.11 GB, 88-117 slots/layer (2166 total)
 glm prefill: CUDA1 chunks of 32768 tokens (--prefill 32768; mixer sub-batches of 2048), borrowing 7304 MB of the expert pool while a prompt runs (activations 7083, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -1206,7 +1206,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 65536 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.21 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2057 MB of the expert pool while a prompt runs (activations 1837, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.71 of 23.56 GB in use - dense weights 2.71, state/KV (65536 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.16 GB, 88-118 slots/layer (2172 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2057 MB of the expert pool while a prompt runs (activations 1837, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -1279,7 +1279,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -1385,7 +1385,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -1479,7 +1479,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -1552,7 +1552,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -1625,7 +1625,7 @@ glm pack: CUDA0 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -1740,7 +1740,7 @@ glm pack: CUDA0 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 5 DSA layers in VRAM (0.09 GB), the latent cache in 0.36 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.88 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.78
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 18.99 GB, 88-116 slots/layer (2152 total)
 glm fast: CUDA0 RAM tier 41.37 GB pinned, 4689 slots
@@ -1771,7 +1771,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 5 DSA layers 
 glm pack: CUDA0 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.88 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.79
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 18.99 GB, 88-116 slots/layer (2152 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -1846,7 +1846,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -1921,7 +1921,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm fast: CUDA1 prefetch on: up to 1 of the next layer's predicted experts a layer, the copy at fetch, half the SMs' blocks, prediction ranks 1-2
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -1996,7 +1996,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm fast: CUDA1 prefetch on: up to 2 of the next layer's predicted experts a layer, the copy at route, half the SMs' blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -2069,7 +2069,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -2230,7 +2230,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm fast: CUDA1 prefetch on: up to 2 of the next layer's predicted experts a layer, the copy at route, half the SMs' blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm fast: CUDA0 slots per layer 3:92 4:91 5:100 6:97 7:92 8:114 9:107 10:117 11:94 12:109 13:105 14:98 15:90 16:116 17:111 18:101 19:103 20:115 21:111 22:116 23:88 
@@ -2310,7 +2310,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -2427,7 +2427,7 @@ glm pack: CUDA0 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -2476,7 +2476,7 @@ glm mtp: CUDA1 the NextN block (blk.45) loaded: 128 MB dense, EXL3 experts K 3/3
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.20 GB), the latent cache in 0.81 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2151 MB of the expert pool while a prompt runs (activations 1931, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.84 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.40, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.02 GB, 88-116 slots/layer (2156 total)
 glm split auto: CUDA0 (NVIDIA GeForce RTX 3090) memory 936 GB/s, 23.11 GB free
@@ -2492,7 +2492,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -2569,7 +2569,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at route, half the SMs' blocks, prediction ranks 1-6
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -2577,10 +2577,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.74 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [24,45) expert pool 19.14 GB, 81-112 slots/layer, the draft layer 98 (2169 total)
 glm fast: CUDA0 RAM tier 41.24 GB pinned, 4674 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 21 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 21 layers)
 glm fast: CUDA1 RAM tier 43.12 GB pinned, 4887 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 22 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 22 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.8 of 57.3 GB, 30 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.1 of 60.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 20% (11.5 of 57.3 GB, 33 s)
@@ -2648,7 +2648,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -2656,10 +2656,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.74 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [24,45) expert pool 19.14 GB, 81-112 slots/layer, the draft layer 98 (2169 total)
 glm fast: CUDA0 RAM tier 41.24 GB pinned, 4674 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 21 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 21 layers)
 glm fast: CUDA1 RAM tier 43.12 GB pinned, 4887 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 22 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 22 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.8 of 57.3 GB, 30 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.1 of 60.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 20% (11.5 of 57.3 GB, 33 s)
@@ -2748,7 +2748,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -2756,10 +2756,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.74 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [24,45) expert pool 19.14 GB, 81-112 slots/layer, the draft layer 98 (2169 total)
 glm fast: CUDA0 RAM tier 41.24 GB pinned, 4674 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 21 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 21 layers)
 glm fast: CUDA1 RAM tier 43.12 GB pinned, 4887 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 22 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 22 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.8 of 57.3 GB, 30 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.1 of 60.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 20% (11.5 of 57.3 GB, 33 s)
@@ -2933,7 +2933,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -3010,7 +3010,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -3018,10 +3018,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.74 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [24,45) expert pool 19.14 GB, 81-112 slots/layer, the draft layer 98 (2169 total)
 glm fast: CUDA0 RAM tier 41.24 GB pinned, 4674 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 21 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 21 layers)
 glm fast: CUDA1 RAM tier 43.12 GB pinned, 4887 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 22 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 22 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.8 of 57.3 GB, 30 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.1 of 60.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 20% (11.5 of 57.3 GB, 33 s)
@@ -3091,7 +3091,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -3099,10 +3099,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.74 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [24,45) expert pool 19.14 GB, 81-112 slots/layer, the draft layer 98 (2169 total)
 glm fast: CUDA0 RAM tier 41.24 GB pinned, 4674 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 21 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 21 layers)
 glm fast: CUDA1 RAM tier 43.12 GB pinned, 4887 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 22 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 22 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.8 of 57.3 GB, 30 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.1 of 60.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 20% (11.5 of 57.3 GB, 33 s)
@@ -3209,7 +3209,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -3217,10 +3217,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.74 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [24,45) expert pool 19.14 GB, 81-112 slots/layer, the draft layer 98 (2169 total)
 glm fast: CUDA0 RAM tier 41.24 GB pinned, 4674 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 21 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 21 layers)
 glm fast: CUDA1 RAM tier 43.12 GB pinned, 4887 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 22 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 22 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.8 of 57.3 GB, 30 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.1 of 60.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 20% (11.5 of 57.3 GB, 33 s)
@@ -3266,7 +3266,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -3274,10 +3274,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.74 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [24,45) expert pool 19.14 GB, 81-112 slots/layer, the draft layer 98 (2169 total)
 glm fast: CUDA0 RAM tier 41.24 GB pinned, 4674 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 21 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 21 layers)
 glm fast: CUDA1 RAM tier 43.12 GB pinned, 4887 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 22 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 22 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.8 of 57.3 GB, 30 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.1 of 60.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 20% (11.5 of 57.3 GB, 33 s)
@@ -3317,7 +3317,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -3325,10 +3325,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.74 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [24,45) expert pool 19.14 GB, 81-112 slots/layer, the draft layer 98 (2169 total)
 glm fast: CUDA0 RAM tier 41.24 GB pinned, 4674 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 21 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 21 layers)
 glm fast: CUDA1 RAM tier 43.12 GB pinned, 4887 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 22 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 22 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.8 of 57.3 GB, 30 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.1 of 60.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 20% (11.5 of 57.3 GB, 33 s)
@@ -3509,7 +3509,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.75 of 23.56 GB in use - dense weights 2.71, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.12 GB, 88-117 slots/layer (2167 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -3517,10 +3517,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.74 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [24,45) expert pool 19.14 GB, 81-112 slots/layer, the draft layer 98 (2169 total)
 glm fast: CUDA0 RAM tier 41.24 GB pinned, 4674 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 21 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 21 layers)
 glm fast: CUDA1 RAM tier 43.12 GB pinned, 4887 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 22 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 22 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.8 of 57.3 GB, 30 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.1 of 60.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 20% (11.5 of 57.3 GB, 33 s)
@@ -3595,7 +3595,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 32768 tokens (--prefill 32768; mixer sub-batches of 2048), borrowing 5422 MB of the expert pool while a prompt runs (activations 5201, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.61 of 23.56 GB in use - dense weights 2.59, state/KV (131072 ctx) 0.28, activations 0.07, other (context, MTP, scratch, prompt path) 0.67
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (5.47 GB) while it encodes
 glm fast: CUDA0 layers [0,23) expert pool 19.26 GB, 94-121 slots/layer (2183 total)
 glm prefill: CUDA1 chunks of 32768 tokens (--prefill 32768; mixer sub-batches of 2048), borrowing 7304 MB of the expert pool while a prompt runs (activations 7083, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -3603,10 +3603,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.90 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [23,45) expert pool 18.97 GB, 78-108 slots/layer, the draft layer 93 (2150 total)
 glm fast: CUDA0 RAM tier 40.88 GB pinned, 4633 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 20 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 20 layers)
 glm fast: CUDA1 RAM tier 51.18 GB pinned, 5801 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 23 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 23 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.5 of 54.6 GB, 35 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.3 of 62.8 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.9 of 54.6 GB, 38 s)
@@ -3665,7 +3665,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.60 of 23.56 GB in use - dense weights 2.59, state/KV (131072 ctx) 0.28, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.82 GB) while it encodes
 glm fast: CUDA0 layers [0,23) expert pool 19.27 GB, 94-121 slots/layer (2184 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -3673,7 +3673,7 @@ glm fast: CUDA1 VRAM before the expert pool: 3.89 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [23,45) expert pool 18.98 GB, 78-108 slots/layer, the draft layer 93 (2151 total)
 glm fast: CUDA0 RAM tier 38.22 GB pinned, 4332 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 20 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 20 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.5 of 54.6 GB, 2 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.9 of 54.6 GB, 5 s)
 glm fast: CUDA0 warming the expert tiers 30% (16.4 of 54.6 GB, 7 s)
@@ -3688,7 +3688,7 @@ glm fast: CUDA0 tiers warm: 5760 experts (54.6 GB) in 21 s (2.55 GB/s)
 glm fast: CUDA0 RAM-resident verified: all 5760 experts are in VRAM or pinned RAM
 glm fast: CUDA1 RAM tier 46.10 GB pinned, 5225 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 23 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 23 layers)
 glm fast: CUDA1 warming the expert tiers 10% (6.3 of 62.8 GB, 2 s)
 glm fast: CUDA1 warming the expert tiers 20% (12.6 of 62.8 GB, 4 s)
 glm fast: CUDA1 warming the expert tiers 30% (18.9 of 62.8 GB, 6 s)
@@ -3732,7 +3732,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.60 of 23.56 GB in use - dense weights 2.59, state/KV (131072 ctx) 0.28, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.82 GB) while it encodes
 glm fast: CUDA0 layers [0,23) expert pool 19.27 GB, 94-121 slots/layer (2184 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -3740,10 +3740,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.89 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [23,45) expert pool 18.98 GB, 78-108 slots/layer, the draft layer 93 (2151 total)
 glm fast: CUDA0 RAM tier 38.22 GB pinned, 4332 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 20 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 20 layers)
 glm fast: CUDA1 RAM tier 46.10 GB pinned, 5225 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 23 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 23 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.5 of 54.6 GB, 31 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.3 of 62.8 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.9 of 54.6 GB, 34 s)
@@ -3799,7 +3799,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 4096), borrowing 3746 MB of the expert pool while a prompt runs (activations 3525, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.60 of 23.56 GB in use - dense weights 2.59, state/KV (131072 ctx) 0.28, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (3.71 GB) while it encodes
 glm fast: CUDA0 layers [0,23) expert pool 19.27 GB, 94-121 slots/layer (2184 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 4096), borrowing 3746 MB of the expert pool while a prompt runs (activations 3525, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -3807,10 +3807,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.89 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [23,45) expert pool 18.98 GB, 78-108 slots/layer, the draft layer 93 (2151 total)
 glm fast: CUDA0 RAM tier 39.11 GB pinned, 4432 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 20 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 20 layers)
 glm fast: CUDA1 RAM tier 47.73 GB pinned, 5409 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 23 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 23 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.5 of 54.6 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.3 of 62.8 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.9 of 54.6 GB, 36 s)
@@ -3866,7 +3866,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.60 of 23.56 GB in use - dense weights 2.59, state/KV (131072 ctx) 0.28, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.82 GB) while it encodes
 glm fast: CUDA0 layers [0,23) expert pool 19.27 GB, 94-121 slots/layer (2184 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -3874,10 +3874,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.89 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [23,45) expert pool 18.98 GB, 78-108 slots/layer, the draft layer 93 (2151 total)
 glm fast: CUDA0 RAM tier 38.22 GB pinned, 4332 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 20 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 20 layers)
 glm fast: CUDA1 RAM tier 46.10 GB pinned, 5225 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 23 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 23 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.5 of 54.6 GB, 32 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.3 of 62.8 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.9 of 54.6 GB, 35 s)
@@ -3947,7 +3947,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.60 of 23.56 GB in use - dense weights 2.59, state/KV (131072 ctx) 0.28, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.82 GB) while it encodes
 glm fast: CUDA0 layers [0,23) expert pool 19.27 GB, 94-121 slots/layer (2184 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -3955,10 +3955,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.89 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [23,45) expert pool 18.98 GB, 78-108 slots/layer, the draft layer 93 (2151 total)
 glm fast: CUDA0 RAM tier 38.22 GB pinned, 4332 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 20 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 20 layers)
 glm fast: CUDA1 RAM tier 46.10 GB pinned, 5225 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 23 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 23 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.5 of 54.6 GB, 31 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.3 of 62.8 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.9 of 54.6 GB, 34 s)
@@ -4029,7 +4029,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.60 of 23.56 GB in use - dense weights 2.59, state/KV (131072 ctx) 0.28, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.82 GB) while it encodes
 glm fast: CUDA0 layers [0,23) expert pool 19.27 GB, 94-121 slots/layer (2184 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -4037,10 +4037,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.89 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [23,45) expert pool 18.98 GB, 78-108 slots/layer, the draft layer 93 (2151 total)
 glm fast: CUDA0 RAM tier 38.22 GB pinned, 4332 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 20 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 20 layers)
 glm fast: CUDA1 RAM tier 46.10 GB pinned, 5225 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 23 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 23 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.5 of 54.6 GB, 32 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.3 of 62.8 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.9 of 54.6 GB, 35 s)
@@ -4110,7 +4110,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.60 of 23.56 GB in use - dense weights 2.59, state/KV (131072 ctx) 0.28, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.82 GB) while it encodes
 glm fast: CUDA0 layers [0,23) expert pool 19.27 GB, 94-121 slots/layer (2184 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -4118,10 +4118,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.89 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [23,45) expert pool 18.98 GB, 78-108 slots/layer, the draft layer 93 (2151 total)
 glm fast: CUDA0 RAM tier 38.22 GB pinned, 4332 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 20 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 20 layers)
 glm fast: CUDA1 RAM tier 46.10 GB pinned, 5225 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 23 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 23 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.5 of 54.6 GB, 32 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.3 of 62.8 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.9 of 54.6 GB, 35 s)
@@ -4204,7 +4204,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.49 of 23.56 GB in use - dense weights 2.49, state/KV (131072 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.38 GB, 98-132 slots/layer (2196 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -4212,10 +4212,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.00 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.87 GB, 74-117 slots/layer, the draft layer 89 (2139 total)
 glm fast: CUDA0 RAM tier 35.42 GB pinned, 4014 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.82 GB pinned, 5533 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -4281,7 +4281,7 @@ glm pack: CUDA0 KV streaming: 32768 of 131072 positions of each of 6 DSA layers 
 glm fast: CUDA0 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.97 of 23.56 GB in use - dense weights 2.91, state/KV (131072 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.84 GB) while it encodes
 glm fast: CUDA0 layers [0,26) expert pool 18.90 GB, 73-111 slots/layer (2142 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -4289,10 +4289,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.52 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [26,45) expert pool 19.35 GB, 92-119 slots/layer, the draft layer 109 (2193 total)
 glm fast: CUDA0 RAM tier 46.79 GB pinned, 5303 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 23 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 23 layers)
 glm fast: CUDA1 RAM tier 37.44 GB pinned, 4243 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 20 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 20 layers)
 glm fast: CUDA0 warming the expert tiers 10% (6.3 of 62.8 GB, 26 s)
 glm fast: CUDA1 warming the expert tiers 10% (5.5 of 54.6 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 20% (12.6 of 62.8 GB, 30 s)
@@ -4358,7 +4358,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.28 of 23.56 GB in use - dense weights 2.28, state/KV (131072 ctx) 0.26, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,20) expert pool 19.60 GB, 111-150 slots/layer (2221 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -4366,10 +4366,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.22 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [20,45) expert pool 18.66 GB, 67-108 slots/layer, the draft layer 81 (2115 total)
 glm fast: CUDA0 RAM tier 29.74 GB pinned, 3371 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 17 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 17 layers)
 glm fast: CUDA1 RAM tier 54.43 GB pinned, 6169 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 26 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 26 layers)
 glm fast: CUDA0 warming the expert tiers 10% (4.7 of 46.4 GB, 36 s)
 glm fast: CUDA0 warming the expert tiers 20% (9.3 of 46.4 GB, 39 s)
 glm fast: CUDA1 warming the expert tiers 10% (7.1 of 70.9 GB, 4 s)
@@ -4435,7 +4435,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.60 of 23.56 GB in use - dense weights 2.59, state/KV (131072 ctx) 0.28, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.82 GB) while it encodes
 glm fast: CUDA0 layers [0,23) expert pool 19.27 GB, 94-121 slots/layer (2184 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -4443,10 +4443,10 @@ glm fast: CUDA1 VRAM before the expert pool: 3.89 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [23,45) expert pool 18.98 GB, 78-108 slots/layer, the draft layer 93 (2151 total)
 glm fast: CUDA0 RAM tier 38.22 GB pinned, 4332 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 20 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 20 layers)
 glm fast: CUDA1 RAM tier 46.10 GB pinned, 5225 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 23 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 23 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.5 of 54.6 GB, 32 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.3 of 62.8 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.9 of 54.6 GB, 35 s)
@@ -4511,7 +4511,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.49 of 23.56 GB in use - dense weights 2.49, state/KV (131072 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.38 GB, 98-132 slots/layer (2196 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -4519,10 +4519,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.00 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.87 GB, 74-117 slots/layer, the draft layer 89 (2139 total)
 glm fast: CUDA0 RAM tier 35.42 GB pinned, 4014 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.82 GB pinned, 5533 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -4622,7 +4622,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.49 of 23.56 GB in use - dense weights 2.49, state/KV (131072 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.38 GB, 98-132 slots/layer (2196 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -4630,10 +4630,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.00 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.87 GB, 74-117 slots/layer, the draft layer 89 (2139 total)
 glm fast: CUDA0 RAM tier 35.42 GB pinned, 4014 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.82 GB pinned, 5533 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -4703,7 +4703,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.49 of 23.56 GB in use - dense weights 2.49, state/KV (131072 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.38 GB, 98-132 slots/layer (2196 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -4711,10 +4711,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.00 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.87 GB, 74-117 slots/layer, the draft layer 89 (2139 total)
 glm fast: CUDA0 RAM tier 35.42 GB pinned, 4014 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.82 GB pinned, 5533 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -4781,7 +4781,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.49 of 23.56 GB in use - dense weights 2.49, state/KV (131072 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.38 GB, 98-132 slots/layer (2196 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -4789,10 +4789,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.00 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.87 GB, 74-117 slots/layer, the draft layer 89 (2139 total)
 glm fast: CUDA0 RAM tier 35.42 GB pinned, 4014 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.82 GB pinned, 5533 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -4903,7 +4903,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.49 of 23.56 GB in use - dense weights 2.49, state/KV (131072 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.38 GB, 98-132 slots/layer (2196 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -4911,10 +4911,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.00 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.87 GB, 74-117 slots/layer, the draft layer 89 (2139 total)
 glm fast: CUDA0 RAM tier 35.42 GB pinned, 4014 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.82 GB pinned, 5533 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -5025,7 +5025,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.49 of 23.56 GB in use - dense weights 2.49, state/KV (131072 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.38 GB, 98-132 slots/layer (2196 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -5033,10 +5033,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.00 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.87 GB, 74-117 slots/layer, the draft layer 89 (2139 total)
 glm fast: CUDA0 RAM tier 35.42 GB pinned, 4014 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.82 GB pinned, 5533 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 34 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -5120,7 +5120,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.49 of 23.56 GB in use - dense weights 2.49, state/KV (131072 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.38 GB, 98-132 slots/layer (2196 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -5128,10 +5128,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.00 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.87 GB, 74-117 slots/layer, the draft layer 89 (2139 total)
 glm fast: CUDA0 RAM tier 35.42 GB pinned, 4014 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.82 GB pinned, 5533 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 34 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -5297,7 +5297,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.49 of 23.56 GB in use - dense weights 2.49, state/KV (131072 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.38 GB, 98-132 slots/layer (2196 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -5305,10 +5305,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.00 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.87 GB, 74-117 slots/layer, the draft layer 89 (2139 total)
 glm fast: CUDA0 RAM tier 35.42 GB pinned, 4014 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.82 GB pinned, 5533 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -5369,7 +5369,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.49 of 23.56 GB in use - dense weights 2.49, state/KV (131072 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.38 GB, 98-132 slots/layer (2196 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -5377,10 +5377,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.00 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.87 GB, 74-117 slots/layer, the draft layer 89 (2139 total)
 glm fast: CUDA0 RAM tier 35.42 GB pinned, 4014 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.82 GB pinned, 5533 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -5528,7 +5528,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.49 of 23.56 GB in use - dense weights 2.49, state/KV (131072 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.38 GB, 98-132 slots/layer (2196 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -5536,10 +5536,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.00 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.87 GB, 74-117 slots/layer, the draft layer 89 (2139 total)
 glm fast: CUDA0 RAM tier 35.42 GB pinned, 4014 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.82 GB pinned, 5533 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -5631,7 +5631,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.49 of 23.56 GB in use - dense weights 2.49, state/KV (131072 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.38 GB, 98-132 slots/layer (2196 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -5639,10 +5639,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.00 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.87 GB, 74-117 slots/layer, the draft layer 89 (2139 total)
 glm fast: CUDA0 RAM tier 35.42 GB pinned, 4014 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.82 GB pinned, 5533 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -5753,7 +5753,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.49 of 23.56 GB in use - dense weights 2.49, state/KV (131072 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.38 GB, 98-132 slots/layer (2196 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -5761,10 +5761,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.00 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.87 GB, 74-117 slots/layer, the draft layer 89 (2139 total)
 glm fast: CUDA0 RAM tier 35.42 GB pinned, 4014 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.82 GB pinned, 5533 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -5829,7 +5829,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.49 of 23.56 GB in use - dense weights 2.49, state/KV (131072 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.38 GB, 98-132 slots/layer (2196 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -5837,10 +5837,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.00 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.87 GB, 74-117 slots/layer, the draft layer 89 (2139 total)
 glm fast: CUDA0 RAM tier 35.42 GB pinned, 4014 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.82 GB pinned, 5533 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 34 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -6165,7 +6165,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.49 of 23.56 GB in use - dense weights 2.49, state/KV (131072 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.38 GB, 98-132 slots/layer (2196 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -6173,10 +6173,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.00 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.87 GB, 74-117 slots/layer, the draft layer 89 (2139 total)
 glm fast: CUDA0 RAM tier 35.42 GB pinned, 4014 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.82 GB pinned, 5533 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -6225,7 +6225,7 @@ glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.49 of 23.56 GB in use - dense weights 2.49, state/KV (131072 ctx) 0.27, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.38 GB, 98-132 slots/layer (2196 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2091 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -6233,10 +6233,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.00 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.87 GB, 74-117 slots/layer, the draft layer 89 (2139 total)
 glm fast: CUDA0 RAM tier 35.42 GB pinned, 4014 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.82 GB pinned, 5533 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 34 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -6335,7 +6335,7 @@ glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 8 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.57 of 23.56 GB in use - dense weights 2.49, state/KV (262144 ctx) 0.35, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.30 GB, 98-132 slots/layer (2187 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -6343,10 +6343,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.12 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.76 GB, 73-116 slots/layer, the draft layer 88 (2126 total)
 glm fast: CUDA0 RAM tier 35.50 GB pinned, 4023 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.93 GB pinned, 5546 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 34 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -11036,7 +11036,7 @@ glm pack: CUDA0 EXL3: 17 safetensors, 268 matrices, 43 expert layers
 glm mtp: CUDA1 the NextN block (blk.45) loaded: 128 MB dense, EXL3 experts K 3/3/3
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2023 MB of the expert pool while a prompt runs (activations 1803, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.77 of 23.56 GB in use - dense weights 2.71, state/KV (32768 ctx) 0.33, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.96 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 19.10 GB, 88-117 slots/layer (2165 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2023 MB of the expert pool while a prompt runs (activations 1803, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -11083,7 +11083,7 @@ glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 2 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.57 of 23.56 GB in use - dense weights 2.49, state/KV (262144 ctx) 0.35, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.30 GB, 98-132 slots/layer (2187 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -11091,10 +11091,10 @@ glm fast: CUDA1 VRAM before the expert pool: 4.12 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [22,45) expert pool 18.76 GB, 73-116 slots/layer, the draft layer 88 (2126 total)
 glm fast: CUDA0 RAM tier 35.50 GB pinned, 4023 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.93 GB pinned, 5546 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -11403,7 +11403,7 @@ glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 2 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.57 of 23.56 GB in use - dense weights 2.49, state/KV (262144 ctx) 0.35, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.30 GB, 98-132 slots/layer (2187 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -11412,11 +11412,11 @@ glm fast: CUDA1 layers [22,45) expert pool 18.76 GB, 73-116 slots/layer, the dra
 glm fast: CUDA0 RAM tier 35.50 GB pinned, 4023 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
 glm fast: CUDA0 light misses left out: weight share < 0.140 on layers 23+ (changes the answers)
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.93 GB pinned, 5546 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
 glm fast: CUDA1 light misses left out: weight share < 0.140 on layers 23+ (changes the answers)
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 34 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -11481,7 +11481,7 @@ glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 2 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.57 of 23.56 GB in use - dense weights 2.49, state/KV (262144 ctx) 0.35, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.30 GB, 98-132 slots/layer (2187 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -11490,11 +11490,11 @@ glm fast: CUDA1 layers [22,45) expert pool 18.76 GB, 73-116 slots/layer, the dra
 glm fast: CUDA0 RAM tier 35.50 GB pinned, 4023 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
 glm fast: CUDA0 light misses left out: weight share < 0.140 on layers 23+ (changes the answers)
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.93 GB pinned, 5546 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
 glm fast: CUDA1 light misses left out: weight share < 0.140 on layers 23+ (changes the answers)
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -11559,7 +11559,7 @@ glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 2 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.68 of 23.56 GB in use - dense weights 2.59, state/KV (262144 ctx) 0.35, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.82 GB) while it encodes
 glm fast: CUDA0 layers [0,23) expert pool 19.19 GB, 93-121 slots/layer (2175 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -11568,11 +11568,11 @@ glm fast: CUDA1 layers [23,45) expert pool 18.86 GB, 78-107 slots/layer, the dra
 glm fast: CUDA0 RAM tier 38.30 GB pinned, 4341 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
 glm fast: CUDA0 light misses left out: weight share < 0.140 on layers 23+ (changes the answers)
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 20 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 20 layers)
 glm fast: CUDA1 RAM tier 46.22 GB pinned, 5238 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
 glm fast: CUDA1 light misses left out: weight share < 0.140 on layers 23+ (changes the answers)
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 23 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 23 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.5 of 54.6 GB, 32 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.3 of 62.8 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.9 of 54.6 GB, 35 s)
@@ -11637,7 +11637,7 @@ glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 2 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.57 of 23.56 GB in use - dense weights 2.49, state/KV (262144 ctx) 0.35, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.30 GB, 98-132 slots/layer (2187 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -11646,11 +11646,11 @@ glm fast: CUDA1 layers [22,45) expert pool 18.76 GB, 73-116 slots/layer, the dra
 glm fast: CUDA0 RAM tier 35.50 GB pinned, 4023 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
 glm fast: CUDA0 light misses left out: weight share < 0.140 on layers 23+ (changes the answers)
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.93 GB pinned, 5546 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
 glm fast: CUDA1 light misses left out: weight share < 0.140 on layers 23+ (changes the answers)
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -11715,7 +11715,7 @@ glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 2 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.57 of 23.56 GB in use - dense weights 2.49, state/KV (262144 ctx) 0.35, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 layers [0,22) expert pool 19.30 GB, 98-132 slots/layer (2187 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA1 VRAM before the expert pool: 4.12 of 23.56 GB in use - dense weights 2.89, state/KV (262144 ctx) 0.46, activations 0.07, other (context, MTP, scratch, prompt path) 0.70
@@ -11944,7 +11944,7 @@ glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 2 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.57 of 23.56 GB in use - dense weights 2.49, state/KV (262144 ctx) 0.35, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.30 GB, 98-132 slots/layer (2187 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -11953,11 +11953,11 @@ glm fast: CUDA1 layers [22,45) expert pool 18.76 GB, 73-116 slots/layer, the dra
 glm fast: CUDA0 RAM tier 35.50 GB pinned, 4023 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
 glm fast: CUDA0 light misses left out: weight share < 0.140 on layers 23+ (changes the answers)
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 19 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 19 layers)
 glm fast: CUDA1 RAM tier 48.93 GB pinned, 5546 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
 glm fast: CUDA1 light misses left out: weight share < 0.140 on layers 23+ (changes the answers)
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/project-maya/data/expert-usage-glm.txt, 24 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/project-maya/data/expert-usage-glm.txt, 24 layers)
 glm fast: CUDA0 warming the expert tiers 10% (5.2 of 51.8 GB, 33 s)
 glm fast: CUDA1 warming the expert tiers 10% (6.6 of 65.5 GB, 4 s)
 glm fast: CUDA0 warming the expert tiers 20% (10.4 of 51.8 GB, 36 s)
@@ -12113,7 +12113,7 @@ glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 2 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.57 of 23.56 GB in use - dense weights 2.49, state/KV (262144 ctx) 0.35, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.30 GB, 98-132 slots/layer (2187 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -12166,7 +12166,7 @@ glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 2 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.57 of 23.56 GB in use - dense weights 2.49, state/KV (262144 ctx) 0.35, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.30 GB, 98-132 slots/layer (2187 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
@@ -12219,7 +12219,7 @@ glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 7 DSA layers 
 glm fast: CUDA1 prefetch on: up to 2 of the next layer's predicted experts a layer, the copy at fetch, 8 blocks, prediction ranks 1-4
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.57 of 23.56 GB in use - dense weights 2.49, state/KV (262144 ctx) 0.35, activations 0.07, other (context, MTP, scratch, prompt path) 0.66
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.85 GB) while it encodes
 glm fast: CUDA0 layers [0,22) expert pool 19.30 GB, 98-132 slots/layer (2187 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2159 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 108, prestage 0: 0 experts); disk landing ring 96 experts (867 MB pinned)

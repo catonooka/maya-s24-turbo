@@ -121,7 +121,7 @@ glm fast: CUDA0 the vision encoder borrows the pool's tail (6.40 GB) while it en
 glm fast: CUDA0 layers [0,45) expert pool 14.75 GB, 53-53 slots/layer (2226 total)
 glm fast: CUDA0 RAM tier 77.83 GB pinned, 11750 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/Maya-S24/pack/expert_usage.txt, 42 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/Maya-S24/pack/expert_usage.txt, 42 layers)
 glm fast: CUDA0 warming the expert tiers 10% (8.6 of 86.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 20% (17.2 of 86.0 GB, 5 s)
 glm fast: CUDA0 warming the expert tiers 30% (25.8 of 86.0 GB, 8 s)
@@ -199,7 +199,7 @@ glm split auto: layers [0, 25) on CUDA0, [25, 45) on CUDA1 - a token 11.4 ms pre
 glm mtp: CUDA1 the NextN block (blk.45) loaded: 142 MB dense, experts q2_K/q3_K
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2001 MB of the expert pool while a prompt runs (activations 1803, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.80 of 23.56 GB in use - dense weights 2.77, state/KV (32768 ctx) 0.34, activations 0.06, other (context, MTP, scratch, prompt path) 0.63
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 layers [0,25) expert pool 19.07 GB, 109-154 slots/layer (2875 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2001 MB of the expert pool while a prompt runs (activations 1803, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA1 VRAM before the expert pool: 3.54 of 23.56 GB in use - dense weights 2.47, state/KV (32768 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.68
@@ -215,7 +215,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.86 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.88 of 23.56 GB in use - dense weights 2.77, state/KV (262144 ctx) 0.41, activations 0.06, other (context, MTP, scratch, prompt path) 0.64
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.77 GB) while it encodes
 glm fast: CUDA0 layers [0,25) expert pool 18.99 GB, 109-152 slots/layer (2863 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
@@ -279,7 +279,7 @@ glm fast: CUDA0 the vision encoder's 2.77 GB are back in the expert pool
 glm stat: decode 26.33 ms/tok (37.98 tok/s) | vram hit 72.50% | ram fetches 60.11/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 9.11/tok | cpu lane 40.11/tok in 14.30 ms/tok | prompt 0.8 ms/tok | vram 5462/5726 ram 6870/8374
 glm spec: 5 of 7 drafts accepted (71.4%)
 glm kv: KV streaming: 83.93% of 64095 block reads hit VRAM, 21.4 MiB read from RAM
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791916779113-1.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791916779113-1.bin.tmp)
 glm stat: decode 21.31 ms/tok (46.92 tok/s) | vram hit 88.27% | ram fetches 32.25/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 6.25/tok | cpu lane 13.50/tok in 4.56 ms/tok | prompt 24.6 ms/tok | vram 5599/5726 ram 6774/8374
 glm spec: 0 of 2 drafts accepted (0.0%)
 glm kv: KV streaming: 90.02% of 591 block reads hit VRAM, 0.1 MiB read from RAM
@@ -323,7 +323,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.86 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.88 of 23.56 GB in use - dense weights 2.77, state/KV (262144 ctx) 0.41, activations 0.06, other (context, MTP, scratch, prompt path) 0.64
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.77 GB) while it encodes
 glm fast: CUDA0 layers [0,25) expert pool 18.99 GB, 109-152 slots/layer (2863 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
@@ -413,7 +413,7 @@ glm kv: KV streaming: 94.52% of 3285 block reads hit VRAM, 0.4 MiB read from RAM
 glm stat: decode 24.79 ms/tok (40.34 tok/s) | vram hit 75.52% | ram fetches 55.56/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 33.56/tok | cpu lane 33.67/tok in 11.50 ms/tok | prompt 0.8 ms/tok | vram 5610/5726 ram 6750/8374
 glm spec: 5 of 7 drafts accepted (71.4%)
 glm kv: KV streaming: 83.11% of 64095 block reads hit VRAM, 22.5 MiB read from RAM
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791917383802-1.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791917383802-1.bin.tmp)
 glm stat: decode 18.61 ms/tok (53.74 tok/s) | vram hit 90.26% | ram fetches 26.25/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 9.00/tok | cpu lane 11.75/tok in 3.94 ms/tok | prompt 23.7 ms/tok | vram 5603/5726 ram 6785/8374
 glm spec: 0 of 2 drafts accepted (0.0%)
 glm kv: KV streaming: 90.02% of 591 block reads hit VRAM, 0.1 MiB read from RAM
@@ -425,7 +425,7 @@ glm split auto: layers [0, 25) on CUDA0, [25, 45) on CUDA1 - a token 11.4 ms pre
 glm mtp: CUDA1 the NextN block (blk.45) loaded: 142 MB dense, experts q2_K/q3_K
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2001 MB of the expert pool while a prompt runs (activations 1803, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.80 of 23.56 GB in use - dense weights 2.77, state/KV (32768 ctx) 0.34, activations 0.06, other (context, MTP, scratch, prompt path) 0.63
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 layers [0,25) expert pool 19.07 GB, 109-154 slots/layer (2875 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2001 MB of the expert pool while a prompt runs (activations 1803, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA1 VRAM before the expert pool: 3.54 of 23.56 GB in use - dense weights 2.47, state/KV (32768 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.68
@@ -478,7 +478,7 @@ glm split auto: the host reads RAM at 64 GB/s (a part's CPU lane: 32); the route
 glm split auto: layers [0, 24) on CUDA0, [24, 45) on CUDA1 - a token 20.4 ms predicted (CUDA0 10.1 ms, 135 slots a layer | CUDA1 10.3 ms, 132 slots a layer), 84% of the routed experts in VRAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2001 MB of the expert pool while a prompt runs (activations 1803, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.83 of 23.56 GB in use - dense weights 2.68, state/KV (32768 ctx) 0.33, activations 0.06, other (context, MTP, scratch, prompt path) 0.76
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 layers [0,24) expert pool 19.04 GB, 114-161 slots/layer (2868 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2001 MB of the expert pool while a prompt runs (activations 1803, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA1 VRAM before the expert pool: 4.26 of 23.56 GB in use - dense weights 2.56, state/KV (32768 ctx) 0.28, activations 0.06, other (context, MTP, scratch, prompt path) 1.36
@@ -535,7 +535,7 @@ glm split auto: layers [0, 25) on CUDA0, [25, 45) on CUDA1 - a token 11.3 ms pre
 glm mtp: CUDA1 the NextN block (blk.45) loaded: 142 MB dense, experts q2_K/q3_K
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2001 MB of the expert pool while a prompt runs (activations 1803, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.80 of 23.56 GB in use - dense weights 2.77, state/KV (32768 ctx) 0.34, activations 0.06, other (context, MTP, scratch, prompt path) 0.63
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 layers [0,25) expert pool 19.07 GB, 109-154 slots/layer (2875 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2001 MB of the expert pool while a prompt runs (activations 1803, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA1 VRAM before the expert pool: 3.54 of 23.56 GB in use - dense weights 2.47, state/KV (32768 ctx) 0.32, activations 0.07, other (context, MTP, scratch, prompt path) 0.68
@@ -692,7 +692,7 @@ glm split auto: layers [0, 25) on CUDA0, [25, 45) on CUDA1 - a token 11.4 ms pre
 glm mtp: CUDA1 the NextN block (blk.45) loaded: 142 MB dense, experts q2_K/q3_K
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2001 MB of the expert pool while a prompt runs (activations 1803, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.80 of 23.56 GB in use - dense weights 2.77, state/KV (32768 ctx) 0.34, activations 0.06, other (context, MTP, scratch, prompt path) 0.63
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.77 GB) while it encodes
 glm fast: CUDA0 layers [0,25) expert pool 19.07 GB, 109-154 slots/layer (2875 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2001 MB of the expert pool while a prompt runs (activations 1803, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
@@ -737,7 +737,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.86 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.88 of 23.56 GB in use - dense weights 2.77, state/KV (262144 ctx) 0.41, activations 0.06, other (context, MTP, scratch, prompt path) 0.64
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.77 GB) while it encodes
 glm fast: CUDA0 layers [0,25) expert pool 18.99 GB, 109-152 slots/layer (2863 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
@@ -810,7 +810,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.86 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.88 of 23.56 GB in use - dense weights 2.77, state/KV (262144 ctx) 0.41, activations 0.06, other (context, MTP, scratch, prompt path) 0.64
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.77 GB) while it encodes
 glm fast: CUDA0 layers [0,25) expert pool 18.99 GB, 109-152 slots/layer (2863 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
@@ -883,7 +883,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 131072 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.43 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2069 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.79 of 23.56 GB in use - dense weights 2.77, state/KV (131072 ctx) 0.32, activations 0.06, other (context, MTP, scratch, prompt path) 0.63
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.77 GB) while it encodes
 glm fast: CUDA0 layers [0,25) expert pool 19.08 GB, 109-154 slots/layer (2877 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2069 MB of the expert pool while a prompt runs (activations 1871, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
@@ -956,7 +956,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.86 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.89 of 23.56 GB in use - dense weights 2.77, state/KV (262144 ctx) 0.41, activations 0.06, other (context, MTP, scratch, prompt path) 0.64
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.77 GB) while it encodes
 glm fast: CUDA0 layers [0,25) expert pool 18.98 GB, 109-152 slots/layer (2862 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
@@ -1025,7 +1025,7 @@ glm kv: KV streaming: 91.94% of 2009 block reads hit VRAM, 0.3 MiB read from RAM
 glm stat: decode 25.32 ms/tok (39.50 tok/s) | vram hit 74.09% | ram fetches 27.78/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 4.11/tok | cpu lane 66.67/tok in 22.15 ms/tok | prompt 0.8 ms/tok | vram 5534/5725 ram 6828/8375
 glm spec: 5 of 7 drafts accepted (71.4%)
 glm kv: KV streaming: 82.08% of 64095 block reads hit VRAM, 23.8 MiB read from RAM
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791919354748-1.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791919354748-1.bin.tmp)
 glm stat: decode 19.15 ms/tok (52.21 tok/s) | vram hit 89.36% | ram fetches 11.75/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 1.25/tok | cpu lane 29.75/tok in 10.20 ms/tok | prompt 23.4 ms/tok | vram 5596/5725 ram 6794/8375
 glm spec: 0 of 2 drafts accepted (0.0%)
 glm kv: KV streaming: 90.02% of 591 block reads hit VRAM, 0.1 MiB read from RAM
@@ -1070,7 +1070,7 @@ glm multi: CUDA0 4 sequence states: the first for 262144 tokens (0.44 GB), 3 mor
 glm multi: CUDA1 4 sequence states: the first for 262144 tokens (0.43 GB), 3 more for 262144 (1.55 GB in all, with every sequence's snapshot)
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 5.47 of 23.56 GB in use - dense weights 2.77, state/KV (262144 ctx) 0.41, activations 0.06, other (context, MTP, scratch, prompt path) 2.22
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.77 GB) while it encodes
 glm fast: CUDA0 layers [0,25) expert pool 17.40 GB, 97-140 slots/layer (2625 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
@@ -1132,7 +1132,7 @@ glm multi: CUDA0 4 sequence states: the first for 262144 tokens (0.44 GB), 3 mor
 glm multi: CUDA1 4 sequence states: the first for 262144 tokens (0.43 GB), 3 more for 32768 (1.02 GB in all, with every sequence's snapshot)
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 4.95 of 23.56 GB in use - dense weights 2.77, state/KV (262144 ctx) 0.41, activations 0.06, other (context, MTP, scratch, prompt path) 1.71
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.77 GB) while it encodes
 glm fast: CUDA0 layers [0,25) expert pool 17.92 GB, 102-145 slots/layer (2702 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
@@ -1192,7 +1192,7 @@ glm pack: CUDA0 KV streaming: 32768 of 262144 positions of each of 6 DSA layers 
 glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.86 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.88 of 23.56 GB in use - dense weights 2.77, state/KV (262144 ctx) 0.41, activations 0.06, other (context, MTP, scratch, prompt path) 0.64
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.77 GB) while it encodes
 glm fast: CUDA0 layers [0,25) expert pool 18.99 GB, 109-152 slots/layer (2863 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
@@ -1276,7 +1276,7 @@ glm kv: KV streaming: 99.95% of 176354826 block reads hit VRAM, 170.8 MiB read f
 glm stat: decode 20.72 ms/tok (48.27 tok/s) | vram hit 81.44% | ram fetches 20.76/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 11.08/tok | cpu lane 48.96/tok in 15.77 ms/tok | prompt 0.3 ms/tok | vram 5599/5726 ram 6781/8374
 glm spec: 1363 of 1664 drafts accepted (81.9%)
 glm kv: KV streaming: 99.95% of 187534341 block reads hit VRAM, 180.0 MiB read from RAM
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791948235470-1.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791948235470-1.bin.tmp)
 glm stat: decode 22.63 ms/tok (44.19 tok/s) | vram hit 79.69% | ram fetches 24.58/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 13.33/tok | cpu lane 56.39/tok in 18.94 ms/tok | prompt 19.5 ms/tok | vram 5599/5726 ram 6784/8374
 glm spec: 95 of 140 drafts accepted (67.9%)
 glm kv: KV streaming: 99.03% of 58933 block reads hit VRAM, 1.2 MiB read from RAM
@@ -1342,7 +1342,7 @@ glm kv: KV streaming: 96.63% of 3208 block reads hit VRAM, 0.2 MiB read from RAM
 glm stat: decode 22.67 ms/tok (44.11 tok/s) | vram hit 75.52% | ram fetches 24.60/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 9.50/tok | cpu lane 55.50/tok in 19.46 ms/tok | prompt 0.7 ms/tok | vram 5550/5726 ram 6818/8374
 glm spec: 8 of 8 drafts accepted (100.0%)
 glm kv: KV streaming: 82.95% of 64095 block reads hit VRAM, 22.7 MiB read from RAM
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791948328342-2.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791948328342-2.bin.tmp)
 glm stat: decode 19.90 ms/tok (50.24 tok/s) | vram hit 83.47% | ram fetches 19.24/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 14.48/tok | cpu lane 44.62/tok in 15.26 ms/tok | prompt 26.3 ms/tok | vram 5602/5726 ram 6790/8374
 glm spec: 13 of 19 drafts accepted (68.4%)
 glm kv: KV streaming: 95.70% of 3049 block reads hit VRAM, 0.3 MiB read from RAM
@@ -1411,14 +1411,14 @@ glm kv: KV streaming: 96.63% of 3208 block reads hit VRAM, 0.2 MiB read from RAM
 glm stat: decode 19.98 ms/tok (50.05 tok/s) | vram hit 80.53% | ram fetches 19.40/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 10.90/tok | cpu lane 44.30/tok in 15.11 ms/tok | prompt 0.7 ms/tok | vram 5549/5726 ram 6810/8374
 glm spec: 8 of 8 drafts accepted (100.0%)
 glm kv: KV streaming: 83.14% of 64095 block reads hit VRAM, 22.4 MiB read from RAM
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791948824771-3.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791948824771-3.bin.tmp)
 glm stat: decode 19.37 ms/tok (51.62 tok/s) | vram hit 81.58% | ram fetches 20.14/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 15.62/tok | cpu lane 46.38/tok in 15.75 ms/tok | prompt 26.4 ms/tok | vram 5600/5726 ram 6785/8374
 glm spec: 16 of 19 drafts accepted (84.2%)
 glm kv: KV streaming: 95.47% of 2893 block reads hit VRAM, 0.3 MiB read from RAM
 glm stat: decode 21.24 ms/tok (47.09 tok/s) | vram hit 82.33% | ram fetches 19.33/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 10.07/tok | cpu lane 46.06/tok in 14.74 ms/tok | prompt 0.7 ms/tok | vram 5605/5726 ram 6779/8374
 glm spec: 2503 of 2940 drafts accepted (85.1%)
 glm kv: KV streaming: 97.26% of 19449057 block reads hit VRAM, 1105.7 MiB read from RAM
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791949013941-4.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791949013941-4.bin.tmp)
 glm stat: decode 21.38 ms/tok (46.77 tok/s) | vram hit 81.37% | ram fetches 22.13/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 11.42/tok | cpu lane 52.06/tok in 17.03 ms/tok | prompt 19.0 ms/tok | vram 5604/5726 ram 6778/8374
 glm spec: 112 of 164 drafts accepted (68.3%)
 glm kv: KV streaming: 99.15% of 75859 block reads hit VRAM, 1.3 MiB read from RAM
@@ -1484,14 +1484,14 @@ glm kv: KV streaming: 96.63% of 3208 block reads hit VRAM, 0.2 MiB read from RAM
 glm stat: decode 21.07 ms/tok (47.47 tok/s) | vram hit 78.51% | ram fetches 20.90/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 7.80/tok | cpu lane 49.40/tok in 17.09 ms/tok | prompt 0.7 ms/tok | vram 5541/5726 ram 6812/8374
 glm spec: 8 of 8 drafts accepted (100.0%)
 glm kv: KV streaming: 83.10% of 64095 block reads hit VRAM, 22.5 MiB read from RAM
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791949109834-5.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791949109834-5.bin.tmp)
 glm stat: decode 21.13 ms/tok (47.33 tok/s) | vram hit 80.55% | ram fetches 22.95/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 14.67/tok | cpu lane 52.19/tok in 17.46 ms/tok | prompt 26.7 ms/tok | vram 5598/5726 ram 6782/8374
 glm spec: 13 of 19 drafts accepted (68.4%)
 glm kv: KV streaming: 95.70% of 3049 block reads hit VRAM, 0.3 MiB read from RAM
 glm stat: decode 19.89 ms/tok (50.28 tok/s) | vram hit 78.67% | ram fetches 23.26/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 13.27/tok | cpu lane 53.13/tok in 16.72 ms/tok | prompt 0.8 ms/tok | vram 5616/5726 ram 6747/8374
 glm spec: 4779 of 5196 drafts accepted (92.0%)
 glm kv: KV streaming: 99.63% of 33268671 block reads hit VRAM, 254.4 MiB read from RAM
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791952036238-6.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791952036238-6.bin.tmp)
 glm stat: decode 34.36 ms/tok (29.10 tok/s) | vram hit 55.27% | ram fetches 44.40/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 23.60/tok | cpu lane 110.20/tok in 37.27 ms/tok | prompt 24.8 ms/tok | vram 5620/5726 ram 6741/8374
 glm spec: 2 of 3 drafts accepted (66.7%)
 glm kv: KV streaming: 82.10% of 704 block reads hit VRAM, 0.3 MiB read from RAM
@@ -1638,7 +1638,7 @@ glm kv: KV streaming: 99.95% of 96108568 block reads hit VRAM, 90.2 MiB read fro
 glm stat: decode 20.13 ms/tok (49.67 tok/s) | vram hit 84.62% | ram fetches 17.61/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 7.59/tok | cpu lane 42.65/tok in 13.57 ms/tok | prompt 1.7 ms/tok | vram 5599/5726 ram 6781/8374
 glm spec: 11653 of 15998 drafts accepted (72.8%)
 glm kv: KV streaming: 99.97% of 208033658 block reads hit VRAM, 115.2 MiB read from RAM
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791963706053-7.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791963706053-7.bin.tmp)
 glm stat: decode 18.28 ms/tok (54.71 tok/s) | vram hit 84.79% | ram fetches 16.39/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 6.46/tok | cpu lane 39.80/tok in 12.53 ms/tok | prompt 1.3 ms/tok | vram 5601/5726 ram 6781/8374
 glm spec: 13684 of 15998 drafts accepted (85.5%)
 glm kv: KV streaming: 99.94% of 105569715 block reads hit VRAM, 140.5 MiB read from RAM
@@ -1649,7 +1649,7 @@ glm fast: CUDA0 2.77 GB lent to the vision encoder (337 experts moved to colder 
 load: special_eot_id is not in special_eog_ids - the tokenizer config may be incorrect
 load: special_eom_id is not in special_eog_ids - the tokenizer config may be incorrect
 glm fast: CUDA0 the vision encoder's 2.77 GB are back in the expert pool
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791964478652-8.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791964478652-8.bin.tmp)
 glm stat: decode 18.60 ms/tok (53.77 tok/s) | vram hit 84.86% | ram fetches 16.52/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 8.27/tok | cpu lane 40.47/tok in 12.98 ms/tok | prompt 2.7 ms/tok | vram 5606/5726 ram 6772/8374
 glm spec: 680 of 835 drafts accepted (81.4%)
 glm kv: KV streaming: 99.86% of 3997445 block reads hit VRAM, 11.7 MiB read from RAM
@@ -1662,7 +1662,7 @@ glm kv: KV streaming: 99.71% of 206402510 block reads hit VRAM, 1227.4 MiB read 
 glm stat: decode 20.81 ms/tok (48.05 tok/s) | vram hit 77.48% | ram fetches 24.50/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 13.91/tok | cpu lane 55.30/tok in 18.21 ms/tok | prompt 0.3 ms/tok | vram 5611/5726 ram 6770/8374
 glm spec: 1190 of 1266 drafts accepted (94.0%)
 glm kv: KV streaming: 99.70% of 214463424 block reads hit VRAM, 1341.0 MiB read from RAM
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791966025376-9.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791966025376-9.bin.tmp)
 glm stat: decode 21.80 ms/tok (45.87 tok/s) | vram hit 74.50% | ram fetches 27.91/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 16.67/tok | cpu lane 59.85/tok in 20.62 ms/tok | prompt 0.8 ms/tok | vram 5621/5726 ram 6755/8374
 glm spec: 52 of 53 drafts accepted (98.1%)
 glm kv: KV streaming: 90.70% of 344049 block reads hit VRAM, 66.4 MiB read from RAM
@@ -1673,14 +1673,14 @@ glm fast: CUDA0 2.77 GB lent to the vision encoder (367 experts moved to colder 
 load: special_eot_id is not in special_eog_ids - the tokenizer config may be incorrect
 load: special_eom_id is not in special_eog_ids - the tokenizer config may be incorrect
 glm fast: CUDA0 the vision encoder's 2.77 GB are back in the expert pool
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791966207586-10.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791966207586-10.bin.tmp)
 glm stat: decode 20.03 ms/tok (49.91 tok/s) | vram hit 83.01% | ram fetches 19.18/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 11.12/tok | cpu lane 45.68/tok in 14.61 ms/tok | prompt 1.5 ms/tok | vram 5607/5726 ram 6782/8374
 glm spec: 546 of 697 drafts accepted (78.3%)
 glm kv: KV streaming: 99.78% of 4768042 block reads hit VRAM, 21.5 MiB read from RAM
 glm stat: decode 27.91 ms/tok (35.83 tok/s) | vram hit 60.42% | ram fetches 40.23/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 16.92/tok | cpu lane 96.04/tok in 31.33 ms/tok | prompt 0.8 ms/tok | vram 5611/5726 ram 6768/8374
 glm spec: 23 of 24 drafts accepted (95.8%)
 glm kv: KV streaming: 81.41% of 165615 block reads hit VRAM, 63.9 MiB read from RAM
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791966418311-11.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791966418311-11.bin.tmp)
 glm stat: decode 23.66 ms/tok (42.27 tok/s) | vram hit 85.56% | ram fetches 15.49/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 9.15/tok | cpu lane 38.60/tok in 19.95 ms/tok | prompt 1.5 ms/tok | vram 5607/5726 ram 6789/8374
 glm spec: 456 of 554 drafts accepted (82.3%)
 glm kv: KV streaming: 99.74% of 3725109 block reads hit VRAM, 20.5 MiB read from RAM
@@ -1691,7 +1691,7 @@ glm fast: CUDA0 2.77 GB lent to the vision encoder (372 experts moved to colder 
 load: special_eot_id is not in special_eog_ids - the tokenizer config may be incorrect
 load: special_eom_id is not in special_eog_ids - the tokenizer config may be incorrect
 glm fast: CUDA0 the vision encoder's 2.77 GB are back in the expert pool
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791967184648-12.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791967184648-12.bin.tmp)
 glm stat: decode 21.55 ms/tok (46.41 tok/s) | vram hit 83.50% | ram fetches 18.14/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 10.27/tok | cpu lane 43.73/tok in 17.73 ms/tok | prompt 2.3 ms/tok | vram 5608/5726 ram 6781/8374
 glm spec: 604 of 735 drafts accepted (82.2%)
 glm kv: KV streaming: 99.85% of 3929476 block reads hit VRAM, 12.4 MiB read from RAM
@@ -1716,7 +1716,7 @@ glm fast: CUDA0 2.77 GB lent to the vision encoder (383 experts moved to colder 
 load: special_eot_id is not in special_eog_ids - the tokenizer config may be incorrect
 load: special_eom_id is not in special_eog_ids - the tokenizer config may be incorrect
 glm fast: CUDA0 the vision encoder's 2.77 GB are back in the expert pool
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791969053274-13.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791969053274-13.bin.tmp)
 glm stat: decode 18.95 ms/tok (52.76 tok/s) | vram hit 85.87% | ram fetches 15.43/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 7.63/tok | cpu lane 38.75/tok in 12.33 ms/tok | prompt 1.5 ms/tok | vram 5608/5726 ram 6782/8374
 glm spec: 664 of 857 drafts accepted (77.5%)
 glm kv: KV streaming: 99.82% of 5881701 block reads hit VRAM, 22.4 MiB read from RAM
@@ -1769,7 +1769,7 @@ glm fast: CUDA0 2.77 GB lent to the vision encoder (339 experts moved to colder 
 load: special_eot_id is not in special_eog_ids - the tokenizer config may be incorrect
 load: special_eom_id is not in special_eog_ids - the tokenizer config may be incorrect
 glm fast: CUDA0 the vision encoder's 2.77 GB are back in the expert pool
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791983367301-14.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791983367301-14.bin.tmp)
 glm stat: decode 19.82 ms/tok (50.45 tok/s) | vram hit 84.99% | ram fetches 16.93/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 8.02/tok | cpu lane 41.59/tok in 13.43 ms/tok | prompt 1.5 ms/tok | vram 5602/5726 ram 6777/8374
 glm spec: 927 of 1255 drafts accepted (73.9%)
 glm kv: KV streaming: 99.86% of 8746017 block reads hit VRAM, 25.0 MiB read from RAM
@@ -1878,7 +1878,7 @@ glm split auto: layers [0, 25) on CUDA0, [25, 45) on CUDA1 - a token 11.9 ms pre
 glm mtp: CUDA1 the NextN block (blk.45) loaded: 142 MB dense, experts q2_K/q3_K
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2001 MB of the expert pool while a prompt runs (activations 1803, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.81 of 23.56 GB in use - dense weights 2.77, state/KV (32768 ctx) 0.34, activations 0.06, other (context, MTP, scratch, prompt path) 0.64
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.77 GB) while it encodes
 glm fast: CUDA0 layers [0,25) expert pool 19.06 GB, 109-153 slots/layer (2873 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2001 MB of the expert pool while a prompt runs (activations 1803, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
@@ -1895,7 +1895,7 @@ glm pack: CUDA0 KV streaming: 32768 of 262144 positions of each of 6 DSA layers 
 glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.86 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.90 of 23.56 GB in use - dense weights 2.77, state/KV (262144 ctx) 0.41, activations 0.06, other (context, MTP, scratch, prompt path) 0.65
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.91 GB) while it encodes
 glm fast: CUDA0 layers [0,25) expert pool 18.98 GB, 109-152 slots/layer (2861 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
@@ -2137,7 +2137,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.86 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.90 of 23.56 GB in use - dense weights 2.77, state/KV (262144 ctx) 0.41, activations 0.06, other (context, MTP, scratch, prompt path) 0.65
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.91 GB) while it encodes
 glm fast: CUDA0 layers [0,25) expert pool 18.98 GB, 109-152 slots/layer (2861 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
@@ -2210,7 +2210,7 @@ glm kv: KV streaming: 94.39% of 3207 block reads hit VRAM, 0.4 MiB read from RAM
 glm stat: decode 23.92 ms/tok (41.81 tok/s) | vram hit 82.13% | ram fetches 17.33/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 2.67/tok | cpu lane 47.78/tok in 15.70 ms/tok | prompt 0.8 ms/tok | vram 5524/5723 ram 6830/8399
 glm spec: 5 of 7 drafts accepted (71.4%)
 glm kv: KV streaming: 81.40% of 64095 block reads hit VRAM, 24.7 MiB read from RAM
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1792299934718-1.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1792299934718-1.bin.tmp)
 glm stat: decode 15.74 ms/tok (63.54 tok/s) | vram hit 92.40% | ram fetches 6.33/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 1.67/tok | cpu lane 20.00/tok in 6.63 ms/tok | prompt 20.3 ms/tok | vram 5594/5723 ram 6786/8399
 glm spec: 0 of 1 drafts accepted (0.0%)
 glm kv: KV streaming: 89.24% of 502 block reads hit VRAM, 0.1 MiB read from RAM
@@ -2258,7 +2258,7 @@ glm kv: KV streaming: 94.21% of 3004 block reads hit VRAM, 0.4 MiB read from RAM
 glm stat: decode 23.26 ms/tok (43.00 tok/s) | vram hit 82.90% | ram fetches 17.56/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 13.00/tok | cpu lane 44.78/tok in 15.62 ms/tok | prompt 0.8 ms/tok | vram 5528/5723 ram 6819/8399
 glm spec: 5 of 7 drafts accepted (71.4%)
 glm kv: KV streaming: 82.20% of 64095 block reads hit VRAM, 23.7 MiB read from RAM
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1792300279115-2.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1792300279115-2.bin.tmp)
 glm stat: decode 17.63 ms/tok (56.74 tok/s) | vram hit 91.60% | ram fetches 8.50/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 6.75/tok | cpu lane 24.25/tok in 8.08 ms/tok | prompt 21.5 ms/tok | vram 5595/5723 ram 6784/8399
 glm spec: 0 of 2 drafts accepted (0.0%)
 glm kv: KV streaming: 90.02% of 591 block reads hit VRAM, 0.1 MiB read from RAM
@@ -2274,7 +2274,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.86 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.90 of 23.56 GB in use - dense weights 2.77, state/KV (262144 ctx) 0.41, activations 0.06, other (context, MTP, scratch, prompt path) 0.65
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.91 GB) while it encodes
 glm fast: CUDA0 layers [0,25) expert pool 18.98 GB, 109-152 slots/layer (2861 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)

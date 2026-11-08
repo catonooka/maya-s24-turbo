@@ -1,8 +1,8 @@
 {
- "exe": "/home/aisever/maya-glm3/build/maya",
+ "exe": "/home/USER/maya-glm3/build/maya",
  "args": [
   "--glm-pack",
-  "/home/aisever/Maya-data/models/EXL3-3.05bpw/src/pack",
+  "/home/USER/Maya-data/models/EXL3-3.05bpw/src/pack",
   "--max-context",
   "262144",
   "--expert-cache",
@@ -10,14 +10,14 @@
   "--kv-streaming",
   "on",
   "--expert-profile",
-  "/home/aisever/maya-glm3/data/expert-profile-glm.bin",
+  "/home/USER/maya-glm3/data/expert-profile-glm.bin",
   "--dflash",
-  "/home/aisever/Maya-data/models/EXL3-3.05bpw/dflash2/GLM-5.3-Flash-DFlash2-Q4_K_M.gguf",
+  "/home/USER/Maya-data/models/EXL3-3.05bpw/dflash2/GLM-5.3-Flash-DFlash2-Q4_K_M.gguf",
   "--prefill",
   "32768"
  ],
- "cwd": "/home/aisever/maya-glm3",
- "tokenizer": "/home/aisever/Maya-data/models/EXL3-3.05bpw/src/pack/tokenizer",
+ "cwd": "/home/USER/maya-glm3",
+ "tokenizer": "/home/USER/Maya-data/models/EXL3-3.05bpw/src/pack/tokenizer",
  "model_name": "glm-5.3-flash",
  "gpu": [
   0,
@@ -35,9 +35,9 @@
  ],
  "port": 8080,
  "host": "0.0.0.0",
- "log": "/home/aisever/maya-glm3/exl3-final-engine.log",
+ "log": "/home/USER/maya-glm3/exl3-final-engine.log",
  "installer": {
-  "models_dir": "/home/aisever/Maya-data/models",
+  "models_dir": "/home/USER/Maya-data/models",
   "quant": "EXL3-3.05bpw",
   "draft": "mtp",
   "written": "2026-11-07 3x3090 v1.1.56"
@@ -46,7 +46,7 @@
   "MAYA_SPEC_DEFAULT": "8",
   "MAYA_GLM_RAM_RESIDENT": "1",
   "MAYA_GLM_KV_INT8": "1",
-  "MAYA_GLM_USAGE": "/home/aisever/maya-glm3/data/expert-usage-glm.txt",
+  "MAYA_GLM_USAGE": "/home/USER/maya-glm3/data/expert-usage-glm.txt",
   "MAYA_GLM_PREFETCH_N": "2",
   "MAYA_GLM_PREFETCH_AT": "fetch",
   "MAYA_GLM_PREFETCH_RANK": "4",

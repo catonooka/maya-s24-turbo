@@ -1,8 +1,8 @@
 {
- "exe": "/home/aisever/maya-glm3/build/maya",
+ "exe": "/home/USER/maya-glm3/build/maya",
  "args": [
   "--glm-pack",
-  "/home/aisever/Maya-data/models/Maya-S24/pack",
+  "/home/USER/Maya-data/models/Maya-S24/pack",
   "--max-context",
   "262144",
   "--expert-cache",
@@ -12,12 +12,12 @@
   "--kv-streaming",
   "on",
   "--expert-profile",
-  "/home/aisever/maya-glm3/data/expert-profile-glm.bin",
+  "/home/USER/maya-glm3/data/expert-profile-glm.bin",
   "--dflash",
-  "/home/aisever/Maya-data/models/EXL3-3.05bpw/dflash2/GLM-5.3-Flash-DFlash2-Q4_K_M.gguf"
+  "/home/USER/Maya-data/models/EXL3-3.05bpw/dflash2/GLM-5.3-Flash-DFlash2-Q4_K_M.gguf"
  ],
- "cwd": "/home/aisever/maya-glm3",
- "tokenizer": "/home/aisever/Maya-data/models/Maya-S24/pack/tokenizer",
+ "cwd": "/home/USER/maya-glm3",
+ "tokenizer": "/home/USER/Maya-data/models/Maya-S24/pack/tokenizer",
  "model_name": "glm-5.3-flash",
  "gpu": [
   0,
@@ -35,14 +35,14 @@
  ],
  "port": 8080,
  "vision": {
-  "exe": "/home/aisever/maya-glm3/build-vision/bin/maya-vision",
-  "mmproj": "/home/aisever/Maya-data/models/Maya-S24/vision/mmproj-GLM-5.3-Flash-F16.gguf",
-  "model": "/home/aisever/Maya-data/models/Maya-S24/vision/GLM-5.3-Flash-vocab.gguf",
+  "exe": "/home/USER/maya-glm3/build-vision/bin/maya-vision",
+  "mmproj": "/home/USER/Maya-data/models/Maya-S24/vision/mmproj-GLM-5.3-Flash-F16.gguf",
+  "model": "/home/USER/Maya-data/models/Maya-S24/vision/GLM-5.3-Flash-vocab.gguf",
   "gpu": true
  },
- "log": "/home/aisever/maya-glm3/s24-engine.log",
+ "log": "/home/USER/maya-glm3/s24-engine.log",
  "installer": {
-  "models_dir": "/home/aisever/Maya-data/models",
+  "models_dir": "/home/USER/Maya-data/models",
   "quant": "Maya-S24",
   "gguf": null,
   "gguf_dir": null,

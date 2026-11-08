@@ -6,5 +6,5 @@ export STRATA_GLM_KV_INT8=1
 export STRATA_GLM_MTP_KEEP=2
 export STRATA_GLM_SPEC_SAMPLE=1
 export STRATA_GLM_SPEC_CANCEL=1
-cd /home/aisever/project-maya
+cd /home/USER/project-maya
 exec ./run-maya-maya-s24.sh

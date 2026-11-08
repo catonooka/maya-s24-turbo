@@ -79,7 +79,7 @@ glm prefill: CUDA0 chunks of 3264 tokens, borrowing 1375 MB of the expert pool w
 glm fast: CUDA0 VRAM before the expert pool: 7.37 of 23.56 GB in use - dense weights 3.53, state/KV (262144 ctx) 3.26, activations 0.06, other (context, MTP, scratch, prompt path) 0.52
 glm fast: CUDA0 layers [0,24) expert pool 15.45 GB, 111-111 slots/layer (2331 total)
 glm fast: CUDA0 RAM tier 25.32 GB pinned, 3822 slots
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 21 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 21 layers)
 glm fast: CUDA0 warming the expert tiers 10% (4.3 of 43.0 GB, 1 s)
 glm fast: CUDA0 warming the expert tiers 20% (8.6 of 43.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 30% (12.9 of 43.0 GB, 4 s)
@@ -97,7 +97,7 @@ glm prefill: CUDA1 chunks of 3264 tokens, borrowing 1375 MB of the expert pool w
 glm fast: CUDA1 VRAM before the expert pool: 7.39 of 23.56 GB in use - dense weights 3.32, state/KV (262144 ctx) 3.25, activations 0.07, other (context, MTP, scratch, prompt path) 0.74
 glm fast: CUDA1 layers [24,45) expert pool 15.36 GB, 104-104 slots/layer (2288 total)
 glm fast: CUDA1 RAM tier 27.89 GB pinned, 4158 slots
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 22 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 22 layers)
 glm fast: CUDA1 warming the expert tiers 10% (4.6 of 45.6 GB, 2 s)
 glm fast: CUDA1 warming the expert tiers 20% (9.1 of 45.6 GB, 3 s)
 glm fast: CUDA1 warming the expert tiers 30% (13.7 of 45.6 GB, 4 s)
@@ -122,7 +122,7 @@ glm prefill: CUDA0 chunks of 3264 tokens, borrowing 1375 MB of the expert pool w
 glm fast: CUDA0 VRAM before the expert pool: 7.37 of 23.56 GB in use - dense weights 3.53, state/KV (262144 ctx) 3.26, activations 0.06, other (context, MTP, scratch, prompt path) 0.52
 glm fast: CUDA0 layers [0,24) expert pool 15.45 GB, 111-111 slots/layer (2331 total)
 glm fast: CUDA0 RAM tier 25.32 GB pinned, 3822 slots
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 21 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 21 layers)
 glm fast: CUDA0 warming the expert tiers 10% (4.3 of 43.0 GB, 1 s)
 glm fast: CUDA0 warming the expert tiers 20% (8.6 of 43.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 30% (12.9 of 43.0 GB, 4 s)
@@ -140,7 +140,7 @@ glm prefill: CUDA1 chunks of 3264 tokens, borrowing 1375 MB of the expert pool w
 glm fast: CUDA1 VRAM before the expert pool: 7.39 of 23.56 GB in use - dense weights 3.32, state/KV (262144 ctx) 3.25, activations 0.07, other (context, MTP, scratch, prompt path) 0.74
 glm fast: CUDA1 layers [24,45) expert pool 15.36 GB, 104-104 slots/layer (2288 total)
 glm fast: CUDA1 RAM tier 27.89 GB pinned, 4158 slots
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 22 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 22 layers)
 glm fast: CUDA1 warming the expert tiers 10% (4.6 of 45.6 GB, 2 s)
 glm fast: CUDA1 warming the expert tiers 20% (9.1 of 45.6 GB, 3 s)
 glm fast: CUDA1 warming the expert tiers 30% (13.7 of 45.6 GB, 4 s)
@@ -494,7 +494,7 @@ glm fast: CUDA0 VRAM before the expert pool: 4.58 of 23.56 GB in use - dense wei
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.78 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 18.23 GB, 131-131 slots/layer (2751 total)
 glm fast: CUDA0 RAM tier 22.53 GB pinned, 3402 slots
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 21 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 21 layers)
 glm fast: CUDA0 warming the expert tiers 10% (4.3 of 43.0 GB, 1 s)
 glm fast: CUDA0 warming the expert tiers 20% (8.6 of 43.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 30% (12.9 of 43.0 GB, 4 s)
@@ -512,7 +512,7 @@ glm prefill: CUDA1 chunks of 3264 tokens, borrowing 1375 MB of the expert pool w
 glm fast: CUDA1 VRAM before the expert pool: 4.59 of 23.56 GB in use - dense weights 3.32, state/KV (32768 ctx) 0.47, activations 0.07, other (context, MTP, scratch, prompt path) 0.73
 glm fast: CUDA1 layers [24,45) expert pool 18.16 GB, 123-123 slots/layer (2706 total)
 glm fast: CUDA1 RAM tier 25.09 GB pinned, 3740 slots
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 22 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 22 layers)
 glm fast: CUDA1 warming the expert tiers 10% (4.6 of 45.6 GB, 2 s)
 glm fast: CUDA1 warming the expert tiers 20% (9.1 of 45.6 GB, 3 s)
 glm fast: CUDA1 warming the expert tiers 30% (13.7 of 45.6 GB, 4 s)
@@ -548,7 +548,7 @@ glm fast: CUDA0 VRAM before the expert pool: 7.37 of 23.56 GB in use - dense wei
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.78 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 15.45 GB, 111-111 slots/layer (2331 total)
 glm fast: CUDA0 RAM tier 25.32 GB pinned, 3822 slots
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 21 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 21 layers)
 glm fast: CUDA0 warming the expert tiers 10% (4.3 of 43.0 GB, 1 s)
 glm fast: CUDA0 warming the expert tiers 20% (8.6 of 43.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 30% (12.9 of 43.0 GB, 4 s)
@@ -566,7 +566,7 @@ glm prefill: CUDA1 chunks of 3264 tokens, borrowing 1375 MB of the expert pool w
 glm fast: CUDA1 VRAM before the expert pool: 7.39 of 23.56 GB in use - dense weights 3.32, state/KV (262144 ctx) 3.25, activations 0.07, other (context, MTP, scratch, prompt path) 0.74
 glm fast: CUDA1 layers [24,45) expert pool 15.36 GB, 104-104 slots/layer (2288 total)
 glm fast: CUDA1 RAM tier 27.89 GB pinned, 4158 slots
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 22 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 22 layers)
 glm fast: CUDA1 warming the expert tiers 10% (4.6 of 45.6 GB, 2 s)
 glm fast: CUDA1 warming the expert tiers 20% (9.1 of 45.6 GB, 3 s)
 glm fast: CUDA1 warming the expert tiers 30% (13.7 of 45.6 GB, 4 s)
@@ -1041,7 +1041,7 @@ glm fast: CUDA0 VRAM before the expert pool: 7.37 of 23.56 GB in use - dense wei
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.78 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 15.45 GB, 111-111 slots/layer (2331 total)
 glm fast: CUDA0 RAM tier 25.32 GB pinned, 3822 slots
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 21 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 21 layers)
 glm fast: CUDA0 warming the expert tiers 10% (4.3 of 43.0 GB, 1 s)
 glm fast: CUDA0 warming the expert tiers 20% (8.6 of 43.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 30% (12.9 of 43.0 GB, 4 s)
@@ -1059,7 +1059,7 @@ glm prefill: CUDA1 chunks of 3264 tokens, borrowing 1375 MB of the expert pool w
 glm fast: CUDA1 VRAM before the expert pool: 7.39 of 23.56 GB in use - dense weights 3.32, state/KV (262144 ctx) 3.25, activations 0.07, other (context, MTP, scratch, prompt path) 0.74
 glm fast: CUDA1 layers [24,45) expert pool 15.36 GB, 104-104 slots/layer (2288 total)
 glm fast: CUDA1 RAM tier 27.89 GB pinned, 4158 slots
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 22 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 22 layers)
 glm fast: CUDA1 warming the expert tiers 10% (4.6 of 45.6 GB, 2 s)
 glm fast: CUDA1 warming the expert tiers 20% (9.1 of 45.6 GB, 3 s)
 glm fast: CUDA1 warming the expert tiers 30% (13.7 of 45.6 GB, 4 s)
@@ -1143,7 +1143,7 @@ glm fast: CUDA0 VRAM before the expert pool: 7.37 of 23.56 GB in use - dense wei
 glm fast: CUDA0 the vision encoder borrows the pool's tail (2.78 GB) while it encodes
 glm fast: CUDA0 layers [0,24) expert pool 15.45 GB, 111-111 slots/layer (2331 total)
 glm fast: CUDA0 RAM tier 25.32 GB pinned, 3822 slots
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 21 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 21 layers)
 glm fast: CUDA0 warming the expert tiers 10% (4.3 of 43.0 GB, 1 s)
 glm fast: CUDA0 warming the expert tiers 20% (8.6 of 43.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 30% (12.9 of 43.0 GB, 4 s)
@@ -1161,7 +1161,7 @@ glm prefill: CUDA1 chunks of 3264 tokens, borrowing 1375 MB of the expert pool w
 glm fast: CUDA1 VRAM before the expert pool: 7.39 of 23.56 GB in use - dense weights 3.32, state/KV (262144 ctx) 3.25, activations 0.07, other (context, MTP, scratch, prompt path) 0.74
 glm fast: CUDA1 layers [24,45) expert pool 15.36 GB, 104-104 slots/layer (2288 total)
 glm fast: CUDA1 RAM tier 27.89 GB pinned, 4158 slots
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 22 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 22 layers)
 glm fast: CUDA1 warming the expert tiers 10% (4.6 of 45.6 GB, 2 s)
 glm fast: CUDA1 warming the expert tiers 20% (9.1 of 45.6 GB, 3 s)
 glm fast: CUDA1 warming the expert tiers 30% (13.7 of 45.6 GB, 4 s)
@@ -1186,7 +1186,7 @@ glm fast: CUDA0 the vision encoder borrows the pool's tail (2.79 GB) while it en
 glm fast: CUDA0 layers [0,23) expert pool 17.38 GB, 131-131 slots/layer (2620 total)
 glm fast: CUDA0 RAM tier 26.60 GB pinned, 4012 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 20 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 20 layers)
 glm fast: CUDA0 warming the expert tiers 10% (4.1 of 41.0 GB, 1 s)
 glm fast: CUDA0 warming the expert tiers 20% (8.2 of 41.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 30% (12.3 of 41.0 GB, 4 s)
@@ -1206,7 +1206,7 @@ glm fast: CUDA1 VRAM before the expert pool: 6.37 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [23,45) expert pool 16.50 GB, 107-107 slots/layer (2461 total)
 glm fast: CUDA1 RAM tier 33.49 GB pinned, 4993 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 23 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 23 layers)
 glm fast: CUDA1 warming the expert tiers 10% (4.8 of 47.7 GB, 2 s)
 glm fast: CUDA1 warming the expert tiers 20% (9.5 of 47.7 GB, 3 s)
 glm fast: CUDA1 warming the expert tiers 30% (14.3 of 47.7 GB, 5 s)
@@ -1262,7 +1262,7 @@ glm fast: CUDA0 the vision encoder borrows the pool's tail (2.79 GB) while it en
 glm fast: CUDA0 layers [0,23) expert pool 17.91 GB, 135-135 slots/layer (2700 total)
 glm fast: CUDA0 RAM tier 26.07 GB pinned, 3932 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 20 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 20 layers)
 glm fast: CUDA0 warming the expert tiers 10% (4.1 of 41.0 GB, 1 s)
 glm fast: CUDA0 warming the expert tiers 20% (8.2 of 41.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 30% (12.3 of 41.0 GB, 4 s)
@@ -1283,7 +1283,7 @@ glm fast: CUDA1 VRAM before the expert pool: 5.55 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [23,45) expert pool 17.27 GB, 112-112 slots/layer (2576 total)
 glm fast: CUDA1 RAM tier 32.72 GB pinned, 4878 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 23 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 23 layers)
 glm fast: CUDA1 warming the expert tiers 10% (4.8 of 47.7 GB, 2 s)
 glm fast: CUDA1 warming the expert tiers 20% (9.5 of 47.7 GB, 3 s)
 glm fast: CUDA1 warming the expert tiers 30% (14.3 of 47.7 GB, 5 s)
@@ -1346,7 +1346,7 @@ load: special_eom_id is not in special_eog_ids - the tokenizer config may be inc
 glm fast: CUDA0 the vision encoder's 2.79 GB are back in the expert pool
 glm stat: decode 29.54 ms/tok (33.85 tok/s) | vram hit 70.92% | ram fetches 61.56/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 24.44/tok | cpu lane 42.89/tok in 19.57 ms/tok | prompt 0.7 ms/tok | vram 4715/5276 ram 7668/8810
 glm spec: 5 of 7 drafts accepted (71.4%)
-glm slots: under 8 GB free in /home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/slots - the conversation is not set aside
+glm slots: under 8 GB free in /home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/slots - the conversation is not set aside
 glm stat: decode 24.77 ms/tok (40.38 tok/s) | vram hit 86.57% | ram fetches 34.50/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 14.75/tok | cpu lane 16.25/tok in 7.62 ms/tok | prompt 31.7 ms/tok | vram 4933/5276 ram 7449/8810
 glm spec: 0 of 2 drafts accepted (0.0%)
 glm fast: CUDA0 2.79 GB lent to the vision encoder (240 experts moved to colder slots, 8 dropped)
@@ -1371,7 +1371,7 @@ glm fast: CUDA0 the vision encoder borrows the pool's tail (2.79 GB) while it en
 glm fast: CUDA0 layers [0,23) expert pool 17.91 GB, 135-135 slots/layer (2700 total)
 glm fast: CUDA0 RAM tier 26.07 GB pinned, 3932 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 20 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 20 layers)
 glm fast: CUDA0 warming the expert tiers 10% (4.1 of 41.0 GB, 1 s)
 glm fast: CUDA0 warming the expert tiers 20% (8.2 of 41.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 30% (12.3 of 41.0 GB, 4 s)
@@ -1392,7 +1392,7 @@ glm fast: CUDA1 VRAM before the expert pool: 5.55 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [23,45) expert pool 17.27 GB, 112-112 slots/layer (2576 total)
 glm fast: CUDA1 RAM tier 32.72 GB pinned, 4878 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 23 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 23 layers)
 glm fast: CUDA1 warming the expert tiers 10% (4.8 of 47.7 GB, 2 s)
 glm fast: CUDA1 warming the expert tiers 20% (9.5 of 47.7 GB, 3 s)
 glm fast: CUDA1 warming the expert tiers 30% (14.3 of 47.7 GB, 5 s)
@@ -1448,7 +1448,7 @@ glm fast: CUDA0 the vision encoder borrows the pool's tail (2.79 GB) while it en
 glm fast: CUDA0 layers [0,23) expert pool 17.91 GB, 135-135 slots/layer (2700 total)
 glm fast: CUDA0 RAM tier 26.07 GB pinned, 3932 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 20 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 20 layers)
 glm fast: CUDA0 warming the expert tiers 10% (4.1 of 41.0 GB, 1 s)
 glm fast: CUDA0 warming the expert tiers 20% (8.2 of 41.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 30% (12.3 of 41.0 GB, 4 s)
@@ -1469,7 +1469,7 @@ glm fast: CUDA1 VRAM before the expert pool: 5.55 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [23,45) expert pool 17.27 GB, 112-112 slots/layer (2576 total)
 glm fast: CUDA1 RAM tier 32.72 GB pinned, 4878 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 23 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 23 layers)
 glm fast: CUDA1 warming the expert tiers 10% (4.8 of 47.7 GB, 2 s)
 glm fast: CUDA1 warming the expert tiers 20% (9.5 of 47.7 GB, 3 s)
 glm fast: CUDA1 warming the expert tiers 30% (14.3 of 47.7 GB, 5 s)
@@ -1511,7 +1511,7 @@ glm fast: CUDA0 the vision encoder borrows the pool's tail (2.79 GB) while it en
 glm fast: CUDA0 layers [0,23) expert pool 17.91 GB, 135-135 slots/layer (2700 total)
 glm fast: CUDA0 RAM tier 26.07 GB pinned, 3932 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 20 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 20 layers)
 glm fast: CUDA0 warming the expert tiers 10% (4.1 of 41.0 GB, 1 s)
 glm fast: CUDA0 warming the expert tiers 20% (8.2 of 41.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 30% (12.3 of 41.0 GB, 4 s)
@@ -1532,7 +1532,7 @@ glm fast: CUDA1 VRAM before the expert pool: 5.55 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [23,45) expert pool 17.27 GB, 112-112 slots/layer (2576 total)
 glm fast: CUDA1 RAM tier 32.72 GB pinned, 4878 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 23 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 23 layers)
 glm fast: CUDA1 warming the expert tiers 10% (4.8 of 47.7 GB, 2 s)
 glm fast: CUDA1 warming the expert tiers 20% (9.5 of 47.7 GB, 3 s)
 glm fast: CUDA1 warming the expert tiers 30% (14.3 of 47.7 GB, 5 s)
@@ -1672,7 +1672,7 @@ glm fast: CUDA0 the vision encoder borrows the pool's tail (2.79 GB) while it en
 glm fast: CUDA0 layers [0,23) expert pool 17.91 GB, 135-135 slots/layer (2700 total)
 glm fast: CUDA0 RAM tier 26.07 GB pinned, 3932 slots
 glm fast: CUDA0 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA0 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 20 layers)
+glm fast: CUDA0 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 20 layers)
 glm fast: CUDA0 warming the expert tiers 10% (4.1 of 41.0 GB, 1 s)
 glm fast: CUDA0 warming the expert tiers 20% (8.2 of 41.0 GB, 3 s)
 glm fast: CUDA0 warming the expert tiers 30% (12.3 of 41.0 GB, 4 s)
@@ -1693,7 +1693,7 @@ glm fast: CUDA1 VRAM before the expert pool: 5.55 of 23.56 GB in use - dense wei
 glm fast: CUDA1 layers [23,45) expert pool 17.27 GB, 112-112 slots/layer (2576 total)
 glm fast: CUDA1 RAM tier 32.72 GB pinned, 4878 slots
 glm fast: CUDA1 RAM-resident mode: every non-VRAM expert gets a slot (+16 slack/layer); disk evictions are OFF
-glm fast: CUDA1 the tiers follow this machine's usage profile (/home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 23 layers)
+glm fast: CUDA1 the tiers follow this machine's usage profile (/home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/expert_usage.txt, 23 layers)
 glm fast: CUDA1 warming the expert tiers 10% (4.8 of 47.7 GB, 2 s)
 glm fast: CUDA1 warming the expert tiers 20% (9.5 of 47.7 GB, 3 s)
 glm fast: CUDA1 warming the expert tiers 30% (14.3 of 47.7 GB, 5 s)
@@ -1770,7 +1770,7 @@ load: special_eom_id is not in special_eog_ids - the tokenizer config may be inc
 glm fast: CUDA0 the vision encoder's 2.79 GB are back in the expert pool
 glm stat: decode 34.20 ms/tok (29.24 tok/s) | vram hit 71.04% | ram fetches 62.11/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 28.22/tok | cpu lane 41.89/tok in 25.50 ms/tok | prompt 0.7 ms/tok | vram 4744/5276 ram 7637/8810
 glm spec: 5 of 7 drafts accepted (71.4%)
-glm slots: under 8 GB free in /home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/slots - the conversation is not set aside
+glm slots: under 8 GB free in /home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/slots - the conversation is not set aside
 glm stat: decode 24.41 ms/tok (40.97 tok/s) | vram hit 86.24% | ram fetches 35.00/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 11.00/tok | cpu lane 17.00/tok in 8.08 ms/tok | prompt 30.7 ms/tok | vram 4920/5276 ram 7462/8810
 glm spec: 0 of 2 drafts accepted (0.0%)
 glm fast: CUDA0 2.79 GB lent to the vision encoder (182 experts moved to colder slots, 0 dropped)
@@ -2010,7 +2010,7 @@ glm stat: decode 24.56 ms/tok (40.72 tok/s) | vram hit 78.60% | ram fetches 51.7
 glm spec: 11 of 16 drafts accepted (68.8%)
 glm stat: decode 24.34 ms/tok (41.08 tok/s) | vram hit 80.05% | ram fetches 42.00/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 6.11/tok | cpu lane 26.44/tok in 9.14 ms/tok | prompt 0.8 ms/tok | vram 5034/5243 ram 7327/8852
 glm spec: 6 of 7 drafts accepted (85.7%)
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/slots/slot-1792301178878-1.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/glm-5.3-flash-maya-s-v2-iq2_xxs/pack/slots/slot-1792301178878-1.bin.tmp)
 glm stat: decode 20.23 ms/tok (49.44 tok/s) | vram hit 88.80% | ram fetches 29.25/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 3.00/tok | cpu lane 13.75/tok in 4.45 ms/tok | prompt 23.7 ms/tok | vram 5115/5243 ram 7274/8852
 glm spec: 0 of 2 drafts accepted (0.0%)
 glm stat: decode 20.21 ms/tok (49.48 tok/s) | vram hit 86.76% | ram fetches 34.85/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 5.62/tok | cpu lane 17.46/tok in 5.84 ms/tok | prompt 23.0 ms/tok | vram 5119/5243 ram 7270/8852

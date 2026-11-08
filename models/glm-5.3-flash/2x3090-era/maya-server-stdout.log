@@ -7,7 +7,7 @@ Project Maya v1.1.15 - GLM-5.3-Flash on your own GPU(s).
   API (Anthropic):  http://127.0.0.1:8080/v1/messages
   Loading takes a few minutes: the engine pins up to all but about 6 GB of the free RAM for its expert tier
   (STRATA_GLM_RAM_HEADROOM_GB changes the 6) and warms its caches - the first answers are the slowest.
-  Ctrl+C (or closing this terminal) stops it. Engine log: /home/aisever/project-maya/maya-exl3-3.05bpw.log
+  Ctrl+C (or closing this terminal) stops it. Engine log: /home/USER/project-maya/maya-exl3-3.05bpw.log
   ----------------------------------------------------------------------------------------------------
 [maya] sampling defaults from the config: temperature=1.0, top_p=0.95
 [maya] images: the vision encoder needs 2.78 GB on this GPU at up to 4096 image tokens

@@ -9,7 +9,7 @@ glm pack: CUDA1 latent cache INT8 (544 bytes a position and layer)
 glm pack: CUDA1 KV streaming: 32768 of 262144 positions of each of 6 DSA layers in VRAM (0.11 GB), the latent cache in 0.86 GB of pinned RAM
 glm prefill: CUDA0 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA0 VRAM before the expert pool: 3.88 of 23.56 GB in use - dense weights 2.77, state/KV (262144 ctx) 0.41, activations 0.06, other (context, MTP, scratch, prompt path) 0.64
-glm fast: the expert profile /home/aisever/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
+glm fast: the expert profile /home/USER/project-maya/data/expert-profile-glm.bin ranks 13248 (layer, expert) pairs
 glm fast: CUDA0 layers [0,25) expert pool 18.99 GB, 109-152 slots/layer (2863 total)
 glm prefill: CUDA1 chunks of 8192 tokens (--prefill auto, up to 8192; mixer sub-batches of 1024), borrowing 2137 MB of the expert pool while a prompt runs (activations 1939, weight scratch 96, expert staging 86, prestage 0: 0 experts); disk landing ring 96 experts (692 MB pinned)
 glm fast: CUDA1 VRAM before the expert pool: 3.62 of 23.56 GB in use - dense weights 2.47, state/KV (262144 ctx) 0.40, activations 0.07, other (context, MTP, scratch, prompt path) 0.69
@@ -63,10 +63,10 @@ glm_batch: CUDA0 prompt attention on the tensor cores (mma.sync, 32 heads a bloc
 glm_batch: CUDA1 prompt attention on the tensor cores (mma.sync, 32 heads a block)
 glm stat: decode 0.02 ms/tok (55853.44 tok/s) | vram hit 0.00% | ram fetches 0.00/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 0.00/tok | cpu lane 0.00/tok in 0.00 ms/tok | prompt 1.8 ms/tok | vram 5314/5726 ram 7016/8286
 glm kv: KV streaming: 0.00% of 5632 block reads hit VRAM, 11.7 MiB read from RAM
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791918563699-1.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791918563699-1.bin.tmp)
 glm stat: decode 0.02 ms/tok (63779.58 tok/s) | vram hit 0.00% | ram fetches 0.00/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 0.00/tok | cpu lane 0.00/tok in 0.00 ms/tok | prompt 1.7 ms/tok | vram 5324/5726 ram 7010/8286
 glm kv: KV streaming: 0.00% of 5632 block reads hit VRAM, 11.7 MiB read from RAM
-glm slots: setting the conversation aside failed (cannot write /home/aisever/Maya-data/models/Maya-S24/pack/slots/slot-1791918567144-2.bin.tmp)
+glm slots: setting the conversation aside failed (cannot write /home/USER/Maya-data/models/Maya-S24/pack/slots/slot-1791918567144-2.bin.tmp)
 glm stat: decode 0.02 ms/tok (54244.64 tok/s) | vram hit 0.00% | ram fetches 0.00/tok | disk 0.00 reads/tok in 0.00 waits/tok, 0.00 ms/tok | promotions 0.00/tok | cpu lane 0.00/tok in 0.00 ms/tok | prompt 1.0 ms/tok | vram 5081/5726 ram 7258/8286
 glm kv: KV streaming: 0.00% of 5632 block reads hit VRAM, 11.7 MiB read from RAM
 glm spec: 823 speculative positions, 89.8% accepted
