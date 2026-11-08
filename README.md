@@ -1,13 +1,18 @@
 # maya-s24-turbo
 
+**Current headline (2026-11-08): GLM-5.3-Flash on 3× RTX 3090 + 247G DRAM — two tiers:
+QUALITY EXL3-3.05bpw at 70.6 t/s decode / 1637 t/s fresh-100k prefill, SPEED Maya-S24 at
+87.8 t/s decode (client code 94) / 1002 t/s @8k prefill. Per-card, above every 3090-class
+row in the upstream speed table.** See `models/glm-5.3-flash/` and the History log below (newest first).
+
 **GLM-5.3-Flash (Maya-S24 quant) on 2× RTX 3090: tuned to 59 t/s thinking-on at 262k context —
 with a full measurement log, an agent-session where the model built its own benchmark toolkit,
 and hard receipts for every lever accepted or rejected.**
 
-Now also home to the **DeepSeek-V4.1-Flash-1017 campaign** ([`deepseek-v41-flash/`](deepseek-v41-flash/)):
+Now also home to the **DeepSeek-V4.1-Flash-1017 campaign** ([`models/deepseek-v4.1-flash-1017/maya-s-gguf/`](models/deepseek-v4.1-flash-1017/maya-s-gguf/)):
 the 748B MoE served on the same rig — 10.4 → 33-35 t/s decode, 144 → **783 t/s** cold prefill,
 fully validated for quality and vision — and to the **EXL3-2.9 quality tier campaign**
-([`dsv41-3090/`](dsv41-3090/)): the same 320B-class MoE at KL≈0.03 vs FP, 262k context,
+([`models/deepseek-v4.1-flash-1017/exl3-2.9/`](models/deepseek-v4.1-flash-1017/exl3-2.9/)): the same 320B-class MoE at KL≈0.03 vs FP, 262k context,
 decode 30.8-32.5 t/s warm / prefill 835 t/s @103k, a verified multi-GPU prompt-skip (+8% free),
 LAN serving with four thinking tiers, and the two stream-timeout fixes that stop idle-timeout
 kills on streaming clients (queue heartbeats + streamed tool arguments). See the History log below.
@@ -99,17 +104,63 @@ per-stream collapse under concurrency — independently re-derived from its own 
 ## Repository layout
 
 ```
+models/                          one folder per MODEL, one subfolder per QUANT (convention)
+  glm-5.3-flash/
+    exl3-3.05bpw/                QUALITY tier (3x3090): serving exl3-ck0.json + full knob ladder + run-exl3.sh + NOTES.md
+    maya-s24/                    SPEED tier (3x3090): serving s24-dflash-p32k.json + ladder + run-s24.sh + NOTES.md
+    maya-xs-iq1_s/               REJECTED (U-curve law) — NOTES.md only
+    reports/                     campaign reports + research (newest: exl3-prefill-ttft-REPORT.md)
+  deepseek-v4.1-flash-1017/
+    maya-s-gguf/                 earlier DSV41 campaign (748B, S24-class quant)
+    exl3-2.9/                    DSV41 EXL3-2.9 campaign: research→apply ladder, receipts, quality gates,
+                                 LAN tutorial, rig writeups, stream-timeout patches + fix docs
 tuning/           lever history, launcher, config snapshot, official bench logs
 benchkit/         self-benchmark toolkit (model-authored, human-reviewed)
 results/          full_results.json, functest 8/8, monitor samples, HTML report
 agent-session/    PLAN.md, the agent driver, session/stage logs
-dsv41-3090/       DSV41 EXL3-2.9 campaign: research→apply ladder, receipts, quality gates,
-                  LAN tutorial, rig writeups, stream-timeout patches + fix docs
-deepseek-v41-flash/  earlier DSV41 campaign (748B, S24-class quant)
 p2p-campaign/     PCIe BAR1 P2P driver work
 ```
 
+Live engine tree: `~/maya-glm3` (worktree, branch `glm3-3090x3` = upstream v1.1.56
++ FETCH_WIDE `efe38c3c` + STRATA_SPEC_DEFAULT `6eed2be3`). Configs here are the
+canonical copies; the worktree mirrors them.
+
 ## History log
+
+### 2026-11-08 — GLM-5.3-Flash prefill/TTFT/long-context campaign (3x3090, EXL3 tier)
+
+- **CKPT_EVERY=0 found and promoted**: fresh 100k reads 960 → **1637 t/s** (+70%,
+  63s wall). Only the periodic prompt cuts die; system-prompt + last-turn snapshots
+  survive, so conversation restore barely degrades. New serving config
+  `models/glm-5.3-flash/exl3-3.05bpw/exl3-ck0.json`.
+- **Slot-tax law measured**: a 2nd concurrent long-context read on a warm engine
+  runs 2.1-2.6× slower regardless of config — fresh-boot probe1 is the only valid
+  A/B arm. This exposed a fake-boot trap (sibling units hold :8080; the launcher
+  now glob-stops all `glm3-*` units and we verify the invocation id).
+- Community cross-check (per card): nobody on 3090-class beats us — EXL3 23.5/card
+  vs #414's 14.7; S24 29.3/card vs #349's 25.2. Small-chunk prefill wins (#414
+  `--prefill 1024`, #89 chunk 2048) tested and rejected: they're NVMe/mmap regimes;
+  we're RAM_RESIDENT, chunks only lose pipeline depth (1024 = 459/690 vs p32k 454/734).
+- PREFILL_CALC, KV_RESIDENT 65536, adapt 2/192, Q6_K drafter, CPU_SHARED=0: all flat
+  or worse — closed with receipts.
+- Repo restructured: `models/<model>/<quant>/` convention (this commit), engine
+  patch committed on the fork (`6eed2be3`).
+
+### 2026-11-07 — GLM-5.3-Flash on 3x RTX 3090: two tiers built from scratch
+
+- Rig: 3× 3090 (slots 1/5/7) + 247G DRAM, 250W/GPU boot-durable cap, engine worktree
+  on upstream v1.1.56 + FETCH_WIDE port (`efe38c3c`).
+- **QUALITY tier EXL3-3.05bpw**: 48.5 → 53.6 (DFlash2) → 69.1 t/s (+30%) via
+  `MAYA_GLM_DEFER_CPU=2` (overlap CPU-lane experts with next-layer attention; never
+  stack TRUNK_KEEP_MAP on it). Gate 7/8.
+- **SPEED tier Maya-S24**: MTP 80.6 → DFlash2 85.6 → **87.8 t/s** with
+  `--prefill 32768`. Client spec=8: code 94 / prose 77. Prefill 1002 @8k, ~926 @100k.
+- **Quant U-curve law measured**: EXL3 125G=53 → S24 89G=87.8 (knee) → XS 73G=50.0.
+  Below ~2.3bpw on sm86, dequant compute eats byte savings.
+- spec=8 made server-default (STRATA_SPEC_DEFAULT, env-gated server.py patch).
+- 100 t/s verdict: on 3 cards EXL3 is a bytes/token wall; remaining prose gap =
+  DFlash2 draft acceptance (creative ~46 t/s), not memory/CPU/kernels.
+- llamAmpere + Strata + TensorFold mined; disk-guard.sh born (150G floor, ~/cores trap).
 
 ### 2026-10-26 (II) — Successful distill from Maya repo
 
@@ -127,8 +178,8 @@ Rebased our Recall work onto project-maya **v1.1.28** (from base 0128fb3e ≈ v1
 
 A full research pass over [ashhart/TensorFold](https://github.com/ashhart/TensorFold) (MIT) — docs,
 kernels, changelog — cross-checked against our engine's source before ranking. Three applies landed
-([FIX doc](dsv41-3090/deepseek-campaign-1024/FIX-tensorfold-recall.md),
-[patch](dsv41-3090/deepseek-campaign-1024/patches/tensorfold-recall.patch)):
+([FIX doc](models/deepseek-v4.1-flash-1017/exl3-2.9/deepseek-campaign-1024/FIX-tensorfold-recall.md),
+[patch](models/deepseek-v4.1-flash-1017/exl3-2.9/deepseek-campaign-1024/patches/tensorfold-recall.patch)):
 
 - **Recall** — TensorFold's `--recall` on our unused `SuffixDrafter`: a persistent token-id record
   across requests and restarts proposes earlier continuations before the DSpark drafter; every copied
@@ -155,8 +206,8 @@ value until its closing tag — a 12k-token `write` was byte-silent for ~6 minut
 throughout, all 9 cancelled generations in the log died mid tool-call, exactly
 ~300 s after their last streamed byte).
 
-Fix ([`FIX-dsml-tool-args-stream.md`](dsv41-3090/deepseek-campaign-1024/FIX-dsml-tool-args-stream.md),
-[`patches/dsml-tool-args-stream.patch`](dsv41-3090/deepseek-campaign-1024/patches/)):
+Fix ([`FIX-dsml-tool-args-stream.md`](models/deepseek-v4.1-flash-1017/exl3-2.9/deepseek-campaign-1024/FIX-dsml-tool-args-stream.md),
+[`patches/dsml-tool-args-stream.patch`](models/deepseek-v4.1-flash-1017/exl3-2.9/deepseek-campaign-1024/patches/)):
 string-parameter values now stream as the model writes them (JSON-escaped body
 out incrementally, only a possible closer-prefix held back; new verbatim `stre`
 scanner state via `<arg_stre>`; raw values stay whole). Closing-tag semantics
@@ -170,7 +221,7 @@ deltas, which is why a fully-buffered implementation passed it.
 ### 2026-10-24/25 — DSV41 EXL3-2.9 (320B, 262k ctx): research→apply campaign + serving hardening
 
 The quality tier moves to EXL3-2.9bpw (KL≈0.03 vs FP). Full campaign in
-[`dsv41-3090/deepseek-campaign-1024/`](dsv41-3090/deepseek-campaign-1024/) — DeepSeek-paper/kernel
+[`models/deepseek-v4.1-flash-1017/exl3-2.9/deepseek-campaign-1024/`](models/deepseek-v4.1-flash-1017/exl3-2.9/deepseek-campaign-1024/) — DeepSeek-paper/kernel
 research (DeepGEMM, inference overview, DeepEP) distilled into an apply ladder, one lever per boot,
 every step measured and quality-gated.
 
@@ -185,12 +236,12 @@ every step measured and quality-gated.
   sit before the cut, so skip engages on the tp1 split with no patch at all
 - **TP flip workflow**: `flip-tp.sh` — tp2 prefill shape (1149 t/s @100k) ↔ tp1 decode shape,
   one command, conversations survive (SLOT_KEEP)
-- **Queue-heartbeats fix** ([`FIX-queue-heartbeats.md`](dsv41-3090/deepseek-campaign-1024/FIX-queue-heartbeats.md)):
+- **Queue-heartbeats fix** ([`FIX-queue-heartbeats.md`](models/deepseek-v4.1-flash-1017/exl3-2.9/deepseek-campaign-1024/FIX-queue-heartbeats.md)):
   queued requests were byte-silent → pi-ai clients died at streamIdleTimeoutMs 300000;
   now 50 ms keep-alives (2104 over a 105 s queue wait measured), both OpenAI + Anthropic dialects
 - **LAN serving**: 0.0.0.0 + OpenAI/Anthropic dialects + vision, four Hermes thinking tiers
   (`dsv41`/`-high`/`-low`/`-fast`), `reasoning_effort` none/low/high/max or 1-100 budget
-  ([tutorial](dsv41-3090/deepseek-campaign-1024/DSV41-LAN-TUTORIAL.md))
+  ([tutorial](models/deepseek-v4.1-flash-1017/exl3-2.9/deepseek-campaign-1024/DSV41-LAN-TUTORIAL.md))
 - **Profile (DS4_PROF)**: 124.85 ms/token = attention 19.6 + CPU-lane wait 44.9 + down+post 49.3
   → next decode jump is engine work (CPU-lane wait), not config
 - **Quality gates 4/4 and 7/7** (17×19, greedy, needle BANANA-7741 @30k across the skip band, ASCII);
@@ -202,7 +253,7 @@ every step measured and quality-gated.
 ### 2026-10-20/21 — DeepSeek-V4.1-Flash-1017: 10.4 → 33-35 t/s decode, 144 → 783 t/s prefill
 
 The same rig serves the 748B-parameter MoE (40×384 experts, Engram tables) from local files
-only — no downloads. Full campaign in [`deepseek-v41-flash/`](deepseek-v41-flash/).
+only — no downloads. Full campaign in [`models/deepseek-v4.1-flash-1017/maya-s-gguf/`](models/deepseek-v4.1-flash-1017/maya-s-gguf/).
 
 - **vLLM custom stack 10.4 t/s** → **maya-ds4 engine 17.5** — tiered experts (VRAM hot set /
   CPU lane / bulk chunk DMA) beat per-token PCIe streaming; every ported vLLM idea measured
@@ -274,3 +325,10 @@ Engine: MIT (project-maya). This repo's scripts and notes: MIT. No model weights
 On 2×3090 + S24, decode is bounded by resident-expert count, not config: ~59 t/s thinking-on is
 the measured ceiling of this quant on this hardware. 80 t/s needs more VRAM, an AVX-512 CPU,
 or a faster upstream quant — not more flags. Watch project-maya's releases; the engine ships fast.
+
+## 2026-11-07 evening: 100 t/s push
+- Wall analysis: EXL3-3.05 (125G pack) on 3x24G VRAM = bytes wall; 100 t/s club on 3090s runs S24-class quants (#349: 4x3090 S24+MTP 100.8; #414: 8x3090 EXL3-4.05 117).
+- spec tune sweep (per-request): spec=8 knee, prose +20%, code flat; 16/nmin backfire.
+- S24 downloaded/imported/packed (v1.1.56 packer, vision files included), tuned 3gpu configs s24-mtp-3gpu.json / s24-dflash-3gpu.json.
+- Launcher run-s24.sh: sudo systemd-run (polkit blocks user systemd-run now), absolute paths + WorkingDirectory (transient units start at /).
+- S24+MTP first window stat: decode 12.96 ms/tok = 77.2 t/s, MTP acceptance 82-83%.

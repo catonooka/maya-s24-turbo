@@ -1,0 +1,75 @@
+{
+ "exe": "/home/aisever/maya-glm3/build/maya",
+ "args": [
+  "--glm-pack",
+  "/home/aisever/Maya-data/models/Maya-S24/pack",
+  "--max-context",
+  "262144",
+  "--expert-cache",
+  "auto",
+  "--prefill",
+  "auto",
+  "--kv-streaming",
+  "on",
+  "--expert-profile",
+  "/home/aisever/maya-glm3/data/expert-profile-glm.bin",
+  "--dflash",
+  "/home/aisever/Maya-data/models/EXL3-3.05bpw/dflash2/GLM-5.3-Flash-DFlash2-Q4_K_M.gguf"
+ ],
+ "cwd": "/home/aisever/maya-glm3",
+ "tokenizer": "/home/aisever/Maya-data/models/Maya-S24/pack/tokenizer",
+ "model_name": "glm-5.3-flash",
+ "gpu": [
+  0,
+  1,
+  2
+ ],
+ "sampling": {
+  "temperature": 1.0,
+  "top_p": 0.95
+ },
+ "reasoning_effort": "max",
+ "lib_dirs": [
+  "/usr/local/cuda-13.4/lib64",
+  "/usr/local/cuda-13.4/targets/x86_64-linux/lib"
+ ],
+ "port": 8080,
+ "vision": {
+  "exe": "/home/aisever/maya-glm3/build-vision/bin/maya-vision",
+  "mmproj": "/home/aisever/Maya-data/models/Maya-S24/vision/mmproj-GLM-5.3-Flash-F16.gguf",
+  "model": "/home/aisever/Maya-data/models/Maya-S24/vision/GLM-5.3-Flash-vocab.gguf",
+  "gpu": true
+ },
+ "log": "/home/aisever/maya-glm3/s24-engine.log",
+ "installer": {
+  "models_dir": "/home/aisever/Maya-data/models",
+  "quant": "Maya-S24",
+  "gguf": null,
+  "gguf_dir": null,
+  "draft": "mtp",
+  "written": "2026-11-07 18:43",
+  "tuned_on": {
+   "driver": "615.71.09",
+   "pci": "00000000:01:00.0,00000000:41:00.0,00000000:61:00.0",
+   "p2p": {
+    "0-1": "GNS",
+    "0-2": "GNS",
+    "1-2": "GNS"
+   }
+  }
+ },
+ "env": {
+  "MAYA_GLM_RAM_RESIDENT": "1",
+  "MAYA_GLM_KV_INT8": "1",
+  "MAYA_GLM_PROMOTE_MIN": "6",
+  "MAYA_GLM_SPEC_SAMPLE": "1",
+  "MAYA_GLM_SPEC_CANCEL": "1",
+  "MAYA_GLM_PCIE_SHARE": "0.25",
+  "MAYA_GLM_MISS_SKIP_W": "0.14",
+  "MAYA_GLM_MISS_SKIP_FROM": "23",
+  "MAYA_GLM_FETCH_WIDE": "1",
+  "MAYA_GLM_P2P": "1",
+  "MAYA_GLM_PF_CE": "1"
+ },
+ "name": "glm-5.3-flash"
+}

@@ -1,0 +1,64 @@
+{
+ "exe": "/home/aisever/maya-glm3/build/maya",
+ "args": [
+  "--glm-pack",
+  "/home/aisever/Maya-data/models/EXL3-3.05bpw/src/pack",
+  "--max-context",
+  "262144",
+  "--expert-cache",
+  "auto",
+  "--kv-streaming",
+  "on",
+  "--expert-profile",
+  "/home/aisever/maya-glm3/data/expert-profile-glm.bin",
+  "--dflash",
+  "/home/aisever/Maya-data/models/EXL3-3.05bpw/dflash2/GLM-5.3-Flash-DFlash2-Q4_K_M.gguf",
+  "--prefill",
+  "16384"
+ ],
+ "cwd": "/home/aisever/maya-glm3",
+ "tokenizer": "/home/aisever/Maya-data/models/EXL3-3.05bpw/src/pack/tokenizer",
+ "model_name": "glm-5.3-flash",
+ "gpu": [
+  0,
+  1,
+  2
+ ],
+ "sampling": {
+  "temperature": 1.0,
+  "top_p": 0.95
+ },
+ "reasoning_effort": "high",
+ "lib_dirs": [
+  "/usr/local/cuda-13.4/lib64",
+  "/usr/local/cuda-13.4/targets/x86_64-linux/lib"
+ ],
+ "port": 8080,
+ "host": "0.0.0.0",
+ "log": "exl3-ck0-p16k-engine.log",
+ "installer": {
+  "models_dir": "/home/aisever/Maya-data/models",
+  "quant": "EXL3-3.05bpw",
+  "draft": "mtp",
+  "written": "2026-11-07 3x3090 v1.1.56"
+ },
+ "env": {
+  "MAYA_SPEC_DEFAULT": "8",
+  "MAYA_GLM_RAM_RESIDENT": "1",
+  "MAYA_GLM_KV_INT8": "1",
+  "MAYA_GLM_USAGE": "/home/aisever/maya-glm3/data/expert-usage-glm.txt",
+  "MAYA_GLM_PREFETCH_N": "2",
+  "MAYA_GLM_PREFETCH_AT": "fetch",
+  "MAYA_GLM_PREFETCH_RANK": "4",
+  "MAYA_GLM_PREFETCH_BLOCKS": "8",
+  "MAYA_GLM_FETCH_WIDE": "1",
+  "MAYA_GLM_SPEC_CANCEL": "1",
+  "MAYA_GLM_TRUNK_KEEP": "6",
+  "MAYA_GLM_MISS_SKIP_W": "0.14",
+  "MAYA_GLM_MISS_SKIP_FROM": "23",
+  "MAYA_GLM_P2P": "1",
+  "MAYA_GLM_PF_CE": "1",
+  "MAYA_GLM_DEFER_CPU": "2",
+  "MAYA_GLM_CKPT_EVERY": "0"
+ }
+}

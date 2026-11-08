@@ -1,0 +1,50 @@
+{
+ "exe": "/home/aisever/maya-glm3/build/maya",
+ "args": [
+  "--glm-pack",
+  "/home/aisever/Maya-data/models/Maya-S24/pack",
+  "--max-context",
+  "32768",
+  "--expert-cache",
+  "auto",
+  "--prefill",
+  "auto",
+  "--kv-streaming",
+  "on",
+  "--expert-profile",
+  "/home/aisever/maya-glm3/data/expert-profile-glm.bin"
+ ],
+ "cwd": "/home/aisever/maya-glm3",
+ "tokenizer": "/home/aisever/Maya-data/models/Maya-S24/pack/tokenizer",
+ "model_name": "glm-5.3-flash",
+ "gpu": [
+  0,
+  1,
+  2
+ ],
+ "sampling": {
+  "temperature": 1.0,
+  "top_p": 0.95
+ },
+ "reasoning_effort": "max",
+ "lib_dirs": [
+  "/usr/local/cuda-13.4/lib64",
+  "/usr/local/cuda-13.4/targets/x86_64-linux/lib"
+ ],
+ "port": 8080,
+ "vision": {
+  "exe": "/home/aisever/maya-glm3/build-vision/bin/maya-vision",
+  "mmproj": "/home/aisever/Maya-data/models/Maya-S24/vision/mmproj-GLM-5.3-Flash-F16.gguf",
+  "model": "/home/aisever/Maya-data/models/Maya-S24/vision/GLM-5.3-Flash-vocab.gguf",
+  "gpu": true
+ },
+ "log": "/home/aisever/maya-glm3/maya-maya-s24.log",
+ "installer": {
+  "models_dir": "/home/aisever/Maya-data/models",
+  "quant": "Maya-S24",
+  "gguf": null,
+  "gguf_dir": null,
+  "draft": "mtp",
+  "written": "2026-11-07 18:43"
+ }
+}
