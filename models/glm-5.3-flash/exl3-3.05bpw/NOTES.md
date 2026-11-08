@@ -46,3 +46,11 @@ TRUNK_KEEP=6, MISS_SKIP_W=0.14/FROM=23, P2P, PF_CE, **DEFER_CPU=2**,
 - `pkill -f "build/maya"` kills the calling wrapper — use `pkill -f "[b]uild/maya"`.
 
 Reports: ../reports/ (exl3-100push, exl3-blocker-audit, exl3-prefill-ttft).
+
+## Thinking-level API parity (verified live vs z.ai GLM-5.3-Flash contract)
+API set: thinking.type=enabled only (cannot disable), reasoning_effort low/high/max only.
+Local (ck0 + serve patch): enabled ✓, low ✓, high ✓, max ✓ (max = deep reasoning ~6x
+longer chain; low/high = brief), bare effort ✓, no-params default = thinking on + dynamic
+depth (same as API default). Local is a SUPERSET (also accepts none/auto/medium/xhigh and
+ignores thinking.type=disabled instead of erroring) — clients using only API-legal values
+behave identically on both endpoints.
