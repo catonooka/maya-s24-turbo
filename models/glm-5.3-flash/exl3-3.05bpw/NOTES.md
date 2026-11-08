@@ -19,7 +19,7 @@ TRUNK_KEEP=6, MISS_SKIP_W=0.14/FROM=23, P2P, PF_CE, **DEFER_CPU=2**,
 - prefill 454 @2k / 734 @8k / **1637 t/s fresh 100k** (63s; was 960 before CKPT_EVERY=0)
 - repeat prompt (PROMPT_MEMO): 1.2s · continuing turns: incremental (checkpoints)
 - decode @100k ctx: 31 t/s · @250k: 26 t/s (KV/indexer state squeezes expert slots)
-- gate 7/8 (vision miss by design)
+- gate: vision now ON (mmproj wired, reads text perfectly); thinking levels none/auto/low/medium/high/xhigh/max all live
 
 ## Knob ladder (one knob per boot, same-day A/B)
 | knob | verdict |
