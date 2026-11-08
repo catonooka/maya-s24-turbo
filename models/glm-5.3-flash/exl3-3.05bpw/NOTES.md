@@ -54,3 +54,19 @@ longer chain; low/high = brief), bare effort ✓, no-params default = thinking o
 depth (same as API default). Local is a SUPERSET (also accepts none/auto/medium/xhigh and
 ignores thinking.type=disabled instead of erroring) — clients using only API-legal values
 behave identically on both endpoints.
+
+## 1.5M-pool serving config: exl3-ck0-m15m.json (2026-11-08 night)
+- --max-context 1572864 + MAYA_GLM_KV_RESIDENT=262144: 256k KV window in VRAM
+  (0.43-0.57 GB/card), full 1.5M latent cache pinned in DRAM (9.4 GB).
+- STRATA_CONV_MAX=262144 (LOCAL serve patch): one conversation capped at 256k
+  tokens; 315k prompt -> clean 400 in 0.2s. Pool serves many conversations.
+- RAM SLOTS: MAYA_GLM_SLOT_DIR=/dev/shm/glm-slots (tmpfs), SLOT_GB=48, SLOTS=8.
+  Old conversations' KV saved to RAM (1827-tok conv = 0.17 GB in 0.1s), restore
+  = RAM->VRAM stream. NOTE slot bytes/token scale with max-context (~93KB/tok
+  at 1.5M ctx vs ~8KB/tok at 262k): a full-256k conv slots at ~24 GB -> budget
+  holds ~2 max-size or many normal chats.
+- ENV LAW (learned hard): config "env" reaches the ENGINE only; server-side
+  vars must be registered in SERVER_ENV (serve/server.py) — the spec-default
+  patch sat dead until registered. /proc/PID/environ won't show in-process sets.
+- Decode unchanged (66-70 t/s code plain-client). 1.5M > model's 1M training
+  window: quality past 1M off-label.
